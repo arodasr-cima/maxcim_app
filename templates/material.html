@@ -1,0 +1,139 @@
+{% extends "app_shell.html" %}
+
+{% block title %}Material · SocioComunica{% endblock %}
+
+{% block content %}
+<h1 class="material__title">Material</h1>
+
+<div class="material__toolbar">
+  <select class="material__select" id="materialSkillFilter">
+    {% for skill in skills %}
+    <option>{{ skill }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" class="material__search" id="materialSearch" placeholder="Buscar material...">
+  <button type="button" class="material__add-btn" id="uploadOpenBtn"><span>+</span>Agregar</button>
+</div>
+
+<div class="overlay" id="uploadOverlay">
+  <div class="upload-modal">
+    <div class="upload-modal__title">Nuevo cuento</div>
+
+    <label class="dropzone" id="dropzone" for="uploadFileInput">
+      <div class="dropzone__icon">📤</div>
+      <div class="dropzone__text" id="dropzoneText">Arrastra el archivo aquí o haz clic para seleccionar</div>
+      <div class="dropzone__hint">DOC, TXT o PDF · máx. 50 MB</div>
+      <input type="file" id="uploadFileInput" accept=".doc,.docx,.txt,.pdf" hidden>
+    </label>
+
+    <div class="upload-modal__row">
+      <input type="text" class="upload-modal__input" id="uploadTitleInput" placeholder="Título del cuento">
+    </div>
+
+    <div class="upload-modal__actions">
+      <button type="button" class="btn btn--ghost" id="uploadCancelBtn">Cancelar</button>
+      <button type="button" class="btn btn--primary" id="uploadStartBtn" disabled>Subir</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="loadingOverlay">
+  <div class="loading-modal">
+    <div class="spinner" id="loadingSpinner"></div>
+    <div class="loading-modal__text" id="loadingText">Procesando documento...</div>
+    <button type="button" class="btn btn--ghost" id="loadingCloseBtn" hidden>Cerrar</button>
+  </div>
+</div>
+
+<div class="overlay" id="resultOverlay">
+  <div class="result-modal">
+    <div class="result-modal__title">Contenido generado</div>
+    <div class="result-modal__subtitle">A partir del documento original</div>
+
+    <div class="result-modal__columns">
+      <div class="result-col result-col--border">
+        <div class="result-col__title">Textos</div>
+        <div class="result-block">
+          <div class="result-block__label">Texto completo</div>
+          <div class="result-block__box" id="resultTranscribedText" contenteditable="true" spellcheck="false">{{ upload_preview.transcribed_text }}</div>
+        </div>
+        <div class="result-block result-block--divider">
+          <div class="result-block__label">Resumen del texto</div>
+          <div class="result-block__box result-block__box--short" id="resultSummaryText" contenteditable="true" spellcheck="false">{{ upload_preview.summary_text }}</div>
+        </div>
+      </div>
+
+      <div class="result-col result-col--border">
+        <div class="result-col__title">Audios</div>
+        <div class="result-audio-row">
+          <div class="result-audio-row__top">
+            <div class="result-audio-row__label">Audio completo</div>
+            <button type="button" class="btn btn--accent" id="generateAudioFullBtn">✨ Generar</button>
+          </div>
+          <audio controls id="resultAudioFull"></audio>
+        </div>
+        <div class="result-audio-row result-audio-row--divider">
+          <div class="result-audio-row__top">
+            <div class="result-audio-row__label">Audio resumen</div>
+            <button type="button" class="btn btn--accent" id="generateAudioSummaryBtn">✨ Generar</button>
+          </div>
+          <audio controls id="resultAudioSummary"></audio>
+        </div>
+      </div>
+
+      <div class="result-col">
+        <div class="result-col__title">Preguntas</div>
+        {% for q in upload_preview.questions %}
+        <div class="question-row" style="background: {{ q.bg }}">
+          <div class="question-row__label" style="color: {{ q.label_color }}">{{ q.label }}</div>
+          <input type="number" min="0" max="15" value="{{ q.default }}" class="question-row__input" data-question-type="{{ q.key }}" style="color: {{ q.value_color }}; border-color: {{ q.border }}">
+        </div>
+        {% endfor %}
+        <button type="button" class="btn btn--accent btn--block" id="generateQuestionsBtn">✨ Generar preguntas</button>
+        <div class="questions-result" id="questionsResult"></div>
+      </div>
+    </div>
+
+    <div class="result-modal__footer">
+      <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Listo</button>
+    </div>
+  </div>
+</div>
+
+<div class="material__list" id="materialList">
+  {% for m in materials %}
+  <div class="material-card" data-title="{{ m.nombre_material|lower }}">
+    <button type="button" class="material-card__header">
+      <div class="material-card__icon" style="background: #eaf0fd; color: #2f5bcf">📖</div>
+      <div class="material-card__meta">
+        <div class="material-card__name">{{ m.nombre_material }}</div>
+        <div class="material-card__sub">Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}</div>
+      </div>
+      <span class="material-card__chevron">▼</span>
+    </button>
+    <div class="material-card__detail">
+      <div class="material-card__audio-row">
+        <div class="material-card__audio-label">Audio completo</div>
+        <audio controls src="{{ url_for('static', filename=m.path_audio) }}"></audio>
+      </div>
+      <div class="material-card__audio-row">
+        <div class="material-card__audio-label">Audio resumen</div>
+        <audio controls src="{{ url_for('static', filename=m.path_audio_resumen) }}"></audio>
+      </div>
+      <div class="material-card__actions">
+        <div class="material-card__links">
+          <a href="{{ url_for('static', filename=m.path_texto) }}" download>📄 Descargar texto completo</a>
+          <a href="{{ url_for('static', filename=m.path_texto_resumen) }}" download>📄 Descargar texto resumido</a>
+          <a href="{{ url_for('static', filename=m.path_preguntas) }}" download>❓ Preguntas generadas</a>
+        </div>
+        <a href="#" class="material-card__delete">🗑 Eliminar</a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/material.js') }}"></script>
+{% endblock %}
