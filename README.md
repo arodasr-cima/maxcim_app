@@ -1,42 +1,57 @@
 # MAXCIM App · Entorno de pruebas
 
-Aplicación web instalable y aislada para probar la experiencia completa de MAXCIM sin conectarse a la base institucional. Conserva la misma interfaz y flujo de la versión real, pero utiliza docentes, aulas, alumnos y respuestas de IA exclusivos de prueba cuando los servicios externos no están configurados.
+Aplicación web instalable y aislada para probar la experiencia actual de MAXCIM sin conectarse a la base institucional. Conserva la interfaz y el flujo del producto, pero cuando los servicios externos no están configurados utiliza docentes, aulas, alumnos y respuestas de IA exclusivos de prueba.
 
 La versión real permanece separada en `maxcim_app_production`: este repositorio no debe conectarse a su base de datos ni compartir sus variables privadas.
 
-La estudiante o el estudiante conversa oralmente con MAXCIM. La docente utiliza esta consola desde iPhone, iPad, Android, Windows o macOS.
+La estudiante o el estudiante conversa oralmente con MAXCIM. La docente utiliza esta consola desde iPhone, iPad, Android, Windows o macOS para preparar material y revisar el avance de sus aulas.
 
-## Capacidades conservadas
+## Flujo actual de la docente
 
-1. La docente entra con un clic o con cualquier ID y credencial no vacíos de prueba.
-2. La aplicación carga aulas ficticias, claramente aisladas del colegio.
-3. La docente sube un documento o crea un cuento con las elecciones del alumno y elige una duración de 1 a 15 minutos.
-4. Gemini ajusta la extensión, narra el cuento completo con ritmo adaptativo, genera el resumen y propone preguntas con respuestas esperadas.
-5. La docente edita y aprueba el contenido antes de guardarlo.
-6. El robot ya resuelve por su cuenta qué alumno tiene enfrente y qué material está usando; reporta cada turno de pregunta/respuesta a MAXCIM con una sola llamada (`POST /api/interacciones`), sin que MAXCIM gestione sesiones ni haga reconocimiento facial.
+1. La docente inicia sesión con sus credenciales institucionales o mediante el canje de Google. En producción, la identidad siempre se valida con la API institucional.
+2. `/dashboard` consulta y muestra las aulas asignadas a la docente.
+3. `/aulas/<classroom_id>` consulta la matrícula vigente y muestra sus alumnos en una tabla.
+4. `/material` permite crear y revisar el material que utilizará el robot.
+5. El robot consulta los materiales, identifica por su cuenta al alumno y registra cada interacción de pregunta y respuesta.
+6. `/aulas/<classroom_id>/avance` cruza la matrícula institucional con las interacciones de los materiales de la docente y muestra un acierto o error por interacción, además del total correcto/realizado.
+7. `/aulas/<classroom_id>/alumnos/<student_id>` muestra el historial completo del alumno: pregunta, respuesta, apreciación del robot y resultado.
 
-El seguimiento docente se consulta por aula en `/aulas/<id>/avance`; allí las interacciones se cruzan con la matrícula vigente informada por la API institucional.
+MAXCIM no gestiona sesiones de interacción ni realiza reconocimiento facial. La antigua ruta `/sesiones` fue eliminada.
 
 ```mermaid
 flowchart TD
-    PWA["PWA docente"] --> API["API MAXCIM"]
-    ROBOT["Robot (identifica al alumno y narra)"] --> API
-    API --> DB["SQLite o MySQL de pruebas"]
-    API --> AI["Gemini o respuestas locales"]
-    API --> INST["Identidad institucional simulada"]
+    DOCENTE["Docente"] --> LOGIN["Inicio de sesión"]
+    LOGIN --> INST["API institucional"]
+    INST --> DASH["/dashboard · aulas"]
+    DASH --> AULA["/aulas/&lt;classroom_id&gt; · alumnos"]
+    AULA --> INST
+    DOCENTE --> MATERIAL["/material · creación de material"]
+    MATERIAL --> AI["Gemini o respuestas locales"]
+    MATERIAL --> DB["Base MAXCIM: material + interaccion"]
+    ROBOT["Robot"] --> ROBOTAPI["/api/materials + /api/interacciones"]
+    ROBOTAPI --> DB
+    AULA --> PROGRESO["Avance e historial por alumno"]
+    DB --> PROGRESO
 ```
+
+## Tipos de material
+
+`material.tipo_material` admite exactamente dos valores:
+
+- **`cuento`**: guarda rutas de archivos en `path_texto`, `path_texto_resumen`, `path_audio`, `path_audio_resumen` y `path_preguntas`. Esta última apunta al JSON de preguntas aprobadas por la docente.
+- **`oracion`**: guarda las oraciones como texto plano completo en `path_preguntas`. Deja `path_texto`, `path_texto_resumen`, `path_audio` y `path_audio_resumen` en `NULL`.
 
 ## Separación del entorno real
 
 - `DEMO_MODE=true` está activado por defecto solamente en este repositorio.
-- Sin Google o API institucional, el acceso de prueba sigue habilitado.
+- Sin Google o API institucional, el acceso, las aulas y los alumnos de prueba siguen habilitados.
 - Sin clave de Gemini, se generan cuentos, preguntas y audio WAV locales de prueba.
 - Al configurar `GOOGLE_API_KEY`, las funciones generativas utilizan Gemini manteniendo la identidad institucional simulada.
 - La contraseña institucional no se almacena.
-- No hay tabla de sesiones en el servidor: la sesión de la docente vive solo en la cookie firmada de Flask, y el token institucional va cifrado dentro de esa misma cookie (nunca en texto plano).
-- No se almacenan fotografías, embeddings ni plantillas biométricas — MAXCIM no hace reconocimiento facial.
+- No hay tabla de sesiones en el servidor: la sesión de la docente vive solo en la cookie firmada de Flask, y el token institucional va cifrado dentro de esa misma cookie, nunca en texto plano.
+- No se almacenan fotografías, embeddings ni plantillas biométricas.
 - El simulador puede llamar los endpoints del robot sin secreto únicamente mientras `DEMO_MODE=true`.
-- Los materiales se filtran por el ID de la docente autenticada; las interacciones, por el material y/o el alumno.
+- Los materiales se filtran por el ID institucional de la docente; las interacciones, por material y/o alumno.
 
 ## Preparación local
 
@@ -67,16 +82,11 @@ incluye un `Dockerfile` listo para desplegarse como servicio web en Railway:
 2. Mantener `DEMO_MODE=true`. Sin `DATABASE_URL` utilizará SQLite automáticamente.
 3. Para conservar los datos entre despliegues, agregar MySQL y definir `DATABASE_URL=${{MySQL.MYSQL_URL}}`.
 4. Generar el dominio público desde `Settings > Networking`.
-5. Para conservar audios entre despliegues, montar un volumen persistente en
-   `/app/static/uploads`.
+5. Para conservar audios entre despliegues, montar un volumen persistente en `/app/static/uploads`.
 
-El contenedor crea las tablas faltantes de una base nueva antes de iniciar
-Gunicorn y publica `GET /health` para comprobar el estado del servicio. Si la API
-institucional solo existe dentro de la red del colegio, será necesario exponerla
-de forma segura por HTTPS o conectar el alojamiento a esa red privada.
+El contenedor crea las tablas faltantes de una base nueva antes de iniciar Gunicorn y publica `GET /health` para comprobar el estado del servicio. Si la API institucional solo existe dentro de la red del colegio, será necesario exponerla de forma segura por HTTPS o conectar el alojamiento a esa red privada.
 
-La fecha de carga de cada material se asigna desde la aplicación para mantener
-compatibilidad con las versiones administradas de MySQL usadas en producción.
+La fecha de carga de cada material se asigna desde la aplicación para mantener compatibilidad con las versiones administradas de MySQL usadas en producción.
 
 ## Variables del entorno de pruebas
 
@@ -99,46 +109,59 @@ Las variables institucionales, Google OAuth y secretos del robot no son necesari
 | `INSTITUTIONAL_API_BASE_URL` | URL autorizada de la API principal |
 | `INSTITUTIONAL_API_LOGIN_PATH` | Inicio de sesión docente |
 | `INSTITUTIONAL_API_GOOGLE_LOGIN_PATH` | Canje del ID token de Google por una sesión institucional |
-| `INSTITUTIONAL_API_CLASSROOMS_PATH` | Aulas de la docente autenticada |
-| `INSTITUTIONAL_API_STUDENT_PATH` | Perfil y matrículas del ID reconocido (reservado para uso futuro) |
-| `INSTITUTIONAL_API_SERVICE_TOKEN` | Credencial servidor-a-servidor hacia la API institucional |
+| `INSTITUTIONAL_API_CLASSROOMS_PATH` | Aulas de la docente autenticada; admite `{teacher_id}` |
+| `INSTITUTIONAL_API_STUDENTS_PATH` | Alumnos matriculados en un aula; admite `{classroom_id}` |
 | `GOOGLE_OAUTH_CLIENT_ID` | Cliente web OpenID Connect de Google Workspace |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Secreto del cliente web, solo en el servidor |
 | `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios Workspace institucionales permitidos |
 | `GOOGLE_OAUTH_REDIRECT_URI` | Callback HTTPS registrado exactamente en Google Cloud |
-| `MAXCIM_WEBHOOK_SECRET` | Autentica al robot frente a los endpoints de `/api/materials` y `/api/interacciones` |
+| `MAXCIM_WEBHOOK_SECRET` | Autentica al robot frente a `/api/materials` y `/api/interacciones` |
 | `SESSION_COOKIE_SECURE` | Debe permanecer `true` bajo HTTPS |
+
+## Rutas de la consola docente
+
+| Método y ruta | Finalidad |
+|---|---|
+| `GET /dashboard` | Listar las aulas de la docente autenticada |
+| `GET /aulas/<classroom_id>` | Listar los alumnos del aula |
+| `GET /aulas/<classroom_id>/avance` | Mostrar aciertos, errores y total por alumno |
+| `GET /aulas/<classroom_id>/alumnos/<student_id>` | Mostrar todas las interacciones del alumno |
+| `GET /material` | Consultar y crear material de tipo `cuento` u `oracion` |
+
+No existe `/sesiones`. Las vistas de avance e historial sí tienen backend: combinan la matrícula que devuelve la API institucional con `material` e `interaccion` en la base propia de MAXCIM.
 
 ## Endpoints del robot
 
 | Método y ruta | Finalidad |
 |---|---|
 | `GET /api/materials?teacher_id={id}` | Listar materiales de una docente |
-| `GET /api/materials/{id}` | Obtener un material (URLs de audio/texto y sus preguntas) |
+| `GET /api/materials/{id}` | Obtener un cuento con sus recursos y preguntas, o el texto de una oración |
 | `POST /api/interacciones` | Registrar un turno de pregunta/respuesta ya resuelto por el robot |
 | `GET /api/interacciones?id_material={id}&fk_alumno={id}` | Consultar el historial de interacciones |
 
-Todas las rutas requieren el header `X-MAXCIM-Webhook-Secret` con el valor de `MAXCIM_WEBHOOK_SECRET` (se omite mientras `DEMO_MODE=true`). El robot identifica al alumno y elige el material por su cuenta — MAXCIM ya no hace reconocimiento facial ni gestiona sesiones de interacción.
+Todas las rutas requieren el header `X-MAXCIM-Webhook-Secret` con el valor de `MAXCIM_WEBHOOK_SECRET`. La validación se omite mientras `DEMO_MODE=true`.
 
-> [docs/integration-contract.md](docs/integration-contract.md) todavía describe el contrato anterior (sesiones, turnos, reconocimiento facial) y está pendiente de actualizar a este esquema.
+El contrato completo de solicitudes, respuestas y variantes provisionales de la API institucional está en [docs/integration-contract.md](docs/integration-contract.md).
 
 ## Base de datos
 
-La base aislada de este entorno guarda solamente dos tablas — ver [bd_app.sql](bd_app.sql) para el DDL completo:
+La base aislada guarda solamente dos tablas — ver [bd_app.sql](bd_app.sql) para el DDL completo:
 
-- **`material`**: título, tipo, rutas de texto/audio/preguntas generadas y el ID institucional de la docente dueña (`fk_user`).
-- **`interaccion`**: un registro por cada turno de pregunta/respuesta entre un alumno y MAXCIM sobre un material (`id_material`, `fk_alumno`, pregunta, respuesta, audio de la respuesta, apreciación del robot y si fue correcta).
+- **`material`**: material de tipo `cuento` u `oracion` y el ID institucional de la docente dueña (`fk_user`).
+- **`interaccion`**: un registro por cada turno entre un alumno y MAXCIM (`id_material`, `fk_alumno`, pregunta, respuesta, audio de la respuesta, apreciación del robot y si fue correcta).
 
-No se guardan sesiones, evaluaciones agregadas ni eventos de reconocimiento facial. Docentes y alumnos nunca se replican localmente: su identidad siempre se resuelve contra la API institucional.
+Docentes, aulas y alumnos siempre provienen de la API institucional y nunca se persisten localmente. Tampoco se guardan sesiones, evaluaciones agregadas ni eventos de reconocimiento facial.
+
+Como `interaccion` no tiene una columna de aula, el avance de un aula se deriva intersectando su matrícula vigente con las interacciones asociadas a los materiales de la docente autenticada.
 
 ## Pruebas
 
 ```bash
-pytest -q
+venv/Scripts/python.exe -m pytest -q
 ```
 
 Las pruebas automatizadas usan dobles aislados dentro del entorno de test. Esos datos nunca se cargan en la aplicación ni en la base de producción.
 
 ## Estado
 
-Este repositorio está preparado para recorridos funcionales y pruebas con docentes. Los resultados generados sin servicios externos son ficticios y permanecen dentro de este entorno. La conexión final a identidades, aulas y Gemini se mantiene en el repositorio de producción.
+Este repositorio está preparado para recorridos funcionales y pruebas con docentes. Los resultados generados sin servicios externos son ficticios y permanecen dentro de este entorno. Antes de conectar producción se debe confirmar con la persona responsable de la API institucional el contrato definitivo de alumnos por aula.

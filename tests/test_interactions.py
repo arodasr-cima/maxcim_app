@@ -2,7 +2,7 @@ import json
 
 import app as app_module
 from extensions import db
-from models import Interaccion, Material
+from models import Interaccion, Material, TIPO_CUENTO, TIPO_ORACION
 
 
 TEST_TEACHER_ID = "DOC-TEST-1"
@@ -11,7 +11,7 @@ TEST_TEACHER_ID = "DOC-TEST-1"
 def seed_material(**overrides):
     defaults = dict(
         nombre_material="El bosque que escucha",
-        tipo_material="general",
+        tipo_material=TIPO_CUENTO,
         path_audio="fixtures/audio.wav",
         path_texto="fixtures/texto.txt",
         path_audio_resumen="fixtures/resumen.wav",
@@ -135,7 +135,9 @@ def test_list_interacciones_filters_by_material_and_alumno(app, client):
     assert len(both.get_json()) == 1
 
 
-def test_get_material_includes_saved_questions(app, client, tmp_path, monkeypatch):
+def test_get_cuento_material_round_trips_through_robot_api(
+    app, client, tmp_path, monkeypatch
+):
     material_dir = tmp_path / "material"
     material_dir.mkdir()
     questions = [{"pregunta": "¿Quién es el personaje?", "respuesta_esperada": "Luna"}]
@@ -145,11 +147,65 @@ def test_get_material_includes_saved_questions(app, client, tmp_path, monkeypatc
     monkeypatch.setattr(app, "static_folder", str(tmp_path))
 
     with app.app_context():
-        material_id = seed_material(path_preguntas="material/preguntas.json").id
+        material = seed_material(
+            tipo_material=TIPO_CUENTO,
+            path_texto="material/texto.txt",
+            path_texto_resumen="material/resumen.txt",
+            path_audio="material/audio.wav",
+            path_audio_resumen="material/audio_resumen.wav",
+            path_preguntas="material/preguntas.json",
+        )
+        material_id = material.id
+        fecha_subido = material.fecha_subido.isoformat()
 
     response = client.get(f"/api/materials/{material_id}")
     assert response.status_code == 200
-    assert response.get_json()["preguntas"] == questions
+    assert response.get_json() == {
+        "id": material_id,
+        "titulo": "El bosque que escucha",
+        "tipo_material": TIPO_CUENTO,
+        "fecha_subido": fecha_subido,
+        "fk_user": TEST_TEACHER_ID,
+        "texto_completo_url": "http://localhost/static/material/texto.txt",
+        "texto_resumen_url": "http://localhost/static/material/resumen.txt",
+        "audio_completo_url": "http://localhost/static/material/audio.wav",
+        "audio_resumen_url": "http://localhost/static/material/audio_resumen.wav",
+        "preguntas_url": "http://localhost/static/material/preguntas.json",
+        "preguntas": questions,
+    }
+
+
+def test_get_oracion_material_round_trips_through_robot_api(app, client):
+    sentence_text = "La luna brilla.\nEl río canta."
+    with app.app_context():
+        material = seed_material(
+            nombre_material="Oraciones de práctica",
+            tipo_material=TIPO_ORACION,
+            path_preguntas=sentence_text,
+            path_texto=None,
+            path_texto_resumen=None,
+            path_audio=None,
+            path_audio_resumen=None,
+        )
+        material_id = material.id
+        fecha_subido = material.fecha_subido.isoformat()
+
+    response = client.get(f"/api/materials/{material_id}")
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "id": material_id,
+        "titulo": "Oraciones de práctica",
+        "tipo_material": TIPO_ORACION,
+        "fecha_subido": fecha_subido,
+        "fk_user": TEST_TEACHER_ID,
+        "oraciones": sentence_text,
+        "texto_completo_url": None,
+        "texto_resumen_url": None,
+        "audio_completo_url": None,
+        "audio_resumen_url": None,
+        "preguntas_url": None,
+        "preguntas": [],
+    }
 
 
 def test_material_save_requires_reviewed_expected_answers(client):
