@@ -25,7 +25,7 @@
     </div>
     {% endif %}
     {% for aula in aulas %}
-    <div class="aula-card">
+    <a class="aula-card aula-card--link" href="{{ url_for('classroom_detail', classroom_id=aula.id) }}">
       <div class="aula-card__header">
         <div class="aula-card__avatar">{{ aula.initials }}</div>
         <div class="aula-card__meta">
@@ -47,7 +47,7 @@
         <strong>{{ aula.interactions }}</strong>
         <span>interacción{{ '' if aula.interactions == 1 else 'es' }} registrada{{ '' if aula.interactions == 1 else 's' }}</span>
       </div>
-    </div>
+    </a>
     {% endfor %}
   </div>
 </section>

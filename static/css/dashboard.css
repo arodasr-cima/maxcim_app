@@ -2561,3 +2561,58 @@ body {
     transition: none;
   }
 }
+
+/* Tablas funcionales de aulas y materiales de oración. */
+.aula-card--link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.aula-card--link:hover {
+  border-color: #cbd7f0;
+}
+
+.classroom-table {
+  min-width: 680px;
+}
+
+.interaction-detail-table {
+  min-width: 1100px;
+}
+
+.interaction-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.interaction-results li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.answer-mark {
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.answer-mark--correct {
+  color: #1f7a45;
+}
+
+.answer-mark--incorrect {
+  color: #b93838;
+}
+
+.material-card__sentence-text {
+  padding: 14px;
+  border-radius: 9px;
+  background: #f8fafc;
+  color: #3d485c;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}

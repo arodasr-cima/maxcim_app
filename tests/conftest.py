@@ -3,7 +3,7 @@ from cryptography.fernet import Fernet
 
 import app as app_module
 from extensions import db
-from services.institutional import AuthenticatedTeacher, Classroom
+from services.institutional import AuthenticatedTeacher, Classroom, ClassroomStudent
 
 
 TEST_TEACHER = {
@@ -39,6 +39,13 @@ class FakeInstitutionalClient:
             course="Tutoría",
             period="Periodo activo",
         )]
+
+    def list_classroom_students(self, access_token, classroom_id):
+        assert classroom_id == "AULA-REAL-1"
+        return [
+            ClassroomStudent("ALU-TEST-1", "Pérez Flores", "Ana Lucía"),
+            ClassroomStudent("ALU-TEST-2", "Quispe Rojas", "Mateo"),
+        ]
 
 
 @pytest.fixture()

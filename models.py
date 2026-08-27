@@ -36,7 +36,9 @@ class Material(db.Model):
     path_texto = db.Column(db.String(500), nullable=True)
     path_audio_resumen = db.Column(db.String(500), nullable=True)
     path_texto_resumen = db.Column(db.String(500), nullable=True)
-    path_preguntas = db.Column(db.String(500), nullable=False)
+    # Ruta del JSON de preguntas en un cuento; texto de las oraciones en una
+    # oración. Es TEXT porque las oraciones no caben en VARCHAR(500).
+    path_preguntas = db.Column(db.Text, nullable=False)
     # Application-side default. SQLAlchemy would render func.current_date()
     # as DEFAULT CURRENT_DATE for MySQL, which some managed MySQL versions
     # reject during schema creation.

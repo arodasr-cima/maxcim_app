@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS `material` (
   `path_texto` VARCHAR(500) NULL,
   `path_audio_resumen` VARCHAR(500) NULL,
   `path_texto_resumen` VARCHAR(500) NULL,
-  `path_preguntas` VARCHAR(500) NOT NULL,
+  -- Para un cuento guarda la ruta del JSON de preguntas; para una oración
+  -- guarda el texto de las oraciones. Por eso es TEXT y no VARCHAR(500).
+  `path_preguntas` TEXT NOT NULL,
   `fecha_subido` DATE NOT NULL,
   -- ID institucional de la docente. No es una FK real: la tabla `docente`
   -- vive en la API institucional, no en esta base.

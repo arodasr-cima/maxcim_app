@@ -61,6 +61,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const storyCancelBtn = document.getElementById("storyCancelBtn");
   const storyForm = document.getElementById("storyForm");
   const storyGenerateBtn = document.getElementById("storyGenerateBtn");
+  const sentenceOverlay = document.getElementById("sentenceOverlay");
+  const sentenceOpenBtn = document.getElementById("sentenceOpenBtn");
+  const sentenceCancelBtn = document.getElementById("sentenceCancelBtn");
+  const sentenceForm = document.getElementById("sentenceForm");
+  const sentenceSaveBtn = document.getElementById("sentenceSaveBtn");
 
   let selectedFile = null;
   let currentMaterialTitle = "";
@@ -187,6 +192,42 @@ document.addEventListener("DOMContentLoaded", () => {
     storyOverlay.classList.remove("is-open");
   });
 
+  sentenceOpenBtn.addEventListener("click", () => {
+    sentenceForm.reset();
+    sentenceOverlay.classList.add("is-open");
+  });
+
+  sentenceCancelBtn.addEventListener("click", () => {
+    sentenceOverlay.classList.remove("is-open");
+  });
+
+  sentenceForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    sentenceSaveBtn.disabled = true;
+    sentenceSaveBtn.textContent = "Guardando...";
+    const formData = new FormData();
+    formData.append("tipo_material", "oracion");
+    formData.append("title", document.getElementById("sentenceTitle").value.trim());
+    formData.append("sentences_text", document.getElementById("sentenceText").value.trim());
+    try {
+      const response = await authorizedFetch("/api/material/save", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudieron guardar las oraciones.");
+      }
+      sentenceOverlay.classList.remove("is-open");
+      window.location.reload();
+    } catch (error) {
+      alert(error.message || "No se pudieron guardar las oraciones.");
+    } finally {
+      sentenceSaveBtn.disabled = false;
+      sentenceSaveBtn.textContent = "Guardar oraciones";
+    }
+  });
+
   storyForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = {
@@ -260,6 +301,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const formData = new FormData();
+      formData.append("tipo_material", "cuento");
       formData.append("title", currentMaterialTitle);
       formData.append("transcribed_text", transcribedText);
       formData.append("summary_text", summaryText);

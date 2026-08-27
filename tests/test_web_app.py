@@ -1,8 +1,10 @@
 def test_teacher_pages_and_pwa_assets_render(client):
-    for path in ("/dashboard", "/material", "/sesiones"):
+    for path in ("/dashboard", "/material", "/aulas/AULA-REAL-1"):
         response = client.get(path)
         assert response.status_code == 200
         assert b"MAXCIM" in response.data
+
+    assert client.get("/sesiones").status_code == 404
 
     manifest = client.get("/static/manifest.webmanifest")
     assert manifest.status_code == 200

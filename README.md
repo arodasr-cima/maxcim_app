@@ -15,7 +15,7 @@ La estudiante o el estudiante conversa oralmente con MAXCIM. La docente utiliza 
 5. La docente edita y aprueba el contenido antes de guardarlo.
 6. El robot ya resuelve por su cuenta qué alumno tiene enfrente y qué material está usando; reporta cada turno de pregunta/respuesta a MAXCIM con una sola llamada (`POST /api/interacciones`), sin que MAXCIM gestione sesiones ni haga reconocimiento facial.
 
-> **Estado transicional:** la pantalla `/sesiones` todavía muestra la maqueta del flujo anterior (inicio de sesión en vivo, panel de evaluación con IA). Esa UI ya no tiene backend detrás — el backend actual solo guarda un registro plano por interacción (ver `bd_app.sql`) — así que el historial se sirve vacío hasta que se rediseñe esa pantalla.
+El seguimiento docente se consulta por aula en `/aulas/<id>/avance`; allí las interacciones se cruzan con la matrícula vigente informada por la API institucional.
 
 ```mermaid
 flowchart TD

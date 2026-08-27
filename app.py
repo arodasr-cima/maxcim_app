@@ -29,9 +29,10 @@ from flask import (
 )
 from google import genai
 from google.genai import types
+from sqlalchemy.orm import contains_eager
 
 from extensions import db
-from models import Interaccion, Material
+from models import Interaccion, Material, TIPO_CUENTO, TIPO_ORACION, TIPOS_MATERIAL
 from services.demo import (
     DemoInstitutionalClient,
     create_demo_questions,
@@ -169,6 +170,8 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {".doc", ".docx", ".pdf", ".txt"}
 MAX_SOURCE_TEXT_CHARS = 120_000
 MAX_SUMMARY_CHARS = 20_000
+# Las oraciones se guardan como texto en `path_preguntas` (ver models.py).
+MAX_SENTENCES_CHARS = 20_000
 MAX_TTS_TEXT_CHARS = 30_000
 MAX_TRANSCRIPT_CHARS = 20_000
 MAX_OBJECTIVE_CHARS = 2_000
@@ -762,7 +765,7 @@ def create_app(test_config: dict | None = None):
             or request.path.startswith("/auth/")
             or request.path.startswith("/login")
             or request.path in {
-            "/dashboard", "/material", "/sesiones",
+            "/dashboard", "/material",
             }
         ):
             response.headers.setdefault("Cache-Control", "no-store")
@@ -919,9 +922,8 @@ def create_app(test_config: dict | None = None):
         ]
 
         # `interaccion` no guarda el aula (ver bd_app.sql: solo id_material y
-        # fk_alumno), así que ya no se puede desglosar el desempeño por aula
-        # con datos locales. Se muestra solo lo que informa la API
-        # institucional.
+        # fk_alumno). El desglose se construye en la vista de avance cruzando
+        # estos registros con la matrícula vigente de la API institucional.
         aulas = []
         for classroom in institutional_classrooms:
             words = [word for word in classroom.name.split() if word]
@@ -948,6 +950,145 @@ def create_app(test_config: dict | None = None):
             periodo_label=" · ".join(periods) if periods else "Periodo institucional activo",
         )
 
+    def teacher_classroom_or_error(teacher, classroom_id):
+        """Obtiene un aula solo si la API confirma que pertenece a la docente."""
+        classrooms = institutional_client.list_teacher_classrooms(
+            teacher["access_token"], teacher["id"]
+        )
+        classroom = next(
+            (
+                item
+                for item in classrooms
+                if str(item.institutional_id) == str(classroom_id)
+            ),
+            None,
+        )
+        if classroom is None:
+            raise InstitutionalAPIError(
+                "El aula solicitada no pertenece a la docente autenticada.", 404
+            )
+        return classroom
+
+    def render_classroom_error(teacher, exc):
+        return render_template(
+            "integration_error.html",
+            user=teacher,
+            active_nav="tablon",
+            message=str(exc),
+        ), exc.status_code
+
+    def classroom_context(teacher, classroom_id):
+        classroom = teacher_classroom_or_error(teacher, classroom_id)
+        students = institutional_client.list_classroom_students(
+            teacher["access_token"], classroom.institutional_id
+        )
+        return classroom, students
+
+    @app.route("/aulas/<classroom_id>")
+    @login_required
+    def classroom_detail(classroom_id):
+        teacher = current_teacher()
+        try:
+            classroom, students = classroom_context(teacher, classroom_id)
+        except InstitutionalAPIError as exc:
+            return render_classroom_error(teacher, exc)
+        return render_template(
+            "classroom_detail.html",
+            active_nav="tablon",
+            user=teacher,
+            classroom=classroom,
+            students=students,
+        )
+
+    @app.route("/aulas/<classroom_id>/avance")
+    @login_required
+    def classroom_progress(classroom_id):
+        teacher = current_teacher()
+        try:
+            classroom, students = classroom_context(teacher, classroom_id)
+        except InstitutionalAPIError as exc:
+            return render_classroom_error(teacher, exc)
+
+        student_ids = [str(student.institutional_id) for student in students]
+        interactions = []
+        if student_ids:
+            interactions = (
+                Interaccion.query.join(Material)
+                .options(contains_eager(Interaccion.material))
+                .filter(
+                    Interaccion.fk_alumno.in_(student_ids),
+                    Material.fk_user == str(teacher["id"]),
+                )
+                .order_by(Interaccion.fecha_hora.asc(), Interaccion.id.asc())
+                .all()
+            )
+
+        interactions_by_student = {student_id: [] for student_id in student_ids}
+        for interaction in interactions:
+            interactions_by_student[interaction.fk_alumno].append(interaction)
+        progress_rows = []
+        for student in students:
+            student_interactions = interactions_by_student[str(student.institutional_id)]
+            correct = sum(1 for item in student_interactions if item.rpta_correcta)
+            progress_rows.append({
+                "student": student,
+                "interactions": student_interactions,
+                "correct": correct,
+                "total": len(student_interactions),
+            })
+
+        return render_template(
+            "classroom_progress.html",
+            active_nav="tablon",
+            user=teacher,
+            classroom=classroom,
+            progress_rows=progress_rows,
+        )
+
+    @app.route("/aulas/<classroom_id>/alumnos/<student_id>")
+    @login_required
+    def student_detail(classroom_id, student_id):
+        teacher = current_teacher()
+        try:
+            classroom, students = classroom_context(teacher, classroom_id)
+        except InstitutionalAPIError as exc:
+            return render_classroom_error(teacher, exc)
+
+        student = next(
+            (
+                item
+                for item in students
+                if str(item.institutional_id) == str(student_id)
+            ),
+            None,
+        )
+        if student is None:
+            return render_classroom_error(
+                teacher,
+                InstitutionalAPIError(
+                    "El alumno solicitado no pertenece al aula indicada.", 404
+                ),
+            )
+
+        interactions = (
+            Interaccion.query.join(Material)
+            .options(contains_eager(Interaccion.material))
+            .filter(
+                Interaccion.fk_alumno == str(student.institutional_id),
+                Material.fk_user == str(teacher["id"]),
+            )
+            .order_by(Interaccion.fecha_hora.desc(), Interaccion.id.desc())
+            .all()
+        )
+        return render_template(
+            "student_detail.html",
+            active_nav="tablon",
+            user=teacher,
+            classroom=classroom,
+            student=student,
+            interactions=interactions,
+        )
+
     @app.route("/material")
     @login_required
     def material():
@@ -964,42 +1105,6 @@ def create_app(test_config: dict | None = None):
             materials=materials,
             skills=MATERIAL_SKILLS,
             question_configuration=QUESTION_CONFIGURATION,
-        )
-
-    @app.route("/sesiones")
-    @login_required
-    def sesiones():
-        teacher = current_teacher()
-        try:
-            classrooms = institutional_client.list_teacher_classrooms(
-                teacher["access_token"], teacher["id"]
-            )
-        except InstitutionalAPIError as exc:
-            return render_template(
-                "integration_error.html",
-                user=teacher,
-                active_nav="sesiones",
-                message=str(exc),
-            ), exc.status_code
-        materials = (
-            Material.query.filter_by(fk_user=str(teacher["id"]))
-            .order_by(Material.fecha_subido.desc(), Material.id.desc())
-            .all()
-        )
-        return render_template(
-            "sesiones.html",
-            active_nav="sesiones",
-            user=teacher,
-            aulas=[{"id": item.institutional_id, "name": item.name} for item in classrooms],
-            materials=materials,
-            # El flujo de sesión en vivo (reconocimiento facial + evaluación
-            # por turnos) ya no tiene tablas que lo respalden — ver
-            # models.py / bd_app.sql. Queda un log plano en `interaccion`
-            # que el frontend todavía no consume; por eso el historial se
-            # sirve vacío hasta que se rediseñe esta pantalla.
-            sessions=[],
-            recognition_ready=bool(app.config.get("MAXCIM_WEBHOOK_SECRET")),
-            demo_mode=bool(app.config.get("DEMO_MODE")),
         )
 
     @app.route("/api/material/process", methods=["POST"])
@@ -1187,6 +1292,32 @@ def create_app(test_config: dict | None = None):
     def save_material():
         teacher = current_teacher()
         title = (request.form.get("title") or "").strip() or "Material sin título"
+        material_type = (request.form.get("tipo_material") or TIPO_CUENTO).strip()
+        if material_type not in TIPOS_MATERIAL:
+            return jsonify({"error": "El tipo de material no es válido."}), 400
+        if len(title) > 255:
+            return jsonify({"error": "El título excede el límite permitido."}), 413
+
+        if material_type == TIPO_ORACION:
+            sentences_text = (request.form.get("sentences_text") or "").strip()
+            if not sentences_text:
+                return jsonify({"error": "Escribe al menos una oración."}), 400
+            if len(sentences_text) > MAX_SENTENCES_CHARS:
+                return jsonify({"error": "Las oraciones exceden el límite permitido."}), 413
+            material = Material(
+                nombre_material=title,
+                tipo_material=TIPO_ORACION,
+                path_preguntas=sentences_text,
+                path_texto=None,
+                path_texto_resumen=None,
+                path_audio=None,
+                path_audio_resumen=None,
+                fk_user=str(teacher["id"]),
+            )
+            db.session.add(material)
+            db.session.commit()
+            return jsonify({"material_id": material.id})
+
         transcribed_text = (request.form.get("transcribed_text") or "").strip()
         summary_text = (request.form.get("summary_text") or "").strip()
         questions_json_raw = (request.form.get("questions_json") or "").strip()
@@ -1195,7 +1326,7 @@ def create_app(test_config: dict | None = None):
 
         if not transcribed_text or not summary_text:
             return jsonify({"error": "Falta el texto completo o el resumen."}), 400
-        if len(title) > 255 or len(transcribed_text) > MAX_SOURCE_TEXT_CHARS or len(summary_text) > MAX_SUMMARY_CHARS:
+        if len(transcribed_text) > MAX_SOURCE_TEXT_CHARS or len(summary_text) > MAX_SUMMARY_CHARS:
             return jsonify({"error": "El título, texto o resumen excede el límite permitido."}), 413
         if not questions_json_raw:
             return jsonify({"error": "Falta generar las preguntas."}), 400
@@ -1246,11 +1377,7 @@ def create_app(test_config: dict | None = None):
 
         material = Material(
             nombre_material=title,
-            # El frontend todavía no informa si el material vino de un
-            # documento subido o de un cuento generado con IA (material.js
-            # no envía ese dato a este endpoint), así que se guarda un tipo
-            # genérico hasta que se actualice ese formulario.
-            tipo_material="general",
+            tipo_material=TIPO_CUENTO,
             path_texto=f"uploads/{material_dir_name}/texto.txt",
             path_texto_resumen=f"uploads/{material_dir_name}/resumen.txt",
             path_preguntas=f"uploads/{material_dir_name}/preguntas.json",
@@ -1264,6 +1391,21 @@ def create_app(test_config: dict | None = None):
         return jsonify({"material_id": material.id})
 
     def serialize_material(material):
+        if material.es_oracion:
+            return {
+                "id": material.id,
+                "titulo": material.nombre_material,
+                "tipo_material": material.tipo_material,
+                "fecha_subido": material.fecha_subido.isoformat() if material.fecha_subido else None,
+                "fk_user": material.fk_user,
+                "oraciones": material.path_preguntas,
+                "texto_completo_url": None,
+                "texto_resumen_url": None,
+                "audio_completo_url": None,
+                "audio_resumen_url": None,
+                "preguntas_url": None,
+                "preguntas": [],
+            }
         preguntas_path = os.path.join(app.static_folder, material.path_preguntas)
         try:
             with open(preguntas_path, "r", encoding="utf-8") as f:

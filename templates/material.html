@@ -14,8 +14,28 @@
   <input type="text" class="material__search" id="materialSearch" placeholder="Buscar material...">
   <div class="material__toolbar-actions">
     <button type="button" class="material__ai-btn" id="storyOpenBtn"><span>✨</span>Crear con IA</button>
+    <button type="button" class="btn btn--ghost" id="sentenceOpenBtn">Agregar oraciones</button>
     <button type="button" class="material__add-btn" id="uploadOpenBtn"><span>+</span>Subir archivo</button>
   </div>
+</div>
+
+<div class="overlay" id="sentenceOverlay">
+  <form class="upload-modal" id="sentenceForm">
+    <div class="upload-modal__title">Nuevo material de oraciones</div>
+    <label class="field">
+      <span class="field__label">Nombre del material</span>
+      <input class="field__control" type="text" id="sentenceTitle" required maxlength="255" placeholder="Ej.: Oraciones con la letra M">
+    </label>
+    <label class="field">
+      <span class="field__label">Oraciones</span>
+      <textarea class="field__control field__control--textarea" id="sentenceText" required maxlength="20000" placeholder="Escribe las oraciones en texto plano, una por línea."></textarea>
+    </label>
+    <p class="page-heading__description">Este tipo de material no genera resúmenes ni audios.</p>
+    <div class="upload-modal__actions">
+      <button type="button" class="btn btn--ghost" id="sentenceCancelBtn">Cancelar</button>
+      <button type="submit" class="btn btn--primary" id="sentenceSaveBtn">Guardar oraciones</button>
+    </div>
+  </form>
 </div>
 
 <div class="overlay" id="storyOverlay">
@@ -158,11 +178,11 @@
   {% for m in materials %}
   <div class="material-card" data-title="{{ m.nombre_material|lower }}">
     <button type="button" class="material-card__header">
-      <div class="material-card__icon" style="background: #eaf0fd; color: #2f5bcf">📖</div>
+      <div class="material-card__icon" style="background: #eaf0fd; color: #2f5bcf">{{ '✏️' if m.es_oracion else '📖' }}</div>
       <div class="material-card__meta">
         <div class="material-card__name">{{ m.nombre_material }}</div>
         <div class="material-card__sub">
-          Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}
+          {{ 'Oraciones' if m.es_oracion else 'Cuento' }} · Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}
           {% if m.duracion_objetivo_minutos %} · Objetivo {{ m.duracion_objetivo_minutos }} min{% endif %}
           {% if m.duracion_audio_segundos %} · Audio {{ '%.1f'|format((m.duracion_audio_segundos|float) / 60) }} min{% endif %}
         </div>
@@ -170,6 +190,9 @@
       <span class="material-card__chevron">▼</span>
     </button>
     <div class="material-card__detail">
+      {% if m.es_oracion %}
+      <div class="material-card__sentence-text">{{ m.path_preguntas }}</div>
+      {% else %}
       <div class="material-card__audio-row">
         <div class="material-card__audio-label">Audio completo</div>
         <audio controls src="{{ url_for('static', filename=m.path_audio) }}"></audio>
@@ -186,6 +209,7 @@
         </div>
         <a href="#" class="material-card__delete">🗑 Eliminar</a>
       </div>
+      {% endif %}
     </div>
   </div>
   {% endfor %}

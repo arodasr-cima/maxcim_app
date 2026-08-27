@@ -1,0 +1,54 @@
+{% extends "app_shell.html" %}
+
+{% block title %}Avance de {{ classroom.name }} · MAXCIM{% endblock %}
+
+{% block content %}
+<header class="page-heading">
+  <div>
+    <p class="page-heading__eyebrow">Avance del aula</p>
+    <h1 class="sesiones__title">{{ classroom.name }}</h1>
+    <p class="page-heading__description">Aciertos registrados en materiales de esta docente.</p>
+  </div>
+  <a class="btn btn--ghost" href="{{ url_for('classroom_detail', classroom_id=classroom.institutional_id) }}">Volver a alumnos</a>
+</header>
+
+<section class="sessions-history">
+  <div class="sessions-table-wrap">
+    <table class="sessions-table classroom-table">
+      <thead>
+        <tr>
+          <th>Alumno</th>
+          <th>Interacciones</th>
+          <th>Aciertos</th>
+          <th>Detalle</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in progress_rows %}
+        <tr>
+          <td><strong>{{ row.student.full_name }}</strong></td>
+          <td>
+            {% if row.interactions %}
+            <ol class="interaction-results" aria-label="Resultados de {{ row.student.full_name }}">
+              {% for interaction in row.interactions %}
+              <li title="{{ interaction.material.nombre_material }}: {{ interaction.pregunta }}">
+                <span class="answer-mark answer-mark--{{ 'correct' if interaction.rpta_correcta else 'incorrect' }}" aria-label="{{ 'Correcta' if interaction.rpta_correcta else 'Incorrecta' }}">
+                  {{ '✓' if interaction.rpta_correcta else '✕' }}
+                </span>
+                <span>{{ interaction.material.nombre_material }}</span>
+              </li>
+              {% endfor %}
+            </ol>
+            {% else %}
+            <span>Sin interacciones</span>
+            {% endif %}
+          </td>
+          <td><strong>{{ row.correct }}/{{ row.total }}</strong></td>
+          <td><a class="table-action" href="{{ url_for('student_detail', classroom_id=classroom.institutional_id, student_id=row.student.institutional_id) }}">Ver respuestas</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

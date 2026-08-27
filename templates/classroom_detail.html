@@ -1,0 +1,57 @@
+{% extends "app_shell.html" %}
+
+{% block title %}{{ classroom.name }} · MAXCIM{% endblock %}
+
+{% block content %}
+<header class="page-heading">
+  <div>
+    <p class="page-heading__eyebrow">Mis aulas</p>
+    <h1 class="sesiones__title">{{ classroom.name }}</h1>
+    <p class="page-heading__description">
+      {{ classroom.grade or 'Grado no informado' }}
+      {% if classroom.course %} · {{ classroom.course }}{% endif %}
+      {% if classroom.period %} · {{ classroom.period }}{% endif %}
+    </p>
+  </div>
+  <a class="btn btn--primary" href="{{ url_for('classroom_progress', classroom_id=classroom.institutional_id) }}">Ver avance del aula</a>
+</header>
+
+<section class="sessions-history">
+  <div class="sessions-history__header">
+    <div>
+      <p class="page-heading__eyebrow">Matrícula institucional</p>
+      <h2>Alumnos</h2>
+    </div>
+    <span>{{ students|length }} alumno{{ '' if students|length == 1 else 's' }}</span>
+  </div>
+
+  {% if students %}
+  <div class="sessions-table-wrap">
+    <table class="sessions-table classroom-table">
+      <thead>
+        <tr>
+          <th>Apellidos</th>
+          <th>Nombres</th>
+          <th>Detalle</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for student in students %}
+        <tr>
+          <td><strong>{{ student.apellidos }}</strong></td>
+          <td>{{ student.nombres }}</td>
+          <td><a class="table-action" href="{{ url_for('student_detail', classroom_id=classroom.institutional_id, student_id=student.institutional_id) }}">Ver respuestas</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <span aria-hidden="true">◎</span>
+    <strong>No hay alumnos matriculados</strong>
+    <p>La API institucional no devolvió alumnos activos para esta aula.</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

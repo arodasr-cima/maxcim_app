@@ -1,9 +1,8 @@
-const CACHE_NAME = "maxcim-static-v1";
+const CACHE_NAME = "maxcim-static-v2";
 const STATIC_ASSETS = [
   "/static/css/dashboard.css",
   "/static/js/dashboard.js",
   "/static/js/material.js",
-  "/static/js/sesiones.js",
   "/static/js/pwa.js",
   "/static/icons/maxcim.svg",
   "/static/icons/maxcim-192.png",

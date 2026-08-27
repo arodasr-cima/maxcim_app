@@ -1,0 +1,63 @@
+{% extends "app_shell.html" %}
+
+{% block title %}{{ student.full_name }} · MAXCIM{% endblock %}
+
+{% block content %}
+<header class="page-heading">
+  <div>
+    <p class="page-heading__eyebrow">{{ classroom.name }}</p>
+    <h1 class="sesiones__title">{{ student.full_name }}</h1>
+    <p class="page-heading__description">Preguntas, respuestas y apreciaciones registradas por MAXCIM.</p>
+  </div>
+  <a class="btn btn--ghost" href="{{ url_for('classroom_detail', classroom_id=classroom.institutional_id) }}">Volver al aula</a>
+</header>
+
+<section class="sessions-history">
+  <div class="sessions-history__header">
+    <div>
+      <p class="page-heading__eyebrow">Historial</p>
+      <h2>Interacciones</h2>
+    </div>
+    <span>{{ interactions|length }} registrada{{ '' if interactions|length == 1 else 's' }}</span>
+  </div>
+
+  {% if interactions %}
+  <div class="sessions-table-wrap">
+    <table class="sessions-table interaction-detail-table">
+      <thead>
+        <tr>
+          <th>Fecha</th>
+          <th>Material</th>
+          <th>Pregunta</th>
+          <th>Respuesta del alumno</th>
+          <th>Apreciación del robot</th>
+          <th>Resultado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for interaction in interactions %}
+        <tr>
+          <td>{{ interaction.fecha_hora.strftime('%d/%m/%Y %H:%M') if interaction.fecha_hora else '—' }}</td>
+          <td><strong>{{ interaction.material.nombre_material }}</strong></td>
+          <td>{{ interaction.pregunta }}</td>
+          <td>{{ interaction.respuesta }}</td>
+          <td>{{ interaction.apreciacion_robot }}</td>
+          <td>
+            <span class="answer-mark answer-mark--{{ 'correct' if interaction.rpta_correcta else 'incorrect' }}">
+              {{ '✓ Correcta' if interaction.rpta_correcta else '✕ Incorrecta' }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <span aria-hidden="true">◎</span>
+    <strong>Aún no hay interacciones</strong>
+    <p>Las respuestas del alumno aparecerán aquí cuando MAXCIM las registre.</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
