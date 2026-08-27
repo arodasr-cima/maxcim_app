@@ -5,7 +5,6 @@ from cryptography.fernet import Fernet
 
 import app as app_module
 from extensions import db
-from models import SesionWebDocente
 from services.google_oauth import (
     GoogleIdentity,
     GoogleOIDCAuthenticationError,
@@ -45,7 +44,6 @@ class FakeGoogleOIDCClient:
 class GoogleInstitutionalClient:
     login_ready = True
     google_login_ready = True
-    recognition_ready = False
 
     def __init__(self):
         self.received_google_token = None
@@ -128,11 +126,13 @@ def test_google_login_creates_only_an_institutional_teacher_session():
         )
         assert google_client.exchange_request["code_verifier"] == "test-code-verifier"
 
-        with application.app_context():
-            sessions = SesionWebDocente.query.all()
-            assert len(sessions) == 1
-            assert sessions[0].id_docente_institucional == "DOC-GOOGLE-1"
-            assert b"verified-google-id-token" not in sessions[0].token_cifrado
+        # No hay tabla de sesiones: la sesión de la docente vive solo en la
+        # cookie firmada. Verificamos ahí que se guardó el ID institucional
+        # y que el token de Google (no el institucional) nunca llega a
+        # persistirse en ningún lado.
+        with client.session_transaction() as session:
+            assert session["teacher_id"] == "DOC-GOOGLE-1"
+            assert "verified-google-id-token" not in session["teacher_token"]
 
         assert client.get("/material").status_code == 200
     finally:
@@ -150,8 +150,8 @@ def test_google_callback_rejects_a_mismatched_state():
         )
         assert response.status_code == 200
         assert "no corresponde a esta sesión" in response.get_data(as_text=True)
-        with application.app_context():
-            assert SesionWebDocente.query.count() == 0
+        with client.session_transaction() as session:
+            assert "teacher_token" not in session
     finally:
         destroy_app(application)
 
@@ -171,8 +171,8 @@ def test_google_identity_error_is_shown_without_creating_a_user():
             follow_redirects=True,
         )
         assert "cuenta institucional autorizada" in response.get_data(as_text=True)
-        with application.app_context():
-            assert SesionWebDocente.query.count() == 0
+        with client.session_transaction() as session:
+            assert "teacher_token" not in session
     finally:
         destroy_app(application)
 

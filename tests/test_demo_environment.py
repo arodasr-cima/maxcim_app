@@ -5,6 +5,7 @@ import pytest
 
 import app as app_module
 from extensions import db
+from models import Material
 
 
 @pytest.fixture()
@@ -102,54 +103,36 @@ def test_demo_story_questions_and_audio_work_without_gemini(demo_client):
         assert wav_file.getnframes() / wav_file.getframerate() == 60
 
 
-def test_demo_can_simulate_the_complete_oral_flow(demo_client):
+def test_demo_can_register_and_list_interactions(demo_app, demo_client):
     enter_demo(demo_client)
-    created = demo_client.post("/api/interactions/sessions", json={
-        "classroom_id": "AULA-DEMO-3A",
-        "material_id": None,
-        "objective": "Practicar la escucha activa",
+    with demo_app.app_context():
+        material = Material(
+            nombre_material="El bosque que escucha",
+            tipo_material="general",
+            path_audio="fixtures/audio.wav",
+            path_texto="fixtures/texto.txt",
+            path_audio_resumen="fixtures/resumen.wav",
+            path_texto_resumen="fixtures/resumen.txt",
+            path_preguntas="fixtures/preguntas.json",
+            fk_user="DOC-DEMO-01",
+        )
+        db.session.add(material)
+        db.session.commit()
+        material_id = material.id
+
+    created = demo_client.post("/api/interacciones", json={
+        "id_material": material_id,
+        "fk_alumno": "ALU-DEMO-1042",
+        "pregunta": "¿Qué aprendiste hoy?",
+        "respuesta": "Aprendí a escuchar antes de responder.",
+        "path_audio_rpta": "uploads/demo/respuesta.wav",
+        "apreciacion_robot": "Excelente participación.",
+        "rpta_correcta": True,
     })
     assert created.status_code == 201
-    session_uuid = created.get_json()["uuid"]
+    assert created.get_json()["fk_alumno"] == "ALU-DEMO-1042"
 
-    recognized = demo_client.post("/api/integrations/face-recognition/events", json={
-        "session_uuid": session_uuid,
-        "person_id": "ALU-DEMO-1042",
-        "confidence": 0.97,
-    })
-    assert recognized.status_code == 200
-    assert recognized.get_json()["session"]["student_name"] == "Valeria Mendoza"
-
-    for turn in (
-        {"speaker": "MAXCIM", "transcript": "¿Qué aprendiste hoy?"},
-        {
-            "speaker": "ALUMNO",
-            "transcript": "Aprendí a escuchar antes de responder.",
-            "response_time_ms": 3200,
-            "is_correct": True,
-        },
-    ):
-        response = demo_client.post(
-            f"/api/interactions/sessions/{session_uuid}/turns",
-            json=turn,
-        )
-        assert response.status_code == 201
-
-    completed = demo_client.post(f"/api/interactions/sessions/{session_uuid}/complete")
-    assert completed.status_code == 200
-    evaluation = completed.get_json()["evaluation"]
-    assert evaluation["status"] == "pendiente_revision"
-    assert evaluation["oral_interaction_percentage"] == 100
-
-    approved = demo_client.patch(
-        f"/api/interactions/sessions/{session_uuid}/evaluation",
-        json={
-            "participation_percentage": 95,
-            "comprehension_percentage": 92,
-            "oral_interaction_percentage": 90,
-            "overall_percentage": 92,
-            "teacher_feedback": "Buen trabajo en la prueba.",
-        },
-    )
-    assert approved.status_code == 200
-    assert approved.get_json()["status"] == "evaluacion_aprobada"
+    listed = demo_client.get(f"/api/interacciones?id_material={material_id}")
+    assert listed.status_code == 200
+    assert len(listed.get_json()) == 1
+    assert listed.get_json()[0]["rpta_correcta"] is True

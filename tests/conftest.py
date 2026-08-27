@@ -3,7 +3,7 @@ from cryptography.fernet import Fernet
 
 import app as app_module
 from extensions import db
-from services.institutional import AuthenticatedTeacher, Classroom, RecognizedStudent
+from services.institutional import AuthenticatedTeacher, Classroom
 
 
 TEST_TEACHER = {
@@ -17,7 +17,6 @@ TEST_TEACHER = {
 
 class FakeInstitutionalClient:
     login_ready = True
-    recognition_ready = True
 
     def authenticate(self, institutional_id, credential):
         if institutional_id != TEST_TEACHER["id"] or credential != "valid-credential":
@@ -41,23 +40,6 @@ class FakeInstitutionalClient:
             period="Periodo activo",
         )]
 
-    def get_recognized_student(self, person_id):
-        if person_id.startswith("STAFF-"):
-            return RecognizedStudent(
-                institutional_id=person_id,
-                display_name="Personal autorizado",
-                role="DOCENTE",
-                active=True,
-                classroom_ids=frozenset(),
-            )
-        return RecognizedStudent(
-            institutional_id=person_id,
-            display_name="Alumno autorizado",
-            role="ALUMNO",
-            active=True,
-            classroom_ids=frozenset({"AULA-REAL-1"}),
-        )
-
 
 @pytest.fixture()
 def app(monkeypatch):
@@ -73,7 +55,6 @@ def app(monkeypatch):
         "MAXCIM_WEBHOOK_SECRET": "test-webhook-secret",
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "SQLALCHEMY_ENGINE_OPTIONS": {},
-        "FACE_MATCH_MIN_CONFIDENCE": 0.85,
     })
     with application.app_context():
         db.create_all()

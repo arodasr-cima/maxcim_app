@@ -31,19 +31,9 @@ from google import genai
 from google.genai import types
 
 from extensions import db
-from models import (
-    EventoReconocimiento,
-    EvaluacionInteraccion,
-    Material,
-    Pregunta,
-    SesionWebDocente,
-    SesionInteraccion,
-    TurnoConversacion,
-)
-from services.evaluation import calculate_base_metrics, generate_ai_assessment
+from models import Interaccion, Material
 from services.demo import (
     DemoInstitutionalClient,
-    create_demo_assessment,
     create_demo_questions,
     create_demo_story,
     create_demo_wav,
@@ -525,7 +515,6 @@ def create_app(test_config: dict | None = None):
         SQLALCHEMY_DATABASE_URI=SQLALCHEMY_DATABASE_URI,
         SQLALCHEMY_ENGINE_OPTIONS={"pool_pre_ping": True},
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
-        FACE_MATCH_MIN_CONFIDENCE=float(os.environ.get("FACE_MATCH_MIN_CONFIDENCE", "0.85")),
         MAXCIM_WEBHOOK_SECRET=os.environ.get("MAXCIM_WEBHOOK_SECRET", ""),
         SESSION_TOKEN_ENCRYPTION_KEY=os.environ.get("SESSION_TOKEN_ENCRYPTION_KEY", ""),
         INSTITUTIONAL_API_BASE_URL=os.environ.get("INSTITUTIONAL_API_BASE_URL", ""),
@@ -597,21 +586,22 @@ def create_app(test_config: dict | None = None):
         )
 
     def complete_teacher_login(authenticated, next_path: str | None = None):
+        # No hay tabla `sesion_web_docente` en este esquema: la sesión del
+        # docente vive solo en la cookie firmada de Flask. El access token
+        # institucional va cifrado dentro de la cookie (no en claro) porque
+        # es un bearer token hacia la API institucional.
         cipher = token_cipher()
-        web_session = SesionWebDocente(
-            id=str(uuid.uuid4()),
-            id_docente_institucional=authenticated.institutional_id,
-            nombre_docente=authenticated.display_name,
-            rol=authenticated.role,
-            token_cifrado=cipher.encrypt(authenticated.access_token.encode("utf-8")),
-            expira_en=utc_now() + timedelta(seconds=authenticated.expires_in_seconds),
-            ultimo_acceso_en=utc_now(),
-        )
-        db.session.add(web_session)
-        db.session.commit()
         destination = safe_next_path(next_path)
         browser_session.clear()
-        browser_session["teacher_session_id"] = web_session.id
+        browser_session["teacher_id"] = authenticated.institutional_id
+        browser_session["teacher_name"] = authenticated.display_name
+        browser_session["teacher_role"] = authenticated.role
+        browser_session["teacher_token"] = cipher.encrypt(
+            authenticated.access_token.encode("utf-8")
+        ).decode("ascii")
+        browser_session["teacher_expires_at"] = (
+            utc_now() + timedelta(seconds=authenticated.expires_in_seconds)
+        ).isoformat()
         browser_session.permanent = True
         return redirect(destination)
 
@@ -670,31 +660,32 @@ def create_app(test_config: dict | None = None):
             g.maxcim_teacher = teacher
             return teacher
 
-        web_session_id = browser_session.get("teacher_session_id")
-        if not web_session_id:
+        token_blob = browser_session.get("teacher_token")
+        expires_at_raw = browser_session.get("teacher_expires_at")
+        if not token_blob or not expires_at_raw:
             return None
-        web_session = db.session.get(SesionWebDocente, str(web_session_id))
-        if (
-            web_session is None
-            or web_session.revocada_en is not None
-            or web_session.expira_en <= utc_now()
-        ):
+        try:
+            expires_at = datetime.fromisoformat(expires_at_raw)
+        except ValueError:
+            browser_session.clear()
+            return None
+        if expires_at <= utc_now():
             browser_session.clear()
             return None
         try:
-            access_token = token_cipher().decrypt(web_session.token_cifrado).decode("utf-8")
+            access_token = token_cipher().decrypt(token_blob.encode("ascii")).decode("utf-8")
         except (InvalidToken, UnicodeDecodeError):
-            web_session.revocada_en = utc_now()
-            db.session.commit()
             browser_session.clear()
             return None
 
-        name_parts = [part for part in web_session.nombre_docente.split() if part]
+        name_parts = [
+            part for part in str(browser_session.get("teacher_name") or "").split() if part
+        ]
         teacher = {
-            "id": web_session.id_docente_institucional,
-            "name": web_session.nombre_docente,
+            "id": browser_session.get("teacher_id"),
+            "name": browser_session.get("teacher_name"),
             "initials": "".join(part[0].upper() for part in name_parts[:2]) or "DC",
-            "role": web_session.rol,
+            "role": browser_session.get("teacher_role"),
             "access_token": access_token,
         }
         g.maxcim_teacher = teacher
@@ -739,10 +730,11 @@ def create_app(test_config: dict | None = None):
     def enforce_csrf():
         if request.method in {"GET", "HEAD", "OPTIONS"} or app.config.get("TESTING"):
             return None
-        if (
-            request.path == "/api/integrations/face-recognition/events"
-            or request.path.endswith("/turns")
-        ):
+        if request.path == "/api/interacciones":
+            # Endpoint robot-side: no es un formulario de navegador, así que
+            # no lleva token CSRF. Su propia autorización (el secreto
+            # compartido, vía webhook_authorized()) decide con un 401 claro
+            # en vez de un 403 genérico de CSRF.
             return None
         if webhook_authorized():
             return None
@@ -884,12 +876,8 @@ def create_app(test_config: dict | None = None):
 
     @app.route("/logout", methods=["POST"])
     def logout():
-        web_session_id = browser_session.get("teacher_session_id")
-        if web_session_id:
-            web_session = db.session.get(SesionWebDocente, str(web_session_id))
-            if web_session and web_session.revocada_en is None:
-                web_session.revocada_en = utc_now()
-                db.session.commit()
+        # Sin sesion_web_docente no hay nada que revocar del lado del
+        # servidor: cerrar sesión es simplemente borrar la cookie.
         browser_session.clear()
         return redirect(url_for("login"))
 
@@ -909,55 +897,32 @@ def create_app(test_config: dict | None = None):
                 message=str(exc),
             ), exc.status_code
 
-        classroom_ids = [classroom.institutional_id for classroom in institutional_classrooms]
-        teacher_sessions = (
-            SesionInteraccion.query
-            .filter_by(id_docente_institucional=str(teacher["id"]))
-            .all()
+        teacher_materials = Material.query.filter_by(fk_user=str(teacher["id"])).all()
+        material_ids = [material.id for material in teacher_materials]
+        interactions = (
+            Interaccion.query.filter(Interaccion.id_material.in_(material_ids)).all()
+            if material_ids
+            else []
         )
-        relevant_sessions = [
-            item for item in teacher_sessions if item.id_aula_institucional in classroom_ids
-        ]
-        approved_scores = [
-            float(item.evaluacion.porcentaje_general)
-            for item in relevant_sessions
-            if item.evaluacion
-            and item.evaluacion.estado == "aprobada"
-            and item.evaluacion.porcentaje_general is not None
-        ]
-        pending_count = sum(
-            1 for item in relevant_sessions
-            if item.evaluacion and item.evaluacion.estado != "aprobada"
+        correct_count = sum(1 for item in interactions if item.rpta_correcta)
+        average_score = (
+            round(correct_count / len(interactions) * 100) if interactions else None
         )
-        evaluated_students = {
-            item.id_alumno_institucional
-            for item in relevant_sessions
-            if item.id_alumno_institucional and item.evaluacion and item.evaluacion.estado == "aprobada"
-        }
-        average_score = round(sum(approved_scores) / len(approved_scores)) if approved_scores else None
+        participating_students = {item.fk_alumno for item in interactions}
+
         stat_cards = [
             {"value": len(institutional_classrooms), "label": "Aulas a cargo", "color": "#2f5bcf"},
-            {"value": pending_count, "label": "Evaluaciones pendientes", "color": "#d64545"},
-            {"value": f"{average_score}%" if average_score is not None else "—", "label": "Promedio general", "color": "#1f9d55"},
-            {"value": len(evaluated_students), "label": "Alumnos evaluados", "color": "#132a5e"},
+            {"value": len(interactions), "label": "Interacciones registradas", "color": "#d64545"},
+            {"value": f"{average_score}%" if average_score is not None else "—", "label": "Promedio de aciertos", "color": "#1f9d55"},
+            {"value": len(participating_students), "label": "Alumnos participantes", "color": "#132a5e"},
         ]
+
+        # `interaccion` no guarda el aula (ver bd_app.sql: solo id_material y
+        # fk_alumno), así que ya no se puede desglosar el desempeño por aula
+        # con datos locales. Se muestra solo lo que informa la API
+        # institucional.
         aulas = []
         for classroom in institutional_classrooms:
-            classroom_sessions = [
-                item for item in relevant_sessions
-                if item.id_aula_institucional == classroom.institutional_id
-            ]
-            scores = [
-                float(item.evaluacion.porcentaje_general)
-                for item in classroom_sessions
-                if item.evaluacion
-                and item.evaluacion.estado == "aprobada"
-                and item.evaluacion.porcentaje_general is not None
-            ]
-            pending = sum(
-                1 for item in classroom_sessions
-                if item.evaluacion and item.evaluacion.estado != "aprobada"
-            )
             words = [word for word in classroom.name.split() if word]
             aulas.append({
                 "id": classroom.institutional_id,
@@ -966,9 +931,9 @@ def create_app(test_config: dict | None = None):
                 "course": classroom.course,
                 "period": classroom.period,
                 "initials": "".join(word[0].upper() for word in words[:2]) or "AU",
-                "score": round(sum(scores) / len(scores)) if scores else None,
-                "pending": pending,
-                "interactions": len(classroom_sessions),
+                "score": None,
+                "pending": 0,
+                "interactions": 0,
             })
 
         periods = sorted({classroom.period for classroom in institutional_classrooms if classroom.period})
@@ -1015,13 +980,6 @@ def create_app(test_config: dict | None = None):
                 active_nav="sesiones",
                 message=str(exc),
             ), exc.status_code
-        recent_sessions = (
-            SesionInteraccion.query
-            .filter_by(id_docente_institucional=str(teacher["id"]))
-            .order_by(SesionInteraccion.creada_en.desc())
-            .limit(20)
-            .all()
-        )
         materials = (
             Material.query.filter_by(fk_user=str(teacher["id"]))
             .order_by(Material.fecha_subido.desc(), Material.id.desc())
@@ -1033,11 +991,13 @@ def create_app(test_config: dict | None = None):
             user=teacher,
             aulas=[{"id": item.institutional_id, "name": item.name} for item in classrooms],
             materials=materials,
-            sessions=recent_sessions,
-            recognition_ready=bool(
-                institutional_client.recognition_ready
-                and app.config.get("MAXCIM_WEBHOOK_SECRET")
-            ),
+            # El flujo de sesión en vivo (reconocimiento facial + evaluación
+            # por turnos) ya no tiene tablas que lo respalden — ver
+            # models.py / bd_app.sql. Queda un log plano en `interaccion`
+            # que el frontend todavía no consume; por eso el historial se
+            # sirve vacío hasta que se rediseñe esta pantalla.
+            sessions=[],
+            recognition_ready=bool(app.config.get("MAXCIM_WEBHOOK_SECRET")),
             demo_mode=bool(app.config.get("DEMO_MODE")),
         )
 
@@ -1231,14 +1191,6 @@ def create_app(test_config: dict | None = None):
         questions_json_raw = (request.form.get("questions_json") or "").strip()
         audio_full = request.files.get("audio_full")
         audio_summary = request.files.get("audio_summary")
-        target_duration_minutes = None
-        if request.form.get("target_duration_minutes") not in (None, ""):
-            try:
-                target_duration_minutes = _parse_duration_minutes(
-                    request.form.get("target_duration_minutes")
-                )
-            except ValueError as exc:
-                return jsonify({"error": str(exc)}), 400
 
         if not transcribed_text or not summary_text:
             return jsonify({"error": "Falta el texto completo o el resumen."}), 400
@@ -1286,77 +1238,49 @@ def create_app(test_config: dict | None = None):
         audio_summary.save(os.path.join(material_dir, "audio_resumen.wav"))
 
         try:
-            audio_duration_seconds = round(_wav_duration_seconds(full_audio_path), 2)
+            _wav_duration_seconds(full_audio_path)
         except (EOFError, OSError, wave.Error):
             shutil.rmtree(material_dir, ignore_errors=True)
             return jsonify({"error": "El audio completo no es un WAV válido."}), 400
 
         material = Material(
             nombre_material=title,
+            # El frontend todavía no informa si el material vino de un
+            # documento subido o de un cuento generado con IA (material.js
+            # no envía ese dato a este endpoint), así que se guarda un tipo
+            # genérico hasta que se actualice ese formulario.
+            tipo_material="general",
             path_texto=f"uploads/{material_dir_name}/texto.txt",
             path_texto_resumen=f"uploads/{material_dir_name}/resumen.txt",
             path_preguntas=f"uploads/{material_dir_name}/preguntas.json",
             path_audio=f"uploads/{material_dir_name}/audio.wav",
             path_audio_resumen=f"uploads/{material_dir_name}/audio_resumen.wav",
             fk_user=str(teacher["id"]),
-            duracion_objetivo_minutos=target_duration_minutes,
-            duracion_audio_segundos=audio_duration_seconds,
         )
         db.session.add(material)
-        db.session.flush()
-
-        approved_at = utc_now()
-        for order, question_data in enumerate(questions_data, start=1):
-            if not isinstance(question_data, dict):
-                continue
-            statement = str(
-                question_data.get("pregunta") or question_data.get("enunciado") or ""
-            ).strip()
-            if not statement:
-                continue
-            db.session.add(Pregunta(
-                id_material=material.id,
-                tipo=str(question_data.get("tipo") or "general")[:30],
-                enunciado=statement,
-                respuesta_esperada=str(question_data.get("respuesta_esperada") or "").strip() or None,
-                orden=order,
-                generada_por_ia=True,
-                editada_por_docente=bool(question_data.get("editada_por_docente", False)),
-                estado="aprobada",
-                aprobada_por=str(teacher["id"]),
-                aprobada_en=approved_at,
-            ))
         db.session.commit()
 
         return jsonify({"material_id": material.id})
 
     def serialize_material(material):
+        preguntas_path = os.path.join(app.static_folder, material.path_preguntas)
+        try:
+            with open(preguntas_path, "r", encoding="utf-8") as f:
+                preguntas = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            preguntas = []
         return {
             "id": material.id,
             "titulo": material.nombre_material,
+            "tipo_material": material.tipo_material,
             "fecha_subido": material.fecha_subido.isoformat() if material.fecha_subido else None,
             "fk_user": material.fk_user,
-            "duracion_objetivo_minutos": material.duracion_objetivo_minutos,
-            "duracion_audio_segundos": (
-                float(material.duracion_audio_segundos)
-                if material.duracion_audio_segundos is not None
-                else None
-            ),
             "texto_completo_url": url_for("static", filename=material.path_texto, _external=True),
             "texto_resumen_url": url_for("static", filename=material.path_texto_resumen, _external=True),
             "audio_completo_url": url_for("static", filename=material.path_audio, _external=True),
             "audio_resumen_url": url_for("static", filename=material.path_audio_resumen, _external=True),
             "preguntas_url": url_for("static", filename=material.path_preguntas, _external=True),
-            "preguntas": [
-                {
-                    "id": question.id,
-                    "tipo": question.tipo,
-                    "pregunta": question.enunciado,
-                    "respuesta_esperada": question.respuesta_esperada,
-                    "estado": question.estado,
-                }
-                for question in material.preguntas
-            ],
+            "preguntas": preguntas,
         }
 
     # Robot-side endpoint. Every request must use the shared MAXCIM secret.
@@ -1384,9 +1308,6 @@ def create_app(test_config: dict | None = None):
             return jsonify({"error": "Material no encontrado."}), 404
         return jsonify(serialize_material(material))
 
-    def decimal_value(value):
-        return float(value) if value is not None else None
-
     def parse_optional_bool(value):
         if value is None:
             return None
@@ -1400,438 +1321,100 @@ def create_app(test_config: dict | None = None):
                 return False
         raise ValueError("El valor booleano no es válido.")
 
-    def serialize_turn(turn):
+    def serialize_interaccion(interaccion):
         return {
-            "id": turn.id,
-            "order": turn.orden,
-            "speaker": turn.emisor,
-            "transcript": turn.texto_transcrito,
-            "question_id": turn.id_pregunta,
-            "audio_path": turn.path_audio,
-            "response_time_ms": turn.tiempo_respuesta_ms,
-            "is_correct": turn.respuesta_correcta,
-            "needed_help": turn.necesito_ayuda,
-            "created_at": turn.creada_en.isoformat() if turn.creada_en else None,
+            "id": interaccion.id,
+            "id_material": interaccion.id_material,
+            "fk_alumno": interaccion.fk_alumno,
+            "fecha_hora": interaccion.fecha_hora.isoformat() if interaccion.fecha_hora else None,
+            "pregunta": interaccion.pregunta,
+            "respuesta": interaccion.respuesta,
+            "path_audio_rpta": url_for("static", filename=interaccion.path_audio_rpta, _external=True),
+            "apreciacion_robot": interaccion.apreciacion_robot,
+            "rpta_correcta": interaccion.rpta_correcta,
         }
 
-    def serialize_evaluation(evaluation):
-        if evaluation is None:
-            return None
-        try:
-            criteria = json.loads(evaluation.criterios_json) if evaluation.criterios_json else {}
-        except json.JSONDecodeError:
-            criteria = {}
-        return {
-            "id": evaluation.id,
-            "questions_asked": evaluation.preguntas_realizadas,
-            "answers_recorded": evaluation.respuestas_registradas,
-            "correct_answers": evaluation.respuestas_correctas,
-            "average_response_ms": evaluation.promedio_respuesta_ms,
-            "participation_percentage": decimal_value(evaluation.porcentaje_participacion),
-            "comprehension_percentage": decimal_value(evaluation.porcentaje_comprension),
-            "oral_interaction_percentage": decimal_value(evaluation.porcentaje_interaccion_oral),
-            "overall_percentage": decimal_value(evaluation.porcentaje_general),
-            "criteria": criteria,
-            "ai_summary": evaluation.resumen_ia,
-            "status": evaluation.estado,
-            "teacher_feedback": evaluation.retroalimentacion_docente,
-            "reviewed_by": evaluation.revisada_por,
-            "reviewed_at": evaluation.revisada_en.isoformat() if evaluation.revisada_en else None,
-        }
-
-    def serialize_session(session, include_turns: bool = False):
-        payload = {
-            "id": session.id,
-            "uuid": session.uuid,
-            "status": session.estado,
-            "teacher_id": session.id_docente_institucional,
-            "student_id": session.id_alumno_institucional,
-            "student_name": session.alumno_nombre,
-            "classroom_id": session.id_aula_institucional,
-            "material_id": session.id_material,
-            "material_title": session.material.nombre_material if session.material else None,
-            "objective": session.objetivo,
-            "recognition_confidence": decimal_value(session.confianza_reconocimiento),
-            "created_at": session.creada_en.isoformat() if session.creada_en else None,
-            "started_at": session.iniciada_en.isoformat() if session.iniciada_en else None,
-            "finished_at": session.finalizada_en.isoformat() if session.finalizada_en else None,
-            "teacher_reviewed": session.revisada_por_docente,
-            "teacher_notes": session.observaciones_docente,
-            "evaluation": serialize_evaluation(session.evaluacion),
-        }
-        if include_turns:
-            payload["turns"] = [serialize_turn(turn) for turn in session.turnos]
-        return payload
-
-    @app.route("/api/interactions/sessions", methods=["GET"])
-    @login_required
-    def list_interaction_sessions():
-        teacher = current_teacher()
-        sessions = (
-            SesionInteraccion.query
-            .filter_by(id_docente_institucional=str(teacher["id"]))
-            .order_by(SesionInteraccion.creada_en.desc())
-            .limit(100)
-            .all()
-        )
-        return jsonify([serialize_session(session) for session in sessions])
-
-    @app.route("/api/interactions/sessions", methods=["POST"])
-    @login_required
-    def create_interaction_session():
-        teacher = current_teacher()
-
-        if not institutional_client.recognition_ready or not app.config.get("MAXCIM_WEBHOOK_SECRET"):
-            return jsonify({
-                "error": "La integración real de reconocimiento facial todavía no está configurada."
-            }), 503
-
-        payload = request.get_json(silent=True) or {}
-        classroom_id = str(payload.get("classroom_id") or "").strip()
-        objective = str(payload.get("objective") or "").strip()
-        material_id = payload.get("material_id")
-
-        if not classroom_id:
-            return jsonify({"error": "Selecciona un aula."}), 400
-        if not objective:
-            return jsonify({"error": "Indica el objetivo de la interacción."}), 400
-        if len(classroom_id) > 50 or len(objective) > MAX_OBJECTIVE_CHARS:
-            return jsonify({"error": "El aula o el objetivo excede el límite permitido."}), 413
-
-        try:
-            assigned_classrooms = institutional_client.list_teacher_classrooms(
-                teacher["access_token"], teacher["id"]
-            )
-        except InstitutionalAPIError as exc:
-            return jsonify({"error": str(exc)}), exc.status_code
-        if classroom_id not in {item.institutional_id for item in assigned_classrooms}:
-            return jsonify({"error": "El aula no está asignada a la docente autenticada."}), 403
-
-        material = None
-        if material_id not in (None, ""):
-            try:
-                material = db.session.get(Material, int(material_id))
-            except (TypeError, ValueError):
-                material = None
-            if not material or str(material.fk_user) != str(teacher["id"]):
-                return jsonify({"error": "El material no pertenece a la docente activa."}), 404
-
-        session = SesionInteraccion(
-            uuid=str(uuid.uuid4()),
-            id_docente_institucional=str(teacher["id"]),
-            id_aula_institucional=classroom_id,
-            id_material=material.id if material else None,
-            objetivo=objective,
-            estado="esperando_identificacion",
-        )
-        db.session.add(session)
-        db.session.commit()
-        return jsonify(serialize_session(session, include_turns=True)), 201
-
-    @app.route("/api/interactions/sessions/<string:session_uuid>", methods=["GET"])
-    @login_required
-    def get_interaction_session(session_uuid):
-        teacher = current_teacher()
-        session = SesionInteraccion.query.filter_by(uuid=session_uuid).first()
-        if not session or session.id_docente_institucional != str(teacher["id"]):
-            return jsonify({"error": "Sesión no encontrada."}), 404
-        return jsonify(serialize_session(session, include_turns=True))
-
-    @app.route("/api/integrations/face-recognition/events", methods=["POST"])
-    def face_recognition_event():
+    # Robot-side endpoint. MAXCIM ya no gestiona sesiones ni reconocimiento
+    # facial: el robot resuelve por su cuenta qué alumno tiene enfrente y qué
+    # material está usando, y reporta cada turno de pregunta/respuesta con
+    # una sola llamada.
+    @app.route("/api/interacciones", methods=["POST"])
+    def registrar_interaccion():
         if not webhook_authorized():
             return jsonify({"error": "Integración no autorizada."}), 401
 
         payload = request.get_json(silent=True) or {}
-        session_uuid = str(payload.get("session_uuid") or "").strip()
-        person_id = str(payload.get("person_id") or "").strip()
+        fk_alumno = str(payload.get("fk_alumno") or "").strip()
+        pregunta = str(payload.get("pregunta") or "").strip()
+        respuesta = str(payload.get("respuesta") or "").strip()
+        path_audio_rpta = str(payload.get("path_audio_rpta") or "").strip()
+        apreciacion_robot = str(payload.get("apreciacion_robot") or "").strip()
+
         try:
-            confidence = float(payload.get("confidence"))
+            material_id = int(payload.get("id_material"))
         except (TypeError, ValueError):
-            return jsonify({"error": "La confianza de reconocimiento no es válida."}), 400
-
-        if not session_uuid or not person_id:
-            return jsonify({"error": "Faltan session_uuid o person_id."}), 400
-        if len(person_id) > 50:
-            return jsonify({"error": "Los datos de identidad exceden el límite permitido."}), 413
-        if confidence < 0 or confidence > 1:
-            return jsonify({"error": "La confianza debe estar entre 0 y 1."}), 400
-
-        session = SesionInteraccion.query.filter_by(uuid=session_uuid).first()
-        if not session:
-            return jsonify({"error": "Sesión no encontrada."}), 404
-
+            return jsonify({"error": "id_material no es válido."}), 400
         try:
-            student = institutional_client.get_recognized_student(person_id)
-        except InstitutionalAPIError as exc:
-            return jsonify({"error": str(exc)}), exc.status_code
-
-        event_status = "aceptado"
-        reason = None
-        if session.estado != "esperando_identificacion":
-            event_status = "ignorado"
-            reason = "La sesión ya no espera identificación."
-        elif student.role not in {"ALUMNO", "STUDENT"}:
-            event_status = "ignorado"
-            reason = "La persona reconocida no es un alumno."
-        elif not student.active:
-            event_status = "ignorado"
-            reason = "El registro institucional del alumno no está activo."
-        elif session.id_aula_institucional not in student.classroom_ids:
-            event_status = "ignorado"
-            reason = "El alumno no pertenece al aula seleccionada para la sesión."
-        elif confidence < app.config["FACE_MATCH_MIN_CONFIDENCE"]:
-            event_status = "requiere_confirmacion"
-            reason = "La confianza facial está por debajo del mínimo configurado."
-
-        event = EventoReconocimiento(
-            id_sesion=session.id,
-            id_persona_institucional=student.institutional_id,
-            tipo_persona=student.role,
-            nombre_persona=student.display_name,
-            confianza=confidence,
-            estado=event_status,
-            motivo=reason,
-        )
-        db.session.add(event)
-
-        if event_status == "aceptado":
-            session.id_alumno_institucional = student.institutional_id
-            session.alumno_nombre = student.display_name
-            session.confianza_reconocimiento = confidence
-            session.estado = "activa"
-            session.iniciada_en = utc_now()
-
-        db.session.commit()
-        status_code = 200 if event_status in {"aceptado", "ignorado"} else 202
-        return jsonify({
-            "event_status": event_status,
-            "reason": reason,
-            "session": serialize_session(session, include_turns=True),
-        }), status_code
-
-    @app.route("/api/interactions/sessions/<string:session_uuid>/turns", methods=["POST"])
-    def add_conversation_turn(session_uuid):
-        if not webhook_authorized():
-            return jsonify({"error": "Integración no autorizada."}), 401
-
-        session = SesionInteraccion.query.filter_by(uuid=session_uuid).first()
-        if not session:
-            return jsonify({"error": "Sesión no encontrada."}), 404
-        if session.estado != "activa":
-            return jsonify({"error": "La sesión no está activa."}), 409
-
-        payload = request.get_json(silent=True) or {}
-        speaker = str(payload.get("speaker") or "").strip().upper()
-        transcript = str(payload.get("transcript") or "").strip()
-        if speaker not in {"MAXCIM", "ALUMNO"}:
-            return jsonify({"error": "El emisor debe ser MAXCIM o ALUMNO."}), 400
-        if not transcript:
-            return jsonify({"error": "La transcripción está vacía."}), 400
-        if len(transcript) > MAX_TRANSCRIPT_CHARS:
-            return jsonify({"error": "La transcripción excede el límite permitido."}), 413
-
-        question = None
-        question_id = payload.get("question_id")
-        if question_id not in (None, ""):
-            try:
-                question = db.session.get(Pregunta, int(question_id))
-            except (TypeError, ValueError):
-                question = None
-            if not question or question.id_material != session.id_material:
-                return jsonify({"error": "La pregunta no pertenece al material de la sesión."}), 400
-
-        try:
-            correct = parse_optional_bool(payload.get("is_correct"))
-            needed_help = parse_optional_bool(payload.get("needed_help")) or False
+            rpta_correcta = parse_optional_bool(payload.get("rpta_correcta"))
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
-        response_time = payload.get("response_time_ms")
-        if response_time not in (None, ""):
-            try:
-                response_time = max(0, int(response_time))
-            except (TypeError, ValueError):
-                return jsonify({"error": "El tiempo de respuesta no es válido."}), 400
-        else:
-            response_time = None
-
-        max_order = (
-            db.session.query(db.func.max(TurnoConversacion.orden))
-            .filter_by(id_sesion=session.id)
-            .scalar()
-            or 0
-        )
-        turn = TurnoConversacion(
-            id_sesion=session.id,
-            id_pregunta=question.id if question else None,
-            orden=max_order + 1,
-            emisor=speaker,
-            texto_transcrito=transcript,
-            path_audio=str(payload.get("audio_path") or "").strip()[:500] or None,
-            tiempo_respuesta_ms=response_time,
-            respuesta_correcta=correct,
-            necesito_ayuda=needed_help,
-        )
-        db.session.add(turn)
-        db.session.commit()
-        return jsonify(serialize_turn(turn)), 201
-
-    @app.route("/api/interactions/sessions/<string:session_uuid>/complete", methods=["POST"])
-    def complete_interaction_session(session_uuid):
-        session = SesionInteraccion.query.filter_by(uuid=session_uuid).first()
-        if not session:
-            return jsonify({"error": "Sesión no encontrada."}), 404
-        teacher = current_teacher()
-        teacher_owns_session = bool(
-            teacher and session.id_docente_institucional == str(teacher["id"])
-        )
-        if not webhook_authorized() and not teacher_owns_session:
-            return jsonify({"error": "Integración no autorizada."}), 401
-        if session.evaluacion and session.estado in {"finalizada", "evaluacion_aprobada"}:
-            return jsonify(serialize_session(session, include_turns=True))
-        if session.estado != "activa":
-            return jsonify({"error": "La sesión no está activa."}), 409
-
-        metrics = calculate_base_metrics(session.turnos)
-        assessment = None
-        assessment_error = None
-        try:
-            assessment = generate_ai_assessment(
-                gemini_client,
-                GEMINI_MODEL,
-                session.turnos,
-                metrics,
+        missing = [
+            label
+            for label, value in (
+                ("fk_alumno", fk_alumno),
+                ("pregunta", pregunta),
+                ("respuesta", respuesta),
+                ("path_audio_rpta", path_audio_rpta),
+                ("apreciacion_robot", apreciacion_robot),
             )
-        except Exception:
-            app.logger.exception("No se pudo generar la evaluación cualitativa con Gemini")
-            assessment_error = "No se pudo obtener la propuesta cualitativa de Gemini."
-        if assessment is None and app.config.get("DEMO_MODE"):
-            assessment = create_demo_assessment(metrics)
+            if not value
+        ]
+        if rpta_correcta is None:
+            missing.append("rpta_correcta")
+        if missing:
+            return jsonify({"error": f"Faltan campos obligatorios: {', '.join(missing)}."}), 400
+        if len(fk_alumno) > 50:
+            return jsonify({"error": "fk_alumno excede el límite permitido."}), 413
+        if len(path_audio_rpta) > 500:
+            return jsonify({"error": "path_audio_rpta excede el límite permitido."}), 413
+        if len(pregunta) > MAX_TRANSCRIPT_CHARS or len(respuesta) > MAX_TRANSCRIPT_CHARS:
+            return jsonify({"error": "La pregunta o la respuesta exceden el límite permitido."}), 413
 
-        oral_percentage = assessment.get("porcentaje_interaccion_oral") if assessment else None
-        scores = [metrics["porcentaje_participacion"]]
-        if metrics["respuestas_calificadas"]:
-            scores.append(metrics["porcentaje_comprension"])
-        if oral_percentage is not None:
-            scores.append(oral_percentage)
-        overall = round(sum(scores) / len(scores), 2) if scores else None
+        material = db.session.get(Material, material_id)
+        if not material:
+            return jsonify({"error": "Material no encontrado."}), 404
 
-        evaluation = EvaluacionInteraccion(
-            id_sesion=session.id,
-            preguntas_realizadas=metrics["preguntas_realizadas"],
-            respuestas_registradas=metrics["respuestas_registradas"],
-            respuestas_correctas=metrics["respuestas_correctas"],
-            promedio_respuesta_ms=metrics["promedio_respuesta_ms"],
-            porcentaje_participacion=metrics["porcentaje_participacion"],
-            porcentaje_comprension=metrics["porcentaje_comprension"],
-            porcentaje_interaccion_oral=oral_percentage,
-            porcentaje_general=overall,
-            criterios_json=json.dumps(
-                {
-                    "criterios": assessment.get("criterios", {}) if assessment else {},
-                    "recomendacion_docente": assessment.get("recomendacion_docente", "") if assessment else "",
-                    "error_ia": assessment_error,
-                },
-                ensure_ascii=False,
-            ),
-            resumen_ia=assessment.get("resumen") if assessment else None,
-            estado="pendiente_revision" if assessment else "pendiente_ia",
+        interaccion = Interaccion(
+            id_material=material.id,
+            fk_alumno=fk_alumno,
+            pregunta=pregunta,
+            respuesta=respuesta,
+            path_audio_rpta=path_audio_rpta,
+            apreciacion_robot=apreciacion_robot,
+            rpta_correcta=rpta_correcta,
         )
-        db.session.add(evaluation)
-        session.estado = "finalizada"
-        session.finalizada_en = utc_now()
+        db.session.add(interaccion)
         db.session.commit()
-        return jsonify(serialize_session(session, include_turns=True))
+        return jsonify(serialize_interaccion(interaccion)), 201
 
-    @app.route("/api/interactions/sessions/<string:session_uuid>/evaluation", methods=["PATCH"])
-    @login_required
-    def review_interaction_evaluation(session_uuid):
-        teacher = current_teacher()
-        session = SesionInteraccion.query.filter_by(uuid=session_uuid).first()
-        if (
-            not session
-            or session.id_docente_institucional != str(teacher["id"])
-            or not session.evaluacion
-        ):
-            return jsonify({"error": "Evaluación no encontrada."}), 404
-
-        payload = request.get_json(silent=True) or {}
-        evaluation = session.evaluacion
-        for field, attribute in (
-            ("participation_percentage", "porcentaje_participacion"),
-            ("comprehension_percentage", "porcentaje_comprension"),
-            ("oral_interaction_percentage", "porcentaje_interaccion_oral"),
-            ("overall_percentage", "porcentaje_general"),
-        ):
-            if field in payload and payload[field] is not None:
-                try:
-                    value = max(0, min(float(payload[field]), 100))
-                except (TypeError, ValueError):
-                    return jsonify({"error": f"{field} no es válido."}), 400
-                setattr(evaluation, attribute, value)
-
-        evaluation.retroalimentacion_docente = str(
-            payload.get("teacher_feedback") or ""
-        ).strip() or None
-        evaluation.estado = "aprobada"
-        evaluation.revisada_por = str(teacher["id"])
-        evaluation.revisada_en = utc_now()
-        session.revisada_por_docente = True
-        session.observaciones_docente = evaluation.retroalimentacion_docente
-        session.estado = "evaluacion_aprobada"
-        db.session.commit()
-        return jsonify(serialize_session(session, include_turns=True))
-
-    @app.route("/api/interactions/sessions/<string:session_uuid>/robot-payload", methods=["GET"])
-    def robot_session_payload(session_uuid):
+    # Robot-side endpoint: consulta el historial (por material y/o alumno).
+    @app.route("/api/interacciones", methods=["GET"])
+    def list_interacciones():
         if not webhook_authorized():
             return jsonify({"error": "Integración no autorizada."}), 401
-
-        session = SesionInteraccion.query.filter_by(uuid=session_uuid).first()
-        if not session:
-            return jsonify({"error": "Sesión no encontrada."}), 404
-
-        base_payload = {
-            "session_uuid": session.uuid,
-            "student": {
-                "institutional_id": session.id_alumno_institucional,
-                "display_name": session.alumno_nombre,
-            },
-            "objective": session.objetivo,
-        }
-        if not session.material:
-            return jsonify({**base_payload, "material": None})
-
-        material = session.material
-        approved_questions = [
-            question
-            for question in material.preguntas
-            if question.estado == "aprobada"
-        ]
-        return jsonify({
-            **base_payload,
-            "material": {
-                "id": material.id,
-                "title": material.nombre_material,
-                "full_text_url": url_for("static", filename=material.path_texto, _external=True),
-                "summary_url": url_for("static", filename=material.path_texto_resumen, _external=True),
-                "full_audio_url": url_for("static", filename=material.path_audio, _external=True),
-                "summary_audio_url": url_for("static", filename=material.path_audio_resumen, _external=True),
-                "target_duration_minutes": material.duracion_objetivo_minutos,
-                "audio_duration_seconds": decimal_value(material.duracion_audio_segundos),
-                "questions": [
-                    {
-                        "id": question.id,
-                        "type": question.tipo,
-                        "statement": question.enunciado,
-                        "expected_answer": question.respuesta_esperada,
-                        "order": question.orden,
-                    }
-                    for question in approved_questions
-                ],
-            },
-        })
+        query = Interaccion.query
+        material_id = request.args.get("id_material")
+        if material_id:
+            try:
+                query = query.filter_by(id_material=int(material_id))
+            except ValueError:
+                return jsonify({"error": "id_material no es válido."}), 400
+        fk_alumno = request.args.get("fk_alumno")
+        if fk_alumno:
+            query = query.filter_by(fk_alumno=fk_alumno.strip())
+        interacciones = query.order_by(Interaccion.fecha_hora.desc()).limit(200).all()
+        return jsonify([serialize_interaccion(item) for item in interacciones])
 
     return app
 
