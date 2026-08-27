@@ -93,7 +93,7 @@ if DATABASE_URL.startswith("mysql://"):
     DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+pymysql://", 1)
 if DATABASE_URL:
     SQLALCHEMY_DATABASE_URI = DATABASE_URL
-elif DEFAULT_DEMO_MODE and not MYSQL_DATABASE:
+elif DEFAULT_DEMO_MODE:
     SQLALCHEMY_DATABASE_URI = os.environ.get("DEMO_DATABASE_URL", "sqlite:///maxcim_demo.db")
 else:
     SQLALCHEMY_DATABASE_URI = (
