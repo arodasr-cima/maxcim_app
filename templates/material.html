@@ -1,18 +1,33 @@
 {% extends "app_shell.html" %}
 
-{% block title %}Material · SocioComunica{% endblock %}
+{% block title %}Material · MAXCIM{% endblock %}
+{% block topbar_title %}Material{% endblock %}
 
 {% block content %}
-<h1 class="material__title">Material</h1>
+<div class="page-heading page-heading--simple">
+  <div>
+    <div class="page-heading__eyebrow">BIBLIOTECA</div>
+    <h1 class="page-heading__title">Material</h1>
+  </div>
+</div>
 
 <div class="material__toolbar">
-  <select class="material__select" id="materialSkillFilter">
-    {% for skill in skills %}
-    <option>{{ skill }}</option>
-    {% endfor %}
-  </select>
-  <input type="text" class="material__search" id="materialSearch" placeholder="Buscar material...">
-  <button type="button" class="material__add-btn" id="uploadOpenBtn"><span>+</span>Agregar</button>
+  <div class="material__filter-wrap">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+    <select class="material__select" id="materialSkillFilter" aria-label="Filtrar por habilidad">
+      {% for skill in skills %}
+      <option>{{ skill }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="material__search-wrap">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+    <input type="text" class="material__search" id="materialSearch" placeholder="Buscar material..." aria-label="Buscar material">
+  </div>
+  <button type="button" class="material__add-btn" id="uploadOpenBtn">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    Agregar
+  </button>
 </div>
 
 <div class="overlay" id="uploadOverlay">
@@ -20,7 +35,9 @@
     <div class="upload-modal__title">Nuevo cuento</div>
 
     <label class="dropzone" id="dropzone" for="uploadFileInput">
-      <div class="dropzone__icon">📤</div>
+      <div class="dropzone__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5"/><path d="M5 13v6.5h14V13"/></svg>
+      </div>
       <div class="dropzone__text" id="dropzoneText">Arrastra el archivo aquí o haz clic para seleccionar</div>
       <div class="dropzone__hint">DOC, TXT o PDF · máx. 50 MB</div>
       <input type="file" id="uploadFileInput" accept=".doc,.docx,.txt,.pdf" hidden>
@@ -68,14 +85,14 @@
         <div class="result-audio-row">
           <div class="result-audio-row__top">
             <div class="result-audio-row__label">Audio completo</div>
-            <button type="button" class="btn btn--accent" id="generateAudioFullBtn">✨ Generar</button>
+            <button type="button" class="btn btn--accent" id="generateAudioFullBtn">Generar</button>
           </div>
           <audio controls id="resultAudioFull"></audio>
         </div>
         <div class="result-audio-row result-audio-row--divider">
           <div class="result-audio-row__top">
             <div class="result-audio-row__label">Audio resumen</div>
-            <button type="button" class="btn btn--accent" id="generateAudioSummaryBtn">✨ Generar</button>
+            <button type="button" class="btn btn--accent" id="generateAudioSummaryBtn">Generar</button>
           </div>
           <audio controls id="resultAudioSummary"></audio>
         </div>
@@ -89,7 +106,7 @@
           <input type="number" min="0" max="15" value="{{ q.default }}" class="question-row__input" data-question-type="{{ q.key }}" style="color: {{ q.value_color }}; border-color: {{ q.border }}">
         </div>
         {% endfor %}
-        <button type="button" class="btn btn--accent btn--block" id="generateQuestionsBtn">✨ Generar preguntas</button>
+        <button type="button" class="btn btn--accent btn--block" id="generateQuestionsBtn">Generar preguntas</button>
         <div class="questions-result" id="questionsResult"></div>
       </div>
     </div>
@@ -104,12 +121,16 @@
   {% for m in materials %}
   <div class="material-card" data-title="{{ m.nombre_material|lower }}">
     <button type="button" class="material-card__header">
-      <div class="material-card__icon" style="background: #eaf0fd; color: #2f5bcf">📖</div>
+      <div class="material-card__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11a2 2 0 0 1 2 2v16a2.5 2.5 0 0 0-2.5-2.5H4Z"/><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v18a2.5 2.5 0 0 1 2.5-2.5H20Z"/></svg>
+      </div>
       <div class="material-card__meta">
         <div class="material-card__name">{{ m.nombre_material }}</div>
         <div class="material-card__sub">Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}</div>
       </div>
-      <span class="material-card__chevron">▼</span>
+      <span class="material-card__chevron" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg>
+      </span>
     </button>
     <div class="material-card__detail">
       <div class="material-card__audio-row">
@@ -122,11 +143,11 @@
       </div>
       <div class="material-card__actions">
         <div class="material-card__links">
-          <a href="{{ url_for('static', filename=m.path_texto) }}" download>📄 Descargar texto completo</a>
-          <a href="{{ url_for('static', filename=m.path_texto_resumen) }}" download>📄 Descargar texto resumido</a>
-          <a href="{{ url_for('static', filename=m.path_preguntas) }}" download>❓ Preguntas generadas</a>
+          <a href="{{ url_for('static', filename=m.path_texto) }}" download>Descargar texto completo</a>
+          <a href="{{ url_for('static', filename=m.path_texto_resumen) }}" download>Descargar texto resumido</a>
+          <a href="{{ url_for('static', filename=m.path_preguntas) }}" download>Preguntas generadas</a>
         </div>
-        <a href="#" class="material-card__delete">🗑 Eliminar</a>
+        <a href="#" class="material-card__delete">Eliminar</a>
       </div>
     </div>
   </div>

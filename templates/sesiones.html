@@ -1,8 +1,19 @@
 {% extends "app_shell.html" %}
 
-{% block title %}Sesiones · SocioComunica{% endblock %}
+{% block title %}Sesiones · MAXCIM{% endblock %}
+{% block topbar_title %}Sesiones{% endblock %}
 
 {% block content %}
-<h1 class="sesiones__title">Sesiones</h1>
-<p class="sesiones__placeholder">Todavía no hay nada por aquí.</p>
+<div class="page-heading page-heading--simple">
+  <div>
+    <div class="page-heading__eyebrow">SEGUIMIENTO</div>
+    <h1 class="page-heading__title">Sesiones</h1>
+  </div>
+</div>
+<div class="empty-state">
+  <div class="empty-state__icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="15" rx="2"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17"/><path d="M8 14h8M8 17h5"/></svg>
+  </div>
+  <p class="sesiones__placeholder">Todavía no hay nada por aquí.</p>
+</div>
 {% endblock %}
