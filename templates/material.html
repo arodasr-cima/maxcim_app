@@ -1,6 +1,6 @@
 {% extends "app_shell.html" %}
 
-{% block title %}Material · SocioComunica{% endblock %}
+{% block title %}Material · MAXCIM{% endblock %}
 
 {% block content %}
 <h1 class="material__title">Material</h1>
@@ -12,7 +12,50 @@
     {% endfor %}
   </select>
   <input type="text" class="material__search" id="materialSearch" placeholder="Buscar material...">
-  <button type="button" class="material__add-btn" id="uploadOpenBtn"><span>+</span>Agregar</button>
+  <div class="material__toolbar-actions">
+    <button type="button" class="material__ai-btn" id="storyOpenBtn"><span>✨</span>Crear con IA</button>
+    <button type="button" class="material__add-btn" id="uploadOpenBtn"><span>+</span>Subir archivo</button>
+  </div>
+</div>
+
+<div class="overlay" id="storyOverlay">
+  <form class="story-modal" id="storyForm">
+    <div class="upload-modal__title">Crear un cuento con el alumno</div>
+    <p class="story-modal__description">Registra las respuestas que el alumno le da oralmente a la miss. Gemini preparará un borrador editable.</p>
+
+    <div class="story-modal__grid">
+      <label class="story-field">
+        <span>Personaje principal</span>
+        <input type="text" id="storyCharacter" required maxlength="120" placeholder="Ej.: una zorrita llamada Luna">
+      </label>
+      <label class="story-field">
+        <span>Lugar de la historia</span>
+        <input type="text" id="storySetting" required maxlength="160" placeholder="Ej.: un bosque mágico">
+      </label>
+      <label class="story-field">
+        <span>Nivel o grado</span>
+        <input type="text" id="storyGrade" required maxlength="100" placeholder="Ej.: 3.° de primaria">
+      </label>
+      <label class="story-field">
+        <span>Duración aproximada del cuento</span>
+        <input type="number" id="storyDuration" required min="1" max="15" step="1" value="5" inputmode="numeric">
+        <small>Entre 1 y 15 minutos. Puede variar algunos segundos al narrarse.</small>
+      </label>
+      <label class="story-field story-field--wide">
+        <span>Objetivo pedagógico</span>
+        <input type="text" id="storyObjective" required maxlength="240" placeholder="Ej.: practicar la escucha activa">
+      </label>
+      <label class="story-field story-field--wide">
+        <span>Otros detalles elegidos por el alumno</span>
+        <textarea id="storyDetails" maxlength="1000" placeholder="Amigos, problema que resolver, objetos, final deseado…"></textarea>
+      </label>
+    </div>
+
+    <div class="upload-modal__actions">
+      <button type="button" class="btn btn--ghost" id="storyCancelBtn">Cancelar</button>
+      <button type="submit" class="btn btn--primary" id="storyGenerateBtn">Generar borrador</button>
+    </div>
+  </form>
 </div>
 
 <div class="overlay" id="uploadOverlay">
@@ -48,18 +91,18 @@
 <div class="overlay" id="resultOverlay">
   <div class="result-modal">
     <div class="result-modal__title">Contenido generado</div>
-    <div class="result-modal__subtitle">A partir del documento original</div>
+    <div class="result-modal__subtitle" id="resultSubtitle">A partir del documento original</div>
 
     <div class="result-modal__columns">
       <div class="result-col result-col--border">
         <div class="result-col__title">Textos</div>
         <div class="result-block">
           <div class="result-block__label">Texto completo</div>
-          <div class="result-block__box" id="resultTranscribedText" contenteditable="true" spellcheck="false">{{ upload_preview.transcribed_text }}</div>
+          <div class="result-block__box" id="resultTranscribedText" contenteditable="true" spellcheck="false"></div>
         </div>
         <div class="result-block result-block--divider">
           <div class="result-block__label">Resumen del texto</div>
-          <div class="result-block__box result-block__box--short" id="resultSummaryText" contenteditable="true" spellcheck="false">{{ upload_preview.summary_text }}</div>
+          <div class="result-block__box result-block__box--short" id="resultSummaryText" contenteditable="true" spellcheck="false"></div>
         </div>
       </div>
 
@@ -71,6 +114,7 @@
             <button type="button" class="btn btn--accent" id="generateAudioFullBtn">✨ Generar</button>
           </div>
           <audio controls id="resultAudioFull"></audio>
+          <div class="result-audio-row__meta" id="resultAudioFullMeta"></div>
         </div>
         <div class="result-audio-row result-audio-row--divider">
           <div class="result-audio-row__top">
@@ -78,15 +122,17 @@
             <button type="button" class="btn btn--accent" id="generateAudioSummaryBtn">✨ Generar</button>
           </div>
           <audio controls id="resultAudioSummary"></audio>
+          <div class="result-audio-row__meta" id="resultAudioSummaryMeta"></div>
         </div>
       </div>
 
       <div class="result-col">
-        <div class="result-col__title">Preguntas</div>
-        {% for q in upload_preview.questions %}
-        <div class="question-row" style="background: {{ q.bg }}">
-          <div class="question-row__label" style="color: {{ q.label_color }}">{{ q.label }}</div>
-          <input type="number" min="0" max="15" value="{{ q.default }}" class="question-row__input" data-question-type="{{ q.key }}" style="color: {{ q.value_color }}; border-color: {{ q.border }}">
+        <div class="result-col__title">Preguntas y respuestas esperadas</div>
+        <p class="questions-review-note">Gemini propone. La miss debe revisar y puede modificar todo antes de aprobar.</p>
+        {% for q in question_configuration %}
+        <div class="question-row question-row--{{ q.key }}">
+          <div class="question-row__label">{{ q.label }}</div>
+          <input type="number" min="0" max="15" value="{{ q.default }}" class="question-row__input" data-question-type="{{ q.key }}">
         </div>
         {% endfor %}
         <button type="button" class="btn btn--accent btn--block" id="generateQuestionsBtn">✨ Generar preguntas</button>
@@ -95,19 +141,31 @@
     </div>
 
     <div class="result-modal__footer">
-      <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Listo</button>
+      <button type="button" class="btn btn--ghost" id="resultCancelBtn">Cancelar</button>
+      <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Aprobar y guardar</button>
     </div>
   </div>
 </div>
 
 <div class="material__list" id="materialList">
+  {% if not materials %}
+  <div class="empty-state">
+    <span aria-hidden="true">◎</span>
+    <strong>Aún no hay materiales</strong>
+    <p>Crea un cuento con Gemini o sube el primer documento de la docente.</p>
+  </div>
+  {% endif %}
   {% for m in materials %}
   <div class="material-card" data-title="{{ m.nombre_material|lower }}">
     <button type="button" class="material-card__header">
       <div class="material-card__icon" style="background: #eaf0fd; color: #2f5bcf">📖</div>
       <div class="material-card__meta">
         <div class="material-card__name">{{ m.nombre_material }}</div>
-        <div class="material-card__sub">Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}</div>
+        <div class="material-card__sub">
+          Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}
+          {% if m.duracion_objetivo_minutos %} · Objetivo {{ m.duracion_objetivo_minutos }} min{% endif %}
+          {% if m.duracion_audio_segundos %} · Audio {{ '%.1f'|format((m.duracion_audio_segundos|float) / 60) }} min{% endif %}
+        </div>
       </div>
       <span class="material-card__chevron">▼</span>
     </button>

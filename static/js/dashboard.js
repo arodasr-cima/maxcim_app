@@ -5,7 +5,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const profileMenu = document.getElementById("profileMenu");
 
   sidebarToggle.addEventListener("click", () => {
-    sidebar.classList.toggle("is-collapsed");
+    if (window.matchMedia("(max-width: 760px)").matches) {
+      sidebar.classList.toggle("is-open");
+    } else {
+      sidebar.classList.toggle("is-collapsed");
+    }
   });
 
   profileTrigger.addEventListener("click", (event) => {
@@ -16,6 +20,14 @@ document.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("click", (event) => {
     if (!profileMenu.contains(event.target) && !profileTrigger.contains(event.target)) {
       profileMenu.classList.remove("is-open");
+    }
+    if (
+      window.matchMedia("(max-width: 760px)").matches
+      && sidebar.classList.contains("is-open")
+      && !sidebar.contains(event.target)
+      && !sidebarToggle.contains(event.target)
+    ) {
+      sidebar.classList.remove("is-open");
     }
   });
 });

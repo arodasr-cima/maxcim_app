@@ -3,8 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}SocioComunica{% endblock %}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="theme-color" content="#132a5e">
+  <meta name="description" content="Aplicación docente para preparar y revisar interacciones orales con MAXCIM.">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="MAXCIM">
+  <title>{% block title %}MAXCIM Docentes{% endblock %}</title>
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='icons/maxcim.svg') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/maxcim-192.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
@@ -12,8 +20,9 @@
 
     <aside class="sidebar" id="sidebar">
       <div class="sidebar__brand">
-        <div class="sidebar__logo">SC</div>
-        <div class="sidebar__name">SocioComunica</div>
+        <div class="sidebar__logo">MX</div>
+        <div class="sidebar__name">MAXCIM</div>
+        {% if demo_mode %}<span class="sidebar__environment">PRUEBAS</span>{% endif %}
       </div>
 
       <nav class="sidebar__nav">
@@ -44,11 +53,11 @@
             <span class="profile__caret">▾</span>
           </button>
           <div class="profile__menu" id="profileMenu">
-            <a href="#">Mi perfil</a>
-            <a href="#">Configuración</a>
-            <a href="#">Ayuda</a>
-            <div class="profile__menu-divider"></div>
-            <a href="#" class="profile__menu-danger">Cerrar sesión</a>
+            <div class="profile__session-id">ID institucional: {{ user.id }}</div>
+            <form action="{{ url_for('logout') }}" method="post">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="profile__menu-danger">Cerrar sesión</button>
+            </form>
           </div>
         </div>
       </header>
@@ -60,6 +69,7 @@
   </div>
 
   <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/pwa.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
