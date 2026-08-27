@@ -6,6 +6,7 @@ import pytest
 import app as app_module
 from extensions import db
 from models import Material
+from services.demo import DEMO_CLASSROOMS, DemoInstitutionalClient
 
 
 @pytest.fixture()
@@ -68,6 +69,17 @@ def test_demo_accepts_prefilled_id_credentials(demo_client):
     assert response.location == "/dashboard"
     dashboard = demo_client.get("/dashboard").get_data(as_text=True)
     assert "DOC-PRUEBA-LIBRE" in dashboard
+
+
+def test_each_demo_classroom_has_fictional_students():
+    institutional_client = DemoInstitutionalClient()
+
+    for classroom in DEMO_CLASSROOMS:
+        students = institutional_client.list_classroom_students(
+            "maxcim-demo-only-token", classroom.institutional_id
+        )
+        assert students
+        assert all(student.institutional_id.startswith("ALU-DEMO-") for student in students)
 
 
 def test_demo_story_questions_and_audio_work_without_gemini(demo_client):

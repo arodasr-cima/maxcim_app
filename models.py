@@ -13,6 +13,13 @@ def _utc_now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+# Valores permitidos de `material.tipo_material` (ver bd_app.sql). Un cuento
+# usa todas las rutas; una oración solo guarda su texto en `path_preguntas`.
+TIPO_CUENTO = "cuento"
+TIPO_ORACION = "oracion"
+TIPOS_MATERIAL = (TIPO_CUENTO, TIPO_ORACION)
+
+
 class Material(db.Model):
     """Material prepared by a teacher for an activity with MAXCIM.
 
@@ -25,10 +32,10 @@ class Material(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nombre_material = db.Column(db.String(255), nullable=False)
     tipo_material = db.Column(db.String(255), nullable=False)
-    path_audio = db.Column(db.String(500), nullable=False)
-    path_texto = db.Column(db.String(500), nullable=False)
-    path_audio_resumen = db.Column(db.String(500), nullable=False)
-    path_texto_resumen = db.Column(db.String(500), nullable=False)
+    path_audio = db.Column(db.String(500), nullable=True)
+    path_texto = db.Column(db.String(500), nullable=True)
+    path_audio_resumen = db.Column(db.String(500), nullable=True)
+    path_texto_resumen = db.Column(db.String(500), nullable=True)
     path_preguntas = db.Column(db.String(500), nullable=False)
     # Application-side default. SQLAlchemy would render func.current_date()
     # as DEFAULT CURRENT_DATE for MySQL, which some managed MySQL versions
@@ -43,6 +50,14 @@ class Material(db.Model):
         back_populates="material",
         lazy="selectin",
     )
+
+    @property
+    def es_oracion(self) -> bool:
+        return self.tipo_material == TIPO_ORACION
+
+    @property
+    def es_cuento(self) -> bool:
+        return self.tipo_material == TIPO_CUENTO
 
 
 class Interaccion(db.Model):

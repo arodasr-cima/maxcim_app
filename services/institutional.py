@@ -49,6 +49,17 @@ class Classroom:
 
 
 @dataclass(frozen=True)
+class ClassroomStudent:
+    institutional_id: str
+    apellidos: str
+    nombres: str
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.apellidos.upper()}, {self.nombres.title()}"
+
+
+@dataclass(frozen=True)
 class RecognizedStudent:
     institutional_id: str
     display_name: str
@@ -73,6 +84,7 @@ class InstitutionalClient:
         classrooms_path: str,
         student_path: str,
         service_token: str,
+        students_path: str = "",
         timeout_seconds: float = 8.0,
         verify_tls: bool = True,
     ):
@@ -80,6 +92,7 @@ class InstitutionalClient:
         self.login_path = login_path
         self.google_login_path = google_login_path
         self.classrooms_path = classrooms_path
+        self.students_path = students_path
         self.student_path = student_path
         self.service_token = service_token
         self.timeout_seconds = timeout_seconds
@@ -95,6 +108,7 @@ class InstitutionalClient:
                 config.get("INSTITUTIONAL_API_GOOGLE_LOGIN_PATH") or ""
             ).strip(),
             classrooms_path=str(config.get("INSTITUTIONAL_API_CLASSROOMS_PATH") or "").strip(),
+            students_path=str(config.get("INSTITUTIONAL_API_STUDENTS_PATH") or "").strip(),
             student_path=str(config.get("INSTITUTIONAL_API_STUDENT_PATH") or "").strip(),
             service_token=str(config.get("INSTITUTIONAL_API_SERVICE_TOKEN") or "").strip(),
             timeout_seconds=float(config.get("INSTITUTIONAL_API_TIMEOUT_SECONDS") or 8),
@@ -108,6 +122,10 @@ class InstitutionalClient:
     @property
     def recognition_ready(self) -> bool:
         return bool(self.base_url and self.student_path and self.service_token)
+
+    @property
+    def students_ready(self) -> bool:
+        return bool(self.base_url and self.students_path)
 
     @property
     def google_login_ready(self) -> bool:
@@ -243,6 +261,112 @@ class InstitutionalClient:
                 period=str(record.get("period") or "").strip() or None,
             ))
         return classrooms
+
+    @classmethod
+    def _map_classroom_student(cls, record: dict[str, Any]) -> ClassroomStudent:
+        """Mapea temporalmente las variantes previstas del contrato de alumnos.
+
+        Los nombres reales de los campos aún deben ser confirmados por el
+        cliente. Todas las variantes están centralizadas aquí para que ese
+        ajuste futuro se haga en un solo lugar.
+        """
+
+        def first_text(*fields: str) -> str:
+            for field in fields:
+                value = record.get(field)
+                if isinstance(value, (str, int)) and not isinstance(value, bool):
+                    normalized = str(value).strip()
+                    if normalized:
+                        return normalized
+            return ""
+
+        institutional_id = first_text(
+            "id", "institutional_id", "student_id", "id_alumno", "alumno_id"
+        )
+        apellidos = first_text("apellidos", "last_name", "last_names", "surname", "surnames")
+        nombres = first_text("nombres", "first_name", "given_name", "given_names", "nombre")
+
+        if not apellidos:
+            apellido_paterno = first_text("apellido_paterno", "paternal_surname")
+            apellido_materno = first_text("apellido_materno", "maternal_surname")
+            apellidos = " ".join(
+                part for part in (apellido_paterno, apellido_materno) if part
+            )
+
+        if not apellidos or not nombres:
+            combined_name = first_text("full_name", "display_name", "nombre_completo", "name")
+            if "," in combined_name:
+                combined_apellidos, combined_nombres = (
+                    part.strip() for part in combined_name.split(",", 1)
+                )
+            else:
+                parts = combined_name.split()
+                surname_count = 2 if len(parts) >= 3 else 1
+                combined_nombres = " ".join(parts[:-surname_count])
+                combined_apellidos = " ".join(parts[-surname_count:])
+            apellidos = apellidos or combined_apellidos
+            nombres = nombres or combined_nombres
+
+        missing_fields = [
+            field
+            for field, value in (
+                ("id", institutional_id),
+                ("apellidos", apellidos),
+                ("nombres", nombres),
+            )
+            if not value
+        ]
+        if missing_fields:
+            raise InstitutionalAPIError(
+                "La respuesta institucional del alumno no contiene datos válidos para: "
+                + ", ".join(missing_fields)
+                + "."
+            )
+
+        return ClassroomStudent(
+            institutional_id=institutional_id,
+            apellidos=apellidos,
+            nombres=nombres,
+        )
+
+    def list_classroom_students(
+        self, access_token: str, classroom_id: str
+    ) -> list[ClassroomStudent]:
+        if not self.students_ready:
+            raise InstitutionalConfigurationError(
+                "La consulta institucional de alumnos por aula no está configurada."
+            )
+        path = self.students_path.format(classroom_id=classroom_id)
+        payload = self._request("GET", path, token=access_token)
+        # La clave del sobre tampoco está confirmada por el cliente, igual que
+        # los campos de cada alumno en `_map_classroom_student`. Se aceptan las
+        # variantes previstas y la lista desnuda.
+        if isinstance(payload, list):
+            records = payload
+        elif isinstance(payload, dict):
+            records = next(
+                (
+                    payload[key]
+                    for key in ("students", "alumnos", "data", "items")
+                    if isinstance(payload.get(key), list)
+                ),
+                None,
+            )
+        else:
+            records = None
+        if not isinstance(records, list):
+            raise InstitutionalAPIError(
+                "La API institucional no devolvió la lista de alumnos esperada."
+            )
+
+        students: list[ClassroomStudent] = []
+        for record in records:
+            if not isinstance(record, dict):
+                raise InstitutionalAPIError(
+                    "La API institucional devolvió un alumno no válido."
+                )
+            students.append(self._map_classroom_student(record))
+        return students
 
     def get_recognized_student(self, person_id: str) -> RecognizedStudent:
         if not self.recognition_ready:

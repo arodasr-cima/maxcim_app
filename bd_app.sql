@@ -10,11 +10,12 @@ USE `maxcim_app`;
 CREATE TABLE IF NOT EXISTS `material` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `nombre_material` VARCHAR(255) NOT NULL,
+  -- Valores permitidos: 'cuento' y 'oracion'.
   `tipo_material` VARCHAR(255) NOT NULL,
-  `path_audio` VARCHAR(500) NOT NULL,
-  `path_texto` VARCHAR(500) NOT NULL,
-  `path_audio_resumen` VARCHAR(500) NOT NULL,
-  `path_texto_resumen` VARCHAR(500) NOT NULL,
+  `path_audio` VARCHAR(500) NULL,
+  `path_texto` VARCHAR(500) NULL,
+  `path_audio_resumen` VARCHAR(500) NULL,
+  `path_texto_resumen` VARCHAR(500) NULL,
   `path_preguntas` VARCHAR(500) NOT NULL,
   `fecha_subido` DATE NOT NULL,
   -- ID institucional de la docente. No es una FK real: la tabla `docente`

@@ -9,6 +9,7 @@ import wave
 from services.institutional import (
     AuthenticatedTeacher,
     Classroom,
+    ClassroomStudent,
     RecognizedStudent,
 )
 
@@ -25,6 +26,28 @@ DEMO_CLASSROOMS = (
     Classroom("AULA-DEMO-5B", "5TO B — Tutoría", "Quinto de primaria", "Tutoría", "2026"),
 )
 
+# Datos totalmente ficticios y aislados para recorrer el listado sin API.
+DEMO_CLASSROOM_STUDENTS = {
+    classroom.institutional_id: (
+        ClassroomStudent(
+            f"ALU-DEMO-{classroom.institutional_id[-2:]}-01",
+            "Campos Nube",
+            "Valentina",
+        ),
+        ClassroomStudent(
+            f"ALU-DEMO-{classroom.institutional_id[-2:]}-02",
+            "Ríos Estrella",
+            "Mateo",
+        ),
+        ClassroomStudent(
+            f"ALU-DEMO-{classroom.institutional_id[-2:]}-03",
+            "Flores Luna",
+            "Emilia",
+        ),
+    )
+    for classroom in DEMO_CLASSROOMS
+}
+
 
 class DemoInstitutionalClient:
     """Isolated institutional adapter used only by the test repository.
@@ -36,6 +59,7 @@ class DemoInstitutionalClient:
     login_ready = True
     google_login_ready = True
     recognition_ready = True
+    students_ready = True
 
     def authenticate(self, institutional_id: str, credential: str) -> AuthenticatedTeacher:
         teacher_id = str(institutional_id or "").strip()
@@ -60,6 +84,11 @@ class DemoInstitutionalClient:
 
     def list_teacher_classrooms(self, access_token: str, teacher_id: str) -> list[Classroom]:
         return list(DEMO_CLASSROOMS)
+
+    def list_classroom_students(
+        self, access_token: str, classroom_id: str
+    ) -> list[ClassroomStudent]:
+        return list(DEMO_CLASSROOM_STUDENTS.get(classroom_id, ()))
 
     def get_recognized_student(self, person_id: str) -> RecognizedStudent:
         normalized_id = str(person_id or "ALU-DEMO-1042").strip() or "ALU-DEMO-1042"
