@@ -1,12 +1,4 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
-
-  function authorizedFetch(url, options = {}) {
-    const headers = new Headers(options.headers || {});
-    headers.set("X-CSRF-Token", csrfToken);
-    return fetch(url, { ...options, headers });
-  }
-
   const list = document.getElementById("materialList");
   const search = document.getElementById("materialSearch");
   const skillFilter = document.getElementById("materialSkillFilter");
@@ -28,7 +20,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const skill = skillFilter.value;
 
     cards.forEach((card) => {
-      const matchesSkill = skill === "Todas las habilidades" || !card.dataset.skill || card.dataset.skill === skill;
+      const matchesSkill = skill === "Todas las habilidades" || card.dataset.skill === skill;
       const matchesQuery = !query || card.dataset.title.includes(query);
       card.classList.toggle("is-hidden", !(matchesSkill && matchesQuery));
     });
@@ -52,15 +44,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const loadingCloseBtn = document.getElementById("loadingCloseBtn");
   const resultOverlay = document.getElementById("resultOverlay");
   const resultDoneBtn = document.getElementById("resultDoneBtn");
-  const resultCancelBtn = document.getElementById("resultCancelBtn");
-  const resultSubtitle = document.getElementById("resultSubtitle");
   const resultTranscribedText = document.getElementById("resultTranscribedText");
   const resultSummaryText = document.getElementById("resultSummaryText");
-  const storyOverlay = document.getElementById("storyOverlay");
-  const storyOpenBtn = document.getElementById("storyOpenBtn");
-  const storyCancelBtn = document.getElementById("storyCancelBtn");
-  const storyForm = document.getElementById("storyForm");
-  const storyGenerateBtn = document.getElementById("storyGenerateBtn");
 
   let selectedFile = null;
   let currentMaterialTitle = "";
@@ -69,9 +54,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let questionsReady = false;
   let audioFullBlob = null;
   let audioSummaryBlob = null;
-  let currentTargetDurationMinutes = null;
-  let audioFullDurationSeconds = null;
-  let audioSummaryDurationSeconds = null;
 
   function resetUploadForm() {
     selectedFile = null;
@@ -146,7 +128,7 @@ document.addEventListener("DOMContentLoaded", () => {
     showLoading();
 
     try {
-      const response = await authorizedFetch("/api/material/process", {
+      const response = await fetch("/api/material/process", {
         method: "POST",
         body: formData,
       });
@@ -158,8 +140,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
       resultTranscribedText.textContent = data.transcribed_text;
       resultSummaryText.textContent = data.summary_text;
-      currentTargetDurationMinutes = null;
-      resultSubtitle.textContent = "A partir del documento original · revisa el contenido antes de aprobar";
       resetResultState();
 
       loadingOverlay.classList.remove("is-open");
@@ -171,64 +151,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   loadingCloseBtn.addEventListener("click", () => {
     loadingOverlay.classList.remove("is-open");
-  });
-
-  resultCancelBtn.addEventListener("click", () => {
-    resultOverlay.classList.remove("is-open");
-    resetResultState();
-  });
-
-  storyOpenBtn.addEventListener("click", () => {
-    storyForm.reset();
-    storyOverlay.classList.add("is-open");
-  });
-
-  storyCancelBtn.addEventListener("click", () => {
-    storyOverlay.classList.remove("is-open");
-  });
-
-  storyForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const payload = {
-      character: document.getElementById("storyCharacter").value.trim(),
-      setting: document.getElementById("storySetting").value.trim(),
-      grade_level: document.getElementById("storyGrade").value.trim(),
-      objective: document.getElementById("storyObjective").value.trim(),
-      extra_details: document.getElementById("storyDetails").value.trim(),
-      duration_minutes: Number.parseInt(document.getElementById("storyDuration").value, 10),
-    };
-
-    storyGenerateBtn.disabled = true;
-    storyGenerateBtn.textContent = "Creando…";
-    storyOverlay.classList.remove("is-open");
-    showLoading();
-    loadingText.textContent = "Creando un cuento con las elecciones del alumno…";
-
-    try {
-      const response = await authorizedFetch("/api/story/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "No se pudo crear el cuento.");
-      }
-
-      currentMaterialTitle = data.title;
-      currentTargetDurationMinutes = data.target_duration_minutes;
-      resultTranscribedText.textContent = data.story;
-      resultSummaryText.textContent = data.summary;
-      resultSubtitle.textContent = `Creado para ${data.target_duration_minutes} min · ${data.word_count} palabras · la miss puede editarlo antes de aprobar`;
-      resetResultState();
-      loadingOverlay.classList.remove("is-open");
-      resultOverlay.classList.add("is-open");
-    } catch (error) {
-      showLoadingError(error.message || "No se pudo crear el cuento.");
-    } finally {
-      storyGenerateBtn.disabled = false;
-      storyGenerateBtn.textContent = "Generar borrador";
-    }
   });
 
   resultDoneBtn.addEventListener("click", async () => {
@@ -243,10 +165,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (!questionsData.length) {
       alert("Genera las preguntas antes de guardar.");
-      return;
-    }
-    if (questionsData.some((question) => !question.respuesta_esperada)) {
-      alert("Revisa y completa la respuesta esperada de cada pregunta.");
       return;
     }
     if (!audioFullBlob || !audioSummaryBlob) {
@@ -266,11 +184,8 @@ document.addEventListener("DOMContentLoaded", () => {
       formData.append("questions_json", JSON.stringify(questionsData));
       formData.append("audio_full", audioFullBlob, "audio.wav");
       formData.append("audio_summary", audioSummaryBlob, "audio_resumen.wav");
-      if (currentTargetDurationMinutes !== null) {
-        formData.append("target_duration_minutes", String(currentTargetDurationMinutes));
-      }
 
-      const response = await authorizedFetch("/api/material/save", {
+      const response = await fetch("/api/material/save", {
         method: "POST",
         body: formData,
       });
@@ -281,7 +196,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       resultOverlay.classList.remove("is-open");
-      window.location.reload();
     } catch (error) {
       alert(error.message || "No se pudo guardar el material.");
     } finally {
@@ -295,51 +209,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const generateAudioSummaryBtn = document.getElementById("generateAudioSummaryBtn");
   const resultAudioFull = document.getElementById("resultAudioFull");
   const resultAudioSummary = document.getElementById("resultAudioSummary");
-  const resultAudioFullMeta = document.getElementById("resultAudioFullMeta");
-  const resultAudioSummaryMeta = document.getElementById("resultAudioSummaryMeta");
 
-  function formatAudioDuration(seconds) {
-    if (!Number.isFinite(seconds)) return "";
-    const roundedSeconds = Math.max(0, Math.round(seconds));
-    const minutes = Math.floor(roundedSeconds / 60);
-    const remainder = roundedSeconds % 60;
-    return minutes ? `${minutes} min ${String(remainder).padStart(2, "0")} s` : `${remainder} s`;
-  }
-
-  function invalidateAudio(audioEl, kind) {
-    if (audioEl.src) URL.revokeObjectURL(audioEl.src);
-    audioEl.removeAttribute("src");
-    audioEl.load();
-    if (kind === "full") {
-      audioFullReady = false;
-      audioFullBlob = null;
-      audioFullDurationSeconds = null;
-      resultAudioFullMeta.textContent = "";
-    } else {
-      audioSummaryReady = false;
-      audioSummaryBlob = null;
-      audioSummaryDurationSeconds = null;
-      resultAudioSummaryMeta.textContent = "";
-    }
-    updateDoneButtonState();
-  }
-
-  resultTranscribedText.addEventListener("input", () => {
-    if (audioFullReady) invalidateAudio(resultAudioFull, "full");
-  });
-  resultSummaryText.addEventListener("input", () => {
-    if (audioSummaryReady) invalidateAudio(resultAudioSummary, "summary");
-  });
-
-  async function fetchSpeech(text, targetDurationMinutes = null) {
-    const payload = { text };
-    if (targetDurationMinutes !== null) {
-      payload.target_duration_minutes = targetDurationMinutes;
-    }
-    const response = await authorizedFetch("/api/material/tts", {
+  async function fetchSpeech(text) {
+    const response = await fetch("/api/material/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ text }),
     });
 
     if (!response.ok) {
@@ -347,16 +222,10 @@ document.addEventListener("DOMContentLoaded", () => {
       throw new Error(data.error || "No se pudo generar el audio.");
     }
 
-    const durationSeconds = Number.parseFloat(
-      response.headers.get("X-MAXCIM-Audio-Duration-Seconds") || ""
-    );
-    return {
-      blob: await response.blob(),
-      durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : null,
-    };
+    return response.blob();
   }
 
-  async function generateAudio(button, audioEl, getText, targetDurationMinutes, onSuccess) {
+  async function generateAudio(button, audioEl, getText, onSuccess) {
     const text = (getText() || "").trim();
     if (!text) {
       alert("No hay texto para generar el audio.");
@@ -368,13 +237,13 @@ document.addEventListener("DOMContentLoaded", () => {
     button.textContent = "Generando...";
 
     try {
-      const { blob, durationSeconds } = await fetchSpeech(text, targetDurationMinutes);
+      const blob = await fetchSpeech(text);
       if (audioEl.src) {
         URL.revokeObjectURL(audioEl.src);
       }
       audioEl.src = URL.createObjectURL(blob);
       audioEl.play().catch(() => {});
-      onSuccess(blob, durationSeconds);
+      onSuccess(blob);
     } catch (error) {
       alert(error.message || "No se pudo generar el audio.");
     } finally {
@@ -384,25 +253,17 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   generateAudioFullBtn.addEventListener("click", () => {
-    generateAudio(generateAudioFullBtn, resultAudioFull, () => resultTranscribedText.textContent, currentTargetDurationMinutes, (blob, durationSeconds) => {
+    generateAudio(generateAudioFullBtn, resultAudioFull, () => resultTranscribedText.textContent, (blob) => {
       audioFullBlob = blob;
       audioFullReady = true;
-      audioFullDurationSeconds = durationSeconds;
-      resultAudioFullMeta.textContent = durationSeconds === null
-        ? "Audio completo generado"
-        : `Duración real: ${formatAudioDuration(durationSeconds)}${currentTargetDurationMinutes === null ? "" : ` · objetivo: ${currentTargetDurationMinutes} min`}`;
       updateDoneButtonState();
     });
   });
 
   generateAudioSummaryBtn.addEventListener("click", () => {
-    generateAudio(generateAudioSummaryBtn, resultAudioSummary, () => resultSummaryText.textContent, null, (blob, durationSeconds) => {
+    generateAudio(generateAudioSummaryBtn, resultAudioSummary, () => resultSummaryText.textContent, (blob) => {
       audioSummaryBlob = blob;
       audioSummaryReady = true;
-      audioSummaryDurationSeconds = durationSeconds;
-      resultAudioSummaryMeta.textContent = durationSeconds === null
-        ? "Audio resumen generado"
-        : `Duración real: ${formatAudioDuration(durationSeconds)}`;
       updateDoneButtonState();
     });
   });
@@ -417,8 +278,6 @@ document.addEventListener("DOMContentLoaded", () => {
     questionsReady = false;
     audioFullBlob = null;
     audioSummaryBlob = null;
-    audioFullDurationSeconds = null;
-    audioSummaryDurationSeconds = null;
 
     if (resultAudioFull.src) {
       URL.revokeObjectURL(resultAudioFull.src);
@@ -428,8 +287,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     resultAudioFull.removeAttribute("src");
     resultAudioSummary.removeAttribute("src");
-    resultAudioFullMeta.textContent = "";
-    resultAudioSummaryMeta.textContent = "";
     questionsResult.innerHTML = "";
 
     updateDoneButtonState();
@@ -449,7 +306,8 @@ document.addEventListener("DOMContentLoaded", () => {
     };
   });
 
-  // Serializes the teacher-reviewed question and answer pairs exactly as shown.
+  // Serializes the currently rendered (and possibly edited) questions back to
+  // a flat [{tipo, pregunta}, ...] array, exactly as shown on screen.
   const QUESTION_TYPE_TO_TIPO = {
     literales: "literal",
     inferenciales: "inferencial",
@@ -462,19 +320,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     categories.forEach((category) => {
       const tipo = QUESTION_TYPE_TO_TIPO[category.dataset.type] || category.dataset.type;
-      Array.from(category.querySelectorAll(".questions-result__item")).forEach((item) => {
-        const question = item.querySelector(".questions-result__question").textContent.trim();
-        const expectedAnswer = item.querySelector(".questions-result__answer").textContent.trim();
-        if (!question) return;
-        data.push({
-          tipo,
-          pregunta: question,
-          respuesta_esperada: expectedAnswer,
-          editada_por_docente:
-            question !== item.dataset.originalQuestion
-            || expectedAnswer !== item.dataset.originalAnswer,
-        });
-      });
+      Array.from(category.querySelectorAll(".questions-result__item"))
+        .map((item) => item.textContent.trim())
+        .filter(Boolean)
+        .forEach((pregunta) => data.push({ tipo, pregunta }));
     });
 
     return data;
@@ -505,38 +354,12 @@ document.addEventListener("DOMContentLoaded", () => {
       list.className = "questions-result__list";
       list.setAttribute("aria-labelledby", titleId);
 
-      questions.forEach((rawQuestion) => {
-        const questionText = typeof rawQuestion === "string"
-          ? rawQuestion
-          : (rawQuestion.pregunta || "");
-        const expectedAnswer = typeof rawQuestion === "string"
-          ? ""
-          : (rawQuestion.respuesta_esperada || "");
+      questions.forEach((questionText) => {
         const item = document.createElement("li");
         item.className = "questions-result__item";
-        item.dataset.originalQuestion = questionText.trim();
-        item.dataset.originalAnswer = expectedAnswer.trim();
-
-        const questionLabel = document.createElement("span");
-        questionLabel.className = "questions-result__field-label";
-        questionLabel.textContent = "Pregunta";
-        const question = document.createElement("div");
-        question.className = "questions-result__editable questions-result__question";
-        question.contentEditable = "true";
-        question.spellcheck = true;
-        question.textContent = questionText;
-
-        const answerLabel = document.createElement("span");
-        answerLabel.className = "questions-result__field-label";
-        answerLabel.textContent = "Respuesta esperada o criterio";
-        const answer = document.createElement("div");
-        answer.className = "questions-result__editable questions-result__answer";
-        answer.contentEditable = "true";
-        answer.spellcheck = true;
-        answer.dataset.placeholder = "La miss debe completar este criterio";
-        answer.textContent = expectedAnswer;
-
-        item.append(questionLabel, question, answerLabel, answer);
+        item.contentEditable = "true";
+        item.spellcheck = false;
+        item.textContent = questionText;
         list.appendChild(item);
       });
 
@@ -567,7 +390,7 @@ document.addEventListener("DOMContentLoaded", () => {
     generateQuestionsBtn.textContent = "Generando...";
 
     try {
-      const response = await authorizedFetch("/api/material/questions", {
+      const response = await fetch("/api/material/questions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, counts }),
