@@ -1,6 +1,28 @@
 from __future__ import annotations
 
+from datetime import date
+
 from extensions import db
+
+
+class SesionWebDocente(db.Model):
+    """Opaque browser session backed by the app database.
+
+    The institutional access token is encrypted before it reaches this table;
+    the browser cookie contains only ``id``.
+    """
+
+    __tablename__ = "sesion_web_docente"
+
+    id = db.Column(db.String(36), primary_key=True)
+    id_docente_institucional = db.Column(db.String(50), nullable=False, index=True)
+    nombre_docente = db.Column(db.String(255), nullable=False)
+    rol = db.Column(db.String(30), nullable=False)
+    token_cifrado = db.Column(db.LargeBinary, nullable=False)
+    expira_en = db.Column(db.DateTime, nullable=False, index=True)
+    creada_en = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+    ultimo_acceso_en = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+    revocada_en = db.Column(db.DateTime, nullable=True, index=True)
 
 
 class Material(db.Model):
@@ -15,10 +37,15 @@ class Material(db.Model):
     path_audio_resumen = db.Column(db.String(500), nullable=False)
     path_texto_resumen = db.Column(db.String(500), nullable=False)
     path_preguntas = db.Column(db.String(500), nullable=False)
-    fecha_subido = db.Column(db.Date, server_default=db.func.current_date())
+    duracion_objetivo_minutos = db.Column(db.SmallInteger, nullable=True)
+    duracion_audio_segundos = db.Column(db.Numeric(8, 2), nullable=True)
+    # Use an application-side default. SQLAlchemy renders ``func.current_date()``
+    # as ``DEFAULT CURRENT_DATE`` for MySQL, which is rejected by some managed
+    # MySQL versions during the initial schema creation.
+    fecha_subido = db.Column(db.Date, nullable=False, default=date.today)
     # Institutional ID returned by the school's API. It is deliberately not a
     # local FK: the institutional database remains the source of truth.
-    fk_user = db.Column(db.String(50), nullable=True, index=True)
+    fk_user = db.Column(db.String(50), nullable=False, index=True)
 
     preguntas = db.relationship(
         "Pregunta",

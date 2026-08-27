@@ -1,4 +1,5 @@
 document.addEventListener("DOMContentLoaded", () => {
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
   const config = window.MAXCIM_SESSION_CONFIG || {};
   const form = document.getElementById("sessionForm");
   const classroom = document.getElementById("sessionClassroom");
@@ -34,7 +35,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function requestJson(url, options = {}) {
-    const response = await fetch(url, options);
+    const headers = new Headers(options.headers || {});
+    if ((options.method || "GET").toUpperCase() !== "GET") {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
+    const response = await fetch(url, { ...options, headers });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(data.error || "No se pudo completar la operación.");
@@ -206,7 +211,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  if (simulateFaceButton) {
+  if (config.demoMode && simulateFaceButton) {
     simulateFaceButton.addEventListener("click", async () => {
       if (!activeSessionUuid) return;
       simulateFaceButton.disabled = true;
@@ -217,14 +222,11 @@ document.addEventListener("DOMContentLoaded", () => {
           body: JSON.stringify({
             session_uuid: activeSessionUuid,
             person_id: "ALU-DEMO-1042",
-            person_type: "ALUMNO",
-            display_name: "Valeria Mendoza",
             confidence: 0.97,
-            classroom_ids: [classroom.value],
           }),
         });
         renderSession(result.session);
-        showToast("Rostro identificado y sesión vinculada.");
+        showToast("Rostro de prueba identificado y sesión vinculada.");
       } catch (error) {
         showToast(error.message, true);
       } finally {
@@ -241,22 +243,29 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  if (simulateTurnsButton) {
+  if (config.demoMode && simulateTurnsButton) {
     simulateTurnsButton.addEventListener("click", async () => {
+      if (!activeSessionUuid) return;
       simulateTurnsButton.disabled = true;
       try {
-        await addDemoTurn({ speaker: "MAXCIM", transcript: "¿Qué hizo el personaje para ayudar a su amiga?" });
+        await addDemoTurn({
+          speaker: "MAXCIM",
+          transcript: "¿Qué hizo el personaje para ayudar a sus amigos?",
+        });
         await addDemoTurn({
           speaker: "ALUMNO",
-          transcript: "La escuchó con atención y dejó que terminara de hablar.",
+          transcript: "Escuchó sus ideas y propuso que resolvieran el reto juntos.",
           response_time_ms: 4200,
           is_correct: true,
           needed_help: false,
         });
-        await addDemoTurn({ speaker: "MAXCIM", transcript: "¿Por qué es importante escuchar antes de responder?" });
+        await addDemoTurn({
+          speaker: "MAXCIM",
+          transcript: "¿Por qué es importante escuchar antes de responder?",
+        });
         await addDemoTurn({
           speaker: "ALUMNO",
-          transcript: "Porque así entendemos lo que la otra persona siente y quiere decir.",
+          transcript: "Porque así entendemos lo que la otra persona quiere decir.",
           response_time_ms: 5100,
           is_correct: true,
           needed_help: false,
@@ -312,12 +321,6 @@ document.addEventListener("DOMContentLoaded", () => {
       showToast(error.message, true);
     }
   });
-
-  if (!config.demoMode) {
-    [simulateFaceButton, simulateTurnsButton].filter(Boolean).forEach((button) => {
-      button.hidden = true;
-    });
-  }
 
   document.querySelectorAll(".session-review-btn").forEach((button) => {
     button.addEventListener("click", async () => {

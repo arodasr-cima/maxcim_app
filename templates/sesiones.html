@@ -9,9 +9,9 @@
     <h1 class="sesiones__title">Sesiones con MAXCIM</h1>
     <p class="page-heading__description">Inicia la actividad desde aquí. MAXCIM identificará al alumno con la cámara y asociará automáticamente sus respuestas.</p>
   </div>
-  <div class="robot-status" aria-label="Estado del robot">
+  <div class="robot-status {{ '' if recognition_ready else 'robot-status--pending' }}" aria-label="Estado de la integración">
     <span class="robot-status__dot"></span>
-    Preparado para una sesión
+    {{ 'Integración facial configurada' if recognition_ready else 'Conexión facial pendiente' }}
   </div>
 </div>
 
@@ -53,7 +53,7 @@
 
       <div class="session-form__footer field--wide">
         <p>El alumno no inicia sesión. Su identidad llegará desde el reconocimiento facial institucional.</p>
-        <button type="submit" class="btn btn--primary" id="startSessionBtn">Iniciar reconocimiento</button>
+        <button type="submit" class="btn btn--primary" id="startSessionBtn" {% if not recognition_ready %}disabled title="Falta configurar la integración facial real"{% endif %}>Iniciar reconocimiento</button>
       </div>
     </form>
   </section>

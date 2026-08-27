@@ -1,29 +1,131 @@
 # Contrato de integración de MAXCIM App
 
-Este documento separa tres identidades: la sesión web de la docente, la identidad institucional reconocida por la cámara y la credencial técnica de MAXCIM. Ninguna contraseña ni dato biométrico debe llegar a la base de esta app.
+Este contrato separa la sesión web de la docente, la identidad detectada por el sistema facial y la credencial técnica de MAXCIM. La aplicación no recibe ni almacena datos biométricos.
 
-## 1. Datos necesarios de la API institucional
+## 1. Autenticación docente
 
-El equipo de la base principal debe confirmar:
+La ruta se configura mediante `INSTITUTIONAL_API_LOGIN_PATH`.
 
-| Dato | Ejemplo esperado |
-|---|---|
-| URL base y ambientes | `https://api.colegio.example/v1` |
-| Inicio de sesión | método, ruta, cuerpo y tipo de token/cookie |
-| Perfil activo | ID institucional, nombres, rol, estado y sede |
-| Aulas de la docente | ID canónico, nombre, grado, curso y periodo |
-| Alumnos por aula | ID canónico, nombre visible y matrícula activa |
-| Expiración | duración y mecanismo de renovación del token |
-| Errores | códigos para credenciales, cuenta inactiva y servicio caído |
+```http
+POST {INSTITUTIONAL_API_BASE_URL}{INSTITUTIONAL_API_LOGIN_PATH}
+Content-Type: application/json
+```
 
-Reglas mínimas:
+```json
+{
+  "institutional_id": "<id_docente>",
+  "credential": "<credencial_institucional>"
+}
+```
 
-- Solo un perfil institucional activo con rol docente puede entrar a la consola.
-- Las aulas y materiales visibles se filtran por el ID docente autenticado; nunca por un ID recibido libremente desde el navegador.
-- Antes de activar la sesión se valida que el ID de alumno reconocido tenga matrícula activa en el aula seleccionada.
-- Si la confianza facial es menor que `FACE_MATCH_MIN_CONFIDENCE`, la sesión queda esperando confirmación y no se asocia al alumno.
+Respuesta canónica que consume el adaptador actual:
 
-## 2. Evento del reconocimiento facial
+```json
+{
+  "access_token": "<token>",
+  "expires_in": 3600,
+  "teacher": {
+    "id": "<id_docente>",
+    "display_name": "<nombre_visible>",
+    "role": "DOCENTE",
+    "status": "ACTIVO"
+  }
+}
+```
+
+Solo `DOCENTE/TEACHER` con estado `ACTIVO/ACTIVE` puede entrar. El token se cifra en la base propia y nunca se devuelve al navegador.
+
+### 1.1 Acceso docente con Google Workspace
+
+La aplicación realiza OpenID Connect con Google mediante autorización de
+servidor, `state`, `nonce` y PKCE. Valida la firma, audiencia, expiración, correo
+verificado y el dominio Workspace permitido. Después envía el ID token a la API
+institucional; no crea una docente usando únicamente los datos de Google.
+
+La ruta se configura mediante `INSTITUTIONAL_API_GOOGLE_LOGIN_PATH`.
+
+```http
+POST {INSTITUTIONAL_API_BASE_URL}{INSTITUTIONAL_API_GOOGLE_LOGIN_PATH}
+Content-Type: application/json
+```
+
+```json
+{
+  "id_token": "<id_token_firmado_por_google>"
+}
+```
+
+La API institucional debe volver a validar el ID token, asociar `sub` o el correo
+con un registro docente activo y devolver la misma respuesta canónica de la
+sección 1. Una cuenta Google no asociada debe responder `401` o `403`.
+
+El callback público que se registra exactamente en Google Cloud es:
+
+```text
+https://<dominio-maxcim>/auth/google/callback
+```
+
+MAXCIM descarta los tokens de Google después del canje y conserva únicamente el
+token institucional cifrado.
+
+## 2. Aulas asignadas
+
+La ruta se configura mediante `INSTITUTIONAL_API_CLASSROOMS_PATH` y admite `{teacher_id}`.
+
+```http
+GET {base}/v1/teachers/{teacher_id}/classrooms
+Authorization: Bearer <token_docente>
+```
+
+```json
+{
+  "classrooms": [
+    {
+      "id": "<id_aula>",
+      "name": "<nombre_aula>",
+      "grade": "<grado_o_nivel>",
+      "course": "<curso_o_area>",
+      "period": "<periodo_activo>"
+    }
+  ]
+}
+```
+
+`id` y `name` son obligatorios. Los demás campos pueden ser `null` o cadena vacía.
+
+## 3. Validación del ID reconocido
+
+La ruta se configura mediante `INSTITUTIONAL_API_STUDENT_PATH` y admite `{person_id}`. Esta llamada usa `INSTITUTIONAL_API_SERVICE_TOKEN`; no usa el token de una docente.
+
+```http
+GET {base}/v1/students/{person_id}
+Authorization: Bearer <service_token>
+```
+
+```json
+{
+  "student": {
+    "id": "<id_alumno>",
+    "display_name": "<nombre_visible>",
+    "role": "ALUMNO",
+    "status": "ACTIVO",
+    "classroom_ids": ["<id_aula_activa>"]
+  }
+}
+```
+
+La sesión oral solo se activa cuando:
+
+- el registro corresponde a `ALUMNO/STUDENT`;
+- el estado es `ACTIVO/ACTIVE`;
+- `classroom_ids` contiene el aula seleccionada por la docente;
+- la confianza facial alcanza `FACE_MATCH_MIN_CONFIDENCE`.
+
+Si el contrato oficial utiliza otros nombres o una estructura distinta, se modifica únicamente el adaptador `services/institutional.py` después de recibir documentación autorizada.
+
+## 4. Evento facial enviado a MAXCIM App
+
+El servicio facial aporta únicamente el identificador detectado. Nombre, rol y matrícula recibidos desde el dispositivo no se consideran confiables.
 
 ```http
 POST /api/integrations/face-recognition/events
@@ -33,27 +135,52 @@ Content-Type: application/json
 
 ```json
 {
-  "session_uuid": "2e3779c5-3f22-4d6d-899c-3e01c31f8712",
-  "person_id": "ALU-1042",
-  "person_type": "ALUMNO",
-  "display_name": "Valeria Mendoza",
-  "confidence": 0.97,
-  "classroom_ids": ["AULA-3A-2026"]
+  "session_uuid": "<uuid_sesion>",
+  "person_id": "<id_detectado>",
+  "confidence": 0.97
 }
 ```
 
-Resultados posibles: `aceptado`, `requiere_confirmacion` o `ignorado`. En producción, `classroom_ids` es obligatorio y debe provenir de la matrícula institucional activa; la sesión solo comienza si contiene el aula seleccionada. El nombre es una instantánea visible; `person_id` es la referencia canónica. No se reciben imágenes ni embeddings.
+Resultados: `aceptado`, `requiere_confirmacion` o `ignorado`.
 
-## 3. Material que consume MAXCIM
+## 5. Material que recibe el robot
 
 ```http
 GET /api/interactions/sessions/{session_uuid}/robot-payload
 X-MAXCIM-Webhook-Secret: <secreto>
 ```
 
-La respuesta incluye el objetivo y el alumno ya asociado. Si la docente eligió una conversación libre, `material` será `null`; de lo contrario contiene las URLs del texto/audio y únicamente preguntas con estado `aprobada`. Cada pregunta contiene `id`, `statement`, `expected_answer`, `type` y `order`.
+La respuesta contiene:
 
-## 4. Registro de turnos orales
+- objetivo pedagógico;
+- ID y nombre ya validados del alumno;
+- URL del texto completo y resumen;
+- URL del audio completo y audio resumen;
+- duración objetivo seleccionada por la docente y duración real medida del audio;
+- preguntas aprobadas, respuesta esperada, tipo y orden.
+
+Con esta respuesta MAXCIM puede narrar el cuento generado por la miss y continuar con las preguntas revisadas.
+
+Campos de duración incluidos dentro de `material`:
+
+```json
+{
+  "target_duration_minutes": 5,
+  "audio_duration_seconds": 298.42
+}
+```
+
+La duración es un objetivo: Gemini controla el ritmo mediante instrucciones y la
+aplicación ajusta la cantidad de palabras. El valor `audio_duration_seconds` es la
+medición real del WAV que MAXCIM reproducirá completo.
+
+## 6. Turnos orales
+
+```http
+POST /api/interactions/sessions/{session_uuid}/turns
+X-MAXCIM-Webhook-Secret: <secreto>
+Content-Type: application/json
+```
 
 Pregunta de MAXCIM:
 
@@ -61,7 +188,7 @@ Pregunta de MAXCIM:
 {
   "speaker": "MAXCIM",
   "question_id": 81,
-  "transcript": "¿Qué hizo el personaje para ayudar?"
+  "transcript": "<pregunta_narrada>"
 }
 ```
 
@@ -71,7 +198,7 @@ Respuesta del alumno:
 {
   "speaker": "ALUMNO",
   "question_id": 81,
-  "transcript": "La escuchó sin interrumpir.",
+  "transcript": "<transcripcion_real>",
   "response_time_ms": 4200,
   "is_correct": true,
   "needed_help": false,
@@ -79,18 +206,18 @@ Respuesta del alumno:
 }
 ```
 
-`is_correct` debe provenir de la comparación entre la respuesta oral y el criterio aprobado por la docente. Puede ser `null` cuando la pregunta sea abierta o no exista evidencia suficiente.
+`is_correct` puede ser `null` en preguntas abiertas o cuando no exista evidencia suficiente.
 
-## 5. Cierre y revisión
+## 7. Cierre y revisión
 
-MAXCIM llama `POST /api/interactions/sessions/{uuid}/complete`. La app calcula participación, comprensión, promedio de respuesta e indicadores orales. El resultado queda en `pendiente_revision` o `pendiente_ia`; nunca se publica como definitivo sin el `PATCH` de aprobación de la docente.
+MAXCIM llama `POST /api/interactions/sessions/{uuid}/complete`. La aplicación calcula métricas objetivas y solicita la propuesta cualitativa a Gemini. El resultado no es definitivo hasta que la docente autenticada realiza `PATCH /api/interactions/sessions/{uuid}/evaluation`.
 
-## 6. Seguridad para producción
+## 8. Requisitos antes de habilitar producción
 
-- HTTPS obligatorio.
-- `DEMO_MODE=false`.
-- Secretos diferentes por ambiente y rotación programada.
-- Validación de firma o secreto para cada webhook.
-- Límite de tasa y tamaño para transcripciones.
-- Registro de auditoría para cambios de preguntas y evaluaciones.
+- HTTPS válido.
+- Swagger/OpenAPI o respuestas anonimizadas aprobadas por el responsable de la API.
+- Secretos distintos por ambiente.
+- Rotación del token técnico y del secreto del robot.
+- Migraciones `001_interacciones.sql` y `002_sesiones_web.sql` aplicadas.
 - Política institucional de retención para audio y transcripciones de menores.
+- Auditoría y respaldo de MySQL.

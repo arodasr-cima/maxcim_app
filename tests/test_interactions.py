@@ -3,17 +3,34 @@ import json
 import app as app_module
 from extensions import db
 from models import EventoReconocimiento, Material, Pregunta, SesionInteraccion
+from services.institutional import RecognizedStudent
+
+
+TEST_TEACHER_ID = "DOC-TEST-1"
+
+
+class RecognitionOnlyClient:
+    def get_recognized_student(self, person_id):
+        return RecognizedStudent(
+            institutional_id=person_id,
+            display_name="Alumno autorizado",
+            role="ALUMNO",
+            active=True,
+            classroom_ids=frozenset({"AULA-1"}),
+        )
 
 
 def seed_material():
     material = Material(
         nombre_material="El bosque que escucha",
-        path_audio="demo/audio.wav",
-        path_texto="demo/texto.txt",
-        path_audio_resumen="demo/resumen.wav",
-        path_texto_resumen="demo/resumen.txt",
-        path_preguntas="demo/preguntas.json",
-        fk_user=str(app_module.USER["fk_user"]),
+        path_audio="fixtures/audio.wav",
+        path_texto="fixtures/texto.txt",
+        path_audio_resumen="fixtures/resumen.wav",
+        path_texto_resumen="fixtures/resumen.txt",
+        path_preguntas="fixtures/preguntas.json",
+        fk_user=TEST_TEACHER_ID,
+        duracion_objetivo_minutos=5,
+        duracion_audio_segundos=298.42,
     )
     db.session.add(material)
     db.session.flush()
@@ -24,7 +41,7 @@ def seed_material():
         respuesta_esperada="Escuchó a su amiga sin interrumpir.",
         orden=1,
         estado="aprobada",
-        aprobada_por=str(app_module.USER["fk_user"]),
+        aprobada_por=TEST_TEACHER_ID,
     )
     db.session.add(question)
     db.session.commit()
@@ -33,7 +50,7 @@ def seed_material():
 
 def create_session(client, material_id):
     response = client.post("/api/interactions/sessions", json={
-        "classroom_id": "demo-3ro-a",
+        "classroom_id": "AULA-REAL-1",
         "material_id": material_id,
         "objective": "Practicar escucha activa",
     })
@@ -44,9 +61,7 @@ def create_session(client, material_id):
 def identify_student(client, session_uuid, confidence=0.97):
     return client.post("/api/integrations/face-recognition/events", json={
         "session_uuid": session_uuid,
-        "person_id": "ALU-1042",
-        "person_type": "ALUMNO",
-        "display_name": "Valeria Mendoza",
+        "person_id": "ALU-TEST-1",
         "confidence": confidence,
     })
 
@@ -69,11 +84,14 @@ def test_full_oral_interaction_requires_teacher_approval(app, client):
     recognized = identify_student(client, session_uuid)
     assert recognized.status_code == 200
     assert recognized.get_json()["session"]["status"] == "activa"
-    assert recognized.get_json()["session"]["student_id"] == "ALU-1042"
+    assert recognized.get_json()["session"]["student_id"] == "ALU-TEST-1"
 
     robot_payload = client.get(f"/api/interactions/sessions/{session_uuid}/robot-payload")
     assert robot_payload.status_code == 200
-    assert robot_payload.get_json()["material"]["questions"] == [{
+    robot_material = robot_payload.get_json()["material"]
+    assert robot_material["target_duration_minutes"] == 5
+    assert robot_material["audio_duration_seconds"] == 298.42
+    assert robot_material["questions"] == [{
         "expected_answer": "Escuchó a su amiga sin interrumpir.",
         "id": question_id,
         "order": 1,
@@ -134,9 +152,7 @@ def test_recognized_personnel_does_not_start_student_session(app, client):
     session_uuid = create_session(client, material_id)["uuid"]
     response = client.post("/api/integrations/face-recognition/events", json={
         "session_uuid": session_uuid,
-        "person_id": "DOC-77",
-        "person_type": "DOCENTE",
-        "display_name": "María Rojas",
+        "person_id": "STAFF-77",
         "confidence": 0.99,
     })
     assert response.status_code == 200
@@ -147,7 +163,7 @@ def test_recognized_personnel_does_not_start_student_session(app, client):
 
 def test_robot_payload_supports_free_conversation(client):
     response = client.post("/api/interactions/sessions", json={
-        "classroom_id": "demo-3ro-a",
+        "classroom_id": "AULA-REAL-1",
         "material_id": None,
         "objective": "Practicar una presentación personal",
     })
@@ -171,7 +187,7 @@ def test_turn_rejects_question_from_another_material(app, client):
             path_audio_resumen="other/resumen.wav",
             path_texto_resumen="other/resumen.txt",
             path_preguntas="other/preguntas.json",
-            fk_user=str(app_module.USER["fk_user"]),
+            fk_user=TEST_TEACHER_ID,
         )
         db.session.add(other)
         db.session.flush()
@@ -216,7 +232,7 @@ def test_material_save_requires_reviewed_expected_answers(client):
     assert "respuesta esperada" in response.get_json()["error"]
 
 
-def test_robot_webhook_requires_secret_outside_demo(monkeypatch):
+def test_robot_webhook_requires_secret_in_production(monkeypatch):
     monkeypatch.setattr(app_module, "gemini_client", None)
     application = app_module.create_app({
         "TESTING": False,
@@ -224,6 +240,7 @@ def test_robot_webhook_requires_secret_outside_demo(monkeypatch):
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "SQLALCHEMY_ENGINE_OPTIONS": {},
         "MAXCIM_WEBHOOK_SECRET": "robot-secret",
+        "INSTITUTIONAL_CLIENT": RecognitionOnlyClient(),
     })
     with application.app_context():
         db.create_all()
@@ -239,10 +256,8 @@ def test_robot_webhook_requires_secret_outside_demo(monkeypatch):
     client = application.test_client()
     payload = {
         "session_uuid": "4cd0de9b-9b41-4b8b-8cf9-c4ffb98bcfd2",
-        "person_id": "ALU-1",
-        "person_type": "ALUMNO",
+        "person_id": "ALU-TEST-1",
         "confidence": 0.95,
-        "classroom_ids": ["AULA-1"],
     }
     assert client.post("/api/integrations/face-recognition/events", json=payload).status_code == 401
     accepted = client.post(

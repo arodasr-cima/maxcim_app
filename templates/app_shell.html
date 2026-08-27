@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#132a5e">
   <meta name="description" content="Aplicación docente para preparar y revisar interacciones orales con MAXCIM.">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="MAXCIM">
@@ -21,6 +22,7 @@
       <div class="sidebar__brand">
         <div class="sidebar__logo">MX</div>
         <div class="sidebar__name">MAXCIM</div>
+        {% if demo_mode %}<span class="sidebar__environment">PRUEBAS</span>{% endif %}
       </div>
 
       <nav class="sidebar__nav">
@@ -51,11 +53,11 @@
             <span class="profile__caret">▾</span>
           </button>
           <div class="profile__menu" id="profileMenu">
-            <a href="#">Mi perfil</a>
-            <a href="#">Configuración</a>
-            <a href="#">Ayuda</a>
-            <div class="profile__menu-divider"></div>
-            <a href="#" class="profile__menu-danger">Cerrar sesión</a>
+            <div class="profile__session-id">ID institucional: {{ user.id }}</div>
+            <form action="{{ url_for('logout') }}" method="post">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="profile__menu-danger">Cerrar sesión</button>
+            </form>
           </div>
         </div>
       </header>

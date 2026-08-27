@@ -1,32 +1,48 @@
-# MAXCIM App
+# MAXCIM App · Entorno de pruebas
 
-PWA para docentes del Colegio CIMA. Permite preparar cuentos y oraciones con Gemini, revisar preguntas y respuestas esperadas, iniciar una interacción oral con MAXCIM y aprobar la evaluación propuesta por IA.
+Aplicación web instalable y aislada para probar la experiencia completa de MAXCIM sin conectarse a la base institucional. Conserva la misma interfaz y flujo de la versión real, pero utiliza docentes, aulas, alumnos, reconocimiento y respuestas de IA exclusivos de prueba cuando los servicios externos no están configurados.
 
-La alumna o el alumno no usa la aplicación: conversa oralmente con MAXCIM. La web es la consola de la docente y funciona desde iPhone, iPad, Android, Windows y macOS con una sola base de código.
+La versión real permanece separada en `maxcim_app_production`: este repositorio no debe conectarse a su base de datos ni compartir sus variables privadas.
 
-## Flujo implementado
+La estudiante o el estudiante conversa oralmente con MAXCIM. La docente utiliza esta consola desde iPhone, iPad, Android, Windows o macOS.
 
-1. La docente sube un documento o crea un cuento con las elecciones del alumno.
-2. Gemini extrae o genera el texto, prepara el resumen, crea el audio y propone preguntas con respuestas esperadas.
-3. La docente modifica y aprueba el contenido antes de guardarlo.
-4. La docente prepara una sesión indicando aula, material y objetivo.
-5. El sistema facial institucional envía el ID reconocido. La app no guarda fotos ni plantillas biométricas.
-6. MAXCIM registra cada turno oral y la calificación objetiva de las respuestas.
-7. La app calcula participación y comprensión; Gemini propone indicadores de interacción oral usando solo la evidencia de la transcripción.
-8. La docente corrige los porcentajes, agrega observaciones y aprueba el resultado final.
+## Capacidades conservadas
+
+1. La docente entra con un clic o con cualquier ID y credencial no vacíos de prueba.
+2. La aplicación carga aulas y alumnos ficticios, claramente aislados del colegio.
+3. La docente sube un documento o crea un cuento con las elecciones del alumno y elige una duración de 1 a 15 minutos.
+4. Gemini ajusta la extensión, narra el cuento completo con ritmo adaptativo, genera el resumen y propone preguntas con respuestas esperadas.
+5. La docente edita y aprueba el contenido antes de guardarlo.
+6. MAXCIM recibe el cuento aprobado, lo narra y realiza las preguntas.
+7. La pantalla de sesiones permite simular el rostro y la conversación oral de un alumno.
+8. MAXCIM registra los turnos orales y la aplicación calcula la evaluación.
+9. La docente corrige los porcentajes, escribe observaciones y aprueba el resultado final.
 
 ```mermaid
 flowchart TD
-    PWA["PWA de la docente"] --> API["Flask API"]
-    ROBOT["MAXCIM + reconocimiento"] --> API
-    API --> DB["MySQL de la app"]
-    API --> GEMINI["Gemini"]
-    API -. "contrato pendiente" .-> INST["API institucional CIMA"]
+    PWA["PWA docente"] --> API["API MAXCIM"]
+    SIM["Simulador oral y facial"] --> API
+    API --> DB["SQLite o MySQL de pruebas"]
+    API --> AI["Gemini o respuestas locales"]
+    API --> INST["Identidad institucional simulada"]
 ```
 
-## Inicio local
+## Separación del entorno real
 
-Requisitos: Python 3.11+, MySQL 8 y una clave de Gemini.
+- `DEMO_MODE=true` está activado por defecto solamente en este repositorio.
+- Sin Google o API institucional, el acceso de prueba sigue habilitado.
+- Sin clave de Gemini, se generan cuentos, preguntas, audio WAV y evaluaciones locales de prueba.
+- Al configurar `GOOGLE_API_KEY`, las funciones generativas utilizan Gemini manteniendo la identidad institucional simulada.
+- La contraseña institucional no se almacena.
+- El token de prueba queda cifrado en la base de la aplicación; la cookie contiene solamente un UUID opaco.
+- El evento facial solo aporta `person_id` y confianza. Nombre, rol y aulas se consultan al adaptador institucional aislado.
+- No se almacenan fotografías, embeddings ni plantillas biométricas.
+- El simulador puede llamar los endpoints del robot sin secreto únicamente mientras `DEMO_MODE=true`.
+- Materiales, sesiones y evaluaciones se filtran por el ID de la docente autenticada.
+
+## Preparación local
+
+Requisito mínimo: Python 3.11+. SQLite, el acceso local y las respuestas simuladas funcionan sin configurar otros servicios.
 
 ```bash
 python -m venv .venv
@@ -37,58 +53,86 @@ cp .env.example .env
 
 En Windows PowerShell, la activación es `.venv\Scripts\Activate.ps1`.
 
-Crear las tablas:
-
-```bash
-mysql -u root -p < bd_app.sql
-mysql -u root -p test < migrations/001_interacciones.sql
-```
-
-Configurar `.env` y ejecutar:
+Ejecutar:
 
 ```bash
 python app.py
 ```
 
-Abrir `http://localhost:5000`. Para probar sin la API institucional, `DEMO_MODE=true` habilita los botones de simulación. Nunca debe activarse en producción.
+## Despliegue del entorno de pruebas
 
-## Variables principales
+GitHub Pages no puede ejecutar esta aplicación porque solo publica sitios
+estáticos y MAXCIM utiliza Python, MySQL y APIs del servidor. El repositorio
+incluye un `Dockerfile` listo para desplegarse como servicio web en Railway:
+
+1. Crear otro servicio de Railway desde este repositorio, separado de producción.
+2. Mantener `DEMO_MODE=true`. Sin `DATABASE_URL` utilizará SQLite automáticamente.
+3. Para conservar los datos entre despliegues, agregar MySQL y definir `DATABASE_URL=${{MySQL.MYSQL_URL}}`.
+4. Generar el dominio público desde `Settings > Networking`.
+5. Para conservar audios entre despliegues, montar un volumen persistente en
+   `/app/static/uploads`.
+
+El contenedor crea las tablas faltantes de una base nueva antes de iniciar
+Gunicorn y publica `GET /health` para comprobar el estado del servicio. Si la API
+institucional solo existe dentro de la red del colegio, será necesario exponerla
+de forma segura por HTTPS o conectar el alojamiento a esa red privada.
+
+La fecha de carga de cada material se asigna desde la aplicación para mantener
+compatibilidad con las versiones administradas de MySQL usadas en producción.
+
+## Variables del entorno de pruebas
 
 | Variable | Uso |
 |---|---|
-| `GOOGLE_API_KEY` | Generación, resumen, preguntas, evaluación y TTS con Gemini |
-| `MYSQL_*` | Conexión MySQL de la aplicación |
-| `MAXCIM_WEBHOOK_SECRET` | Autentica eventos enviados por MAXCIM y el servicio facial |
-| `FACE_MATCH_MIN_CONFIDENCE` | Umbral para aceptar una coincidencia facial; por defecto `0.85` |
-| `DEMO_MODE` | Activa datos y acciones de simulación locales |
-| `SESSION_COOKIE_SECURE` | Debe ser `true` cuando el sitio use HTTPS |
+| `DEMO_MODE` | Debe permanecer `true` en este repositorio |
+| `DEMO_DATABASE_URL` | SQLite local usado cuando no existe `DATABASE_URL` |
+| `DATABASE_URL` o `MYSQL_*` | Base opcional y persistente del entorno de pruebas |
+| `GOOGLE_API_KEY` | Opcional; activa Gemini real para cuentos, preguntas, evaluación y TTS |
 
-## Endpoints para MAXCIM
+Las variables institucionales, Google OAuth y secretos del robot no son necesarias para recorrer la prueba. No copies aquí credenciales privadas de producción.
 
-Las llamadas del robot usan el encabezado `X-MAXCIM-Webhook-Secret`.
+## Variables de compatibilidad con producción
+
+| Variable | Uso |
+|---|---|
+| `SECRET_KEY` | Firma la cookie opaca de sesión |
+| `SESSION_TOKEN_ENCRYPTION_KEY` | Cifra el token de sesión |
+| `INSTITUTIONAL_API_BASE_URL` | URL autorizada de la API principal |
+| `INSTITUTIONAL_API_LOGIN_PATH` | Inicio de sesión docente |
+| `INSTITUTIONAL_API_GOOGLE_LOGIN_PATH` | Canje del ID token de Google por una sesión institucional |
+| `INSTITUTIONAL_API_CLASSROOMS_PATH` | Aulas de la docente autenticada |
+| `INSTITUTIONAL_API_STUDENT_PATH` | Perfil y matrículas del ID reconocido |
+| `INSTITUTIONAL_API_SERVICE_TOKEN` | Credencial servidor-a-servidor para validación facial |
+| `GOOGLE_OAUTH_CLIENT_ID` | Cliente web OpenID Connect de Google Workspace |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | Secreto del cliente web, solo en el servidor |
+| `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios Workspace institucionales permitidos |
+| `GOOGLE_OAUTH_REDIRECT_URI` | Callback HTTPS registrado exactamente en Google Cloud |
+| `MAXCIM_WEBHOOK_SECRET` | Autentica a MAXCIM y al servicio facial |
+| `FACE_MATCH_MIN_CONFIDENCE` | Umbral mínimo de reconocimiento |
+| `SESSION_COOKIE_SECURE` | Debe permanecer `true` bajo HTTPS |
+
+## Endpoints del robot
 
 | Método y ruta | Finalidad |
 |---|---|
-| `POST /api/integrations/face-recognition/events` | Asociar el ID institucional reconocido a una sesión |
-| `GET /api/interactions/sessions/{uuid}/robot-payload` | Obtener objetivo, material y preguntas aprobadas |
-| `POST /api/interactions/sessions/{uuid}/turns` | Registrar un turno oral de MAXCIM o del alumno |
-| `POST /api/interactions/sessions/{uuid}/complete` | Cerrar la sesión y crear la evaluación revisable |
+| `GET /api/materials?teacher_id={id}` | Listar materiales de una docente de prueba |
+| `GET /api/materials/{id}` | Obtener un material aprobado |
+| `POST /api/integrations/face-recognition/events` | Validar el ID reconocido y asociarlo a la sesión |
+| `GET /api/interactions/sessions/{uuid}/robot-payload` | Obtener objetivo, audio, texto y preguntas aprobadas |
+| `POST /api/interactions/sessions/{uuid}/turns` | Registrar un turno oral |
+| `POST /api/interactions/sessions/{uuid}/complete` | Cerrar la conversación y preparar la evaluación |
 
-El contrato completo y los ejemplos JSON están en [docs/integration-contract.md](docs/integration-contract.md).
+El contrato de la API institucional y del robot está en [docs/integration-contract.md](docs/integration-contract.md).
 
-## Base de datos y privacidad
+## Base de datos
 
-La base institucional sigue siendo la fuente de verdad para docentes, alumnos, aulas y reconocimiento facial. Esta aplicación almacena sus IDs canónicos, materiales, transcripciones, métricas y revisiones; no replica fotos, embeddings faciales ni contraseñas institucionales.
+La base aislada de este entorno guarda solamente:
 
-Las tablas nuevas se encuentran en `migrations/001_interacciones.sql`:
-
-- `pregunta`
-- `sesion_interaccion`
-- `turno_conversacion`
-- `evaluacion_interaccion`
-- `evento_reconocimiento`
-
-El service worker nunca guarda en caché `/api/*` ni `/static/uploads/*`.
+- materiales, preguntas aprobadas y duración real medida del audio;
+- sesiones e IDs institucionales de referencia;
+- transcripciones, tiempos y evidencias;
+- porcentajes y revisión docente;
+- sesiones web cifradas y revocables.
 
 ## Pruebas
 
@@ -96,8 +140,8 @@ El service worker nunca guarda en caché `/api/*` ni `/static/uploads/*`.
 pytest -q
 ```
 
-Las pruebas cubren identificación facial con umbral, rechazo de personal no alumno, material y preguntas autorizadas, turnos orales, cálculo de porcentajes, revisión docente, secreto del robot y recursos PWA.
+Las pruebas automatizadas usan dobles aislados dentro del entorno de test. Esos datos nunca se cargan en la aplicación ni en la base de producción.
 
-## Integración institucional pendiente
+## Estado
 
-No se inventó el formato de la API principal. Para reemplazar el usuario y las aulas de demostración hacen falta la URL base, el método de autenticación, los JSON de respuesta y la regla oficial para validar que el alumno reconocido pertenece al aula seleccionada. La lista exacta está documentada en el contrato de integración.
+Este repositorio está preparado para recorridos funcionales y pruebas con docentes. Los resultados generados sin servicios externos son ficticios y permanecen dentro de este entorno. La conexión final a identidades, aulas, reconocimiento facial y Gemini se mantiene en el repositorio de producción.

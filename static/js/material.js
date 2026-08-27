@@ -1,4 +1,12 @@
 document.addEventListener("DOMContentLoaded", () => {
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
+
+  function authorizedFetch(url, options = {}) {
+    const headers = new Headers(options.headers || {});
+    headers.set("X-CSRF-Token", csrfToken);
+    return fetch(url, { ...options, headers });
+  }
+
   const list = document.getElementById("materialList");
   const search = document.getElementById("materialSearch");
   const skillFilter = document.getElementById("materialSkillFilter");
@@ -61,6 +69,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let questionsReady = false;
   let audioFullBlob = null;
   let audioSummaryBlob = null;
+  let currentTargetDurationMinutes = null;
+  let audioFullDurationSeconds = null;
+  let audioSummaryDurationSeconds = null;
 
   function resetUploadForm() {
     selectedFile = null;
@@ -135,7 +146,7 @@ document.addEventListener("DOMContentLoaded", () => {
     showLoading();
 
     try {
-      const response = await fetch("/api/material/process", {
+      const response = await authorizedFetch("/api/material/process", {
         method: "POST",
         body: formData,
       });
@@ -147,6 +158,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       resultTranscribedText.textContent = data.transcribed_text;
       resultSummaryText.textContent = data.summary_text;
+      currentTargetDurationMinutes = null;
       resultSubtitle.textContent = "A partir del documento original · revisa el contenido antes de aprobar";
       resetResultState();
 
@@ -183,6 +195,7 @@ document.addEventListener("DOMContentLoaded", () => {
       grade_level: document.getElementById("storyGrade").value.trim(),
       objective: document.getElementById("storyObjective").value.trim(),
       extra_details: document.getElementById("storyDetails").value.trim(),
+      duration_minutes: Number.parseInt(document.getElementById("storyDuration").value, 10),
     };
 
     storyGenerateBtn.disabled = true;
@@ -192,7 +205,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadingText.textContent = "Creando un cuento con las elecciones del alumno…";
 
     try {
-      const response = await fetch("/api/story/generate", {
+      const response = await authorizedFetch("/api/story/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -203,9 +216,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       currentMaterialTitle = data.title;
+      currentTargetDurationMinutes = data.target_duration_minutes;
       resultTranscribedText.textContent = data.story;
       resultSummaryText.textContent = data.summary;
-      resultSubtitle.textContent = "Creado con las elecciones del alumno · la miss puede editarlo antes de aprobar";
+      resultSubtitle.textContent = `Creado para ${data.target_duration_minutes} min · ${data.word_count} palabras · la miss puede editarlo antes de aprobar`;
       resetResultState();
       loadingOverlay.classList.remove("is-open");
       resultOverlay.classList.add("is-open");
@@ -252,8 +266,11 @@ document.addEventListener("DOMContentLoaded", () => {
       formData.append("questions_json", JSON.stringify(questionsData));
       formData.append("audio_full", audioFullBlob, "audio.wav");
       formData.append("audio_summary", audioSummaryBlob, "audio_resumen.wav");
+      if (currentTargetDurationMinutes !== null) {
+        formData.append("target_duration_minutes", String(currentTargetDurationMinutes));
+      }
 
-      const response = await fetch("/api/material/save", {
+      const response = await authorizedFetch("/api/material/save", {
         method: "POST",
         body: formData,
       });
@@ -278,6 +295,16 @@ document.addEventListener("DOMContentLoaded", () => {
   const generateAudioSummaryBtn = document.getElementById("generateAudioSummaryBtn");
   const resultAudioFull = document.getElementById("resultAudioFull");
   const resultAudioSummary = document.getElementById("resultAudioSummary");
+  const resultAudioFullMeta = document.getElementById("resultAudioFullMeta");
+  const resultAudioSummaryMeta = document.getElementById("resultAudioSummaryMeta");
+
+  function formatAudioDuration(seconds) {
+    if (!Number.isFinite(seconds)) return "";
+    const roundedSeconds = Math.max(0, Math.round(seconds));
+    const minutes = Math.floor(roundedSeconds / 60);
+    const remainder = roundedSeconds % 60;
+    return minutes ? `${minutes} min ${String(remainder).padStart(2, "0")} s` : `${remainder} s`;
+  }
 
   function invalidateAudio(audioEl, kind) {
     if (audioEl.src) URL.revokeObjectURL(audioEl.src);
@@ -286,9 +313,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (kind === "full") {
       audioFullReady = false;
       audioFullBlob = null;
+      audioFullDurationSeconds = null;
+      resultAudioFullMeta.textContent = "";
     } else {
       audioSummaryReady = false;
       audioSummaryBlob = null;
+      audioSummaryDurationSeconds = null;
+      resultAudioSummaryMeta.textContent = "";
     }
     updateDoneButtonState();
   }
@@ -300,11 +331,15 @@ document.addEventListener("DOMContentLoaded", () => {
     if (audioSummaryReady) invalidateAudio(resultAudioSummary, "summary");
   });
 
-  async function fetchSpeech(text) {
-    const response = await fetch("/api/material/tts", {
+  async function fetchSpeech(text, targetDurationMinutes = null) {
+    const payload = { text };
+    if (targetDurationMinutes !== null) {
+      payload.target_duration_minutes = targetDurationMinutes;
+    }
+    const response = await authorizedFetch("/api/material/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
@@ -312,10 +347,16 @@ document.addEventListener("DOMContentLoaded", () => {
       throw new Error(data.error || "No se pudo generar el audio.");
     }
 
-    return response.blob();
+    const durationSeconds = Number.parseFloat(
+      response.headers.get("X-MAXCIM-Audio-Duration-Seconds") || ""
+    );
+    return {
+      blob: await response.blob(),
+      durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : null,
+    };
   }
 
-  async function generateAudio(button, audioEl, getText, onSuccess) {
+  async function generateAudio(button, audioEl, getText, targetDurationMinutes, onSuccess) {
     const text = (getText() || "").trim();
     if (!text) {
       alert("No hay texto para generar el audio.");
@@ -327,13 +368,13 @@ document.addEventListener("DOMContentLoaded", () => {
     button.textContent = "Generando...";
 
     try {
-      const blob = await fetchSpeech(text);
+      const { blob, durationSeconds } = await fetchSpeech(text, targetDurationMinutes);
       if (audioEl.src) {
         URL.revokeObjectURL(audioEl.src);
       }
       audioEl.src = URL.createObjectURL(blob);
       audioEl.play().catch(() => {});
-      onSuccess(blob);
+      onSuccess(blob, durationSeconds);
     } catch (error) {
       alert(error.message || "No se pudo generar el audio.");
     } finally {
@@ -343,17 +384,25 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   generateAudioFullBtn.addEventListener("click", () => {
-    generateAudio(generateAudioFullBtn, resultAudioFull, () => resultTranscribedText.textContent, (blob) => {
+    generateAudio(generateAudioFullBtn, resultAudioFull, () => resultTranscribedText.textContent, currentTargetDurationMinutes, (blob, durationSeconds) => {
       audioFullBlob = blob;
       audioFullReady = true;
+      audioFullDurationSeconds = durationSeconds;
+      resultAudioFullMeta.textContent = durationSeconds === null
+        ? "Audio completo generado"
+        : `Duración real: ${formatAudioDuration(durationSeconds)}${currentTargetDurationMinutes === null ? "" : ` · objetivo: ${currentTargetDurationMinutes} min`}`;
       updateDoneButtonState();
     });
   });
 
   generateAudioSummaryBtn.addEventListener("click", () => {
-    generateAudio(generateAudioSummaryBtn, resultAudioSummary, () => resultSummaryText.textContent, (blob) => {
+    generateAudio(generateAudioSummaryBtn, resultAudioSummary, () => resultSummaryText.textContent, null, (blob, durationSeconds) => {
       audioSummaryBlob = blob;
       audioSummaryReady = true;
+      audioSummaryDurationSeconds = durationSeconds;
+      resultAudioSummaryMeta.textContent = durationSeconds === null
+        ? "Audio resumen generado"
+        : `Duración real: ${formatAudioDuration(durationSeconds)}`;
       updateDoneButtonState();
     });
   });
@@ -368,6 +417,8 @@ document.addEventListener("DOMContentLoaded", () => {
     questionsReady = false;
     audioFullBlob = null;
     audioSummaryBlob = null;
+    audioFullDurationSeconds = null;
+    audioSummaryDurationSeconds = null;
 
     if (resultAudioFull.src) {
       URL.revokeObjectURL(resultAudioFull.src);
@@ -377,6 +428,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     resultAudioFull.removeAttribute("src");
     resultAudioSummary.removeAttribute("src");
+    resultAudioFullMeta.textContent = "";
+    resultAudioSummaryMeta.textContent = "";
     questionsResult.innerHTML = "";
 
     updateDoneButtonState();
@@ -514,7 +567,7 @@ document.addEventListener("DOMContentLoaded", () => {
     generateQuestionsBtn.textContent = "Generando...";
 
     try {
-      const response = await fetch("/api/material/questions", {
+      const response = await authorizedFetch("/api/material/questions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, counts }),
