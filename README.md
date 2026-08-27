@@ -86,7 +86,8 @@ compatibilidad con las versiones administradas de MySQL usadas en producción.
 |---|---|
 | `DEMO_MODE` | Debe permanecer `true` en este repositorio |
 | `DEMO_DATABASE_URL` | SQLite local usado cuando no existe `DATABASE_URL` |
-| `DATABASE_URL` o `MYSQL_*` | Base opcional y persistente del entorno de pruebas |
+| `DATABASE_URL` | Base MySQL opcional y persistente del entorno de pruebas |
+| `MYSQL_*` | Compatibilidad cuando `DEMO_MODE=false`; no reemplazan SQLite en pruebas |
 | `GOOGLE_API_KEY` | Opcional; activa Gemini real para cuentos, preguntas, evaluación y TTS |
 
 Las variables institucionales, Google OAuth y secretos del robot no son necesarias para recorrer la prueba. No copies aquí credenciales privadas de producción.
