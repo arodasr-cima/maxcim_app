@@ -20,7 +20,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const skill = skillFilter.value;
 
     cards.forEach((card) => {
-      const matchesSkill = skill === "Todas las habilidades" || card.dataset.skill === skill;
+      const matchesSkill = skill === "Todas las habilidades" || !card.dataset.skill || card.dataset.skill === skill;
       const matchesQuery = !query || card.dataset.title.includes(query);
       card.classList.toggle("is-hidden", !(matchesSkill && matchesQuery));
     });
@@ -44,8 +44,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const loadingCloseBtn = document.getElementById("loadingCloseBtn");
   const resultOverlay = document.getElementById("resultOverlay");
   const resultDoneBtn = document.getElementById("resultDoneBtn");
+  const resultCancelBtn = document.getElementById("resultCancelBtn");
+  const resultSubtitle = document.getElementById("resultSubtitle");
   const resultTranscribedText = document.getElementById("resultTranscribedText");
   const resultSummaryText = document.getElementById("resultSummaryText");
+  const storyOverlay = document.getElementById("storyOverlay");
+  const storyOpenBtn = document.getElementById("storyOpenBtn");
+  const storyCancelBtn = document.getElementById("storyCancelBtn");
+  const storyForm = document.getElementById("storyForm");
+  const storyGenerateBtn = document.getElementById("storyGenerateBtn");
 
   let selectedFile = null;
   let currentMaterialTitle = "";
@@ -140,6 +147,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       resultTranscribedText.textContent = data.transcribed_text;
       resultSummaryText.textContent = data.summary_text;
+      resultSubtitle.textContent = "A partir del documento original · revisa el contenido antes de aprobar";
       resetResultState();
 
       loadingOverlay.classList.remove("is-open");
@@ -151,6 +159,62 @@ document.addEventListener("DOMContentLoaded", () => {
 
   loadingCloseBtn.addEventListener("click", () => {
     loadingOverlay.classList.remove("is-open");
+  });
+
+  resultCancelBtn.addEventListener("click", () => {
+    resultOverlay.classList.remove("is-open");
+    resetResultState();
+  });
+
+  storyOpenBtn.addEventListener("click", () => {
+    storyForm.reset();
+    storyOverlay.classList.add("is-open");
+  });
+
+  storyCancelBtn.addEventListener("click", () => {
+    storyOverlay.classList.remove("is-open");
+  });
+
+  storyForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const payload = {
+      character: document.getElementById("storyCharacter").value.trim(),
+      setting: document.getElementById("storySetting").value.trim(),
+      grade_level: document.getElementById("storyGrade").value.trim(),
+      objective: document.getElementById("storyObjective").value.trim(),
+      extra_details: document.getElementById("storyDetails").value.trim(),
+    };
+
+    storyGenerateBtn.disabled = true;
+    storyGenerateBtn.textContent = "Creando…";
+    storyOverlay.classList.remove("is-open");
+    showLoading();
+    loadingText.textContent = "Creando un cuento con las elecciones del alumno…";
+
+    try {
+      const response = await fetch("/api/story/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo crear el cuento.");
+      }
+
+      currentMaterialTitle = data.title;
+      resultTranscribedText.textContent = data.story;
+      resultSummaryText.textContent = data.summary;
+      resultSubtitle.textContent = "Creado con las elecciones del alumno · la miss puede editarlo antes de aprobar";
+      resetResultState();
+      loadingOverlay.classList.remove("is-open");
+      resultOverlay.classList.add("is-open");
+    } catch (error) {
+      showLoadingError(error.message || "No se pudo crear el cuento.");
+    } finally {
+      storyGenerateBtn.disabled = false;
+      storyGenerateBtn.textContent = "Generar borrador";
+    }
   });
 
   resultDoneBtn.addEventListener("click", async () => {
@@ -165,6 +229,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (!questionsData.length) {
       alert("Genera las preguntas antes de guardar.");
+      return;
+    }
+    if (questionsData.some((question) => !question.respuesta_esperada)) {
+      alert("Revisa y completa la respuesta esperada de cada pregunta.");
       return;
     }
     if (!audioFullBlob || !audioSummaryBlob) {
@@ -196,6 +264,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       resultOverlay.classList.remove("is-open");
+      window.location.reload();
     } catch (error) {
       alert(error.message || "No se pudo guardar el material.");
     } finally {
@@ -209,6 +278,27 @@ document.addEventListener("DOMContentLoaded", () => {
   const generateAudioSummaryBtn = document.getElementById("generateAudioSummaryBtn");
   const resultAudioFull = document.getElementById("resultAudioFull");
   const resultAudioSummary = document.getElementById("resultAudioSummary");
+
+  function invalidateAudio(audioEl, kind) {
+    if (audioEl.src) URL.revokeObjectURL(audioEl.src);
+    audioEl.removeAttribute("src");
+    audioEl.load();
+    if (kind === "full") {
+      audioFullReady = false;
+      audioFullBlob = null;
+    } else {
+      audioSummaryReady = false;
+      audioSummaryBlob = null;
+    }
+    updateDoneButtonState();
+  }
+
+  resultTranscribedText.addEventListener("input", () => {
+    if (audioFullReady) invalidateAudio(resultAudioFull, "full");
+  });
+  resultSummaryText.addEventListener("input", () => {
+    if (audioSummaryReady) invalidateAudio(resultAudioSummary, "summary");
+  });
 
   async function fetchSpeech(text) {
     const response = await fetch("/api/material/tts", {
@@ -306,8 +396,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
   });
 
-  // Serializes the currently rendered (and possibly edited) questions back to
-  // a flat [{tipo, pregunta}, ...] array, exactly as shown on screen.
+  // Serializes the teacher-reviewed question and answer pairs exactly as shown.
   const QUESTION_TYPE_TO_TIPO = {
     literales: "literal",
     inferenciales: "inferencial",
@@ -320,10 +409,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
     categories.forEach((category) => {
       const tipo = QUESTION_TYPE_TO_TIPO[category.dataset.type] || category.dataset.type;
-      Array.from(category.querySelectorAll(".questions-result__item"))
-        .map((item) => item.textContent.trim())
-        .filter(Boolean)
-        .forEach((pregunta) => data.push({ tipo, pregunta }));
+      Array.from(category.querySelectorAll(".questions-result__item")).forEach((item) => {
+        const question = item.querySelector(".questions-result__question").textContent.trim();
+        const expectedAnswer = item.querySelector(".questions-result__answer").textContent.trim();
+        if (!question) return;
+        data.push({
+          tipo,
+          pregunta: question,
+          respuesta_esperada: expectedAnswer,
+          editada_por_docente:
+            question !== item.dataset.originalQuestion
+            || expectedAnswer !== item.dataset.originalAnswer,
+        });
+      });
     });
 
     return data;
@@ -354,12 +452,38 @@ document.addEventListener("DOMContentLoaded", () => {
       list.className = "questions-result__list";
       list.setAttribute("aria-labelledby", titleId);
 
-      questions.forEach((questionText) => {
+      questions.forEach((rawQuestion) => {
+        const questionText = typeof rawQuestion === "string"
+          ? rawQuestion
+          : (rawQuestion.pregunta || "");
+        const expectedAnswer = typeof rawQuestion === "string"
+          ? ""
+          : (rawQuestion.respuesta_esperada || "");
         const item = document.createElement("li");
         item.className = "questions-result__item";
-        item.contentEditable = "true";
-        item.spellcheck = false;
-        item.textContent = questionText;
+        item.dataset.originalQuestion = questionText.trim();
+        item.dataset.originalAnswer = expectedAnswer.trim();
+
+        const questionLabel = document.createElement("span");
+        questionLabel.className = "questions-result__field-label";
+        questionLabel.textContent = "Pregunta";
+        const question = document.createElement("div");
+        question.className = "questions-result__editable questions-result__question";
+        question.contentEditable = "true";
+        question.spellcheck = true;
+        question.textContent = questionText;
+
+        const answerLabel = document.createElement("span");
+        answerLabel.className = "questions-result__field-label";
+        answerLabel.textContent = "Respuesta esperada o criterio";
+        const answer = document.createElement("div");
+        answer.className = "questions-result__editable questions-result__answer";
+        answer.contentEditable = "true";
+        answer.spellcheck = true;
+        answer.dataset.placeholder = "La miss debe completar este criterio";
+        answer.textContent = expectedAnswer;
+
+        item.append(questionLabel, question, answerLabel, answer);
         list.appendChild(item);
       });
 

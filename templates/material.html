@@ -1,6 +1,6 @@
 {% extends "app_shell.html" %}
 
-{% block title %}Material · SocioComunica{% endblock %}
+{% block title %}Material · MAXCIM{% endblock %}
 
 {% block content %}
 <h1 class="material__title">Material</h1>
@@ -12,7 +12,45 @@
     {% endfor %}
   </select>
   <input type="text" class="material__search" id="materialSearch" placeholder="Buscar material...">
-  <button type="button" class="material__add-btn" id="uploadOpenBtn"><span>+</span>Agregar</button>
+  <div class="material__toolbar-actions">
+    <button type="button" class="material__ai-btn" id="storyOpenBtn"><span>✨</span>Crear con IA</button>
+    <button type="button" class="material__add-btn" id="uploadOpenBtn"><span>+</span>Subir archivo</button>
+  </div>
+</div>
+
+<div class="overlay" id="storyOverlay">
+  <form class="story-modal" id="storyForm">
+    <div class="upload-modal__title">Crear un cuento con el alumno</div>
+    <p class="story-modal__description">Registra las respuestas que el alumno le da oralmente a la miss. Gemini preparará un borrador editable.</p>
+
+    <div class="story-modal__grid">
+      <label class="story-field">
+        <span>Personaje principal</span>
+        <input type="text" id="storyCharacter" required maxlength="120" placeholder="Ej.: una zorrita llamada Luna">
+      </label>
+      <label class="story-field">
+        <span>Lugar de la historia</span>
+        <input type="text" id="storySetting" required maxlength="160" placeholder="Ej.: un bosque mágico">
+      </label>
+      <label class="story-field">
+        <span>Nivel o grado</span>
+        <input type="text" id="storyGrade" required maxlength="100" placeholder="Ej.: 3.° de primaria">
+      </label>
+      <label class="story-field">
+        <span>Objetivo pedagógico</span>
+        <input type="text" id="storyObjective" required maxlength="240" placeholder="Ej.: practicar la escucha activa">
+      </label>
+      <label class="story-field story-field--wide">
+        <span>Otros detalles elegidos por el alumno</span>
+        <textarea id="storyDetails" maxlength="1000" placeholder="Amigos, problema que resolver, objetos, final deseado…"></textarea>
+      </label>
+    </div>
+
+    <div class="upload-modal__actions">
+      <button type="button" class="btn btn--ghost" id="storyCancelBtn">Cancelar</button>
+      <button type="submit" class="btn btn--primary" id="storyGenerateBtn">Generar borrador</button>
+    </div>
+  </form>
 </div>
 
 <div class="overlay" id="uploadOverlay">
@@ -48,7 +86,7 @@
 <div class="overlay" id="resultOverlay">
   <div class="result-modal">
     <div class="result-modal__title">Contenido generado</div>
-    <div class="result-modal__subtitle">A partir del documento original</div>
+    <div class="result-modal__subtitle" id="resultSubtitle">A partir del documento original</div>
 
     <div class="result-modal__columns">
       <div class="result-col result-col--border">
@@ -82,7 +120,8 @@
       </div>
 
       <div class="result-col">
-        <div class="result-col__title">Preguntas</div>
+        <div class="result-col__title">Preguntas y respuestas esperadas</div>
+        <p class="questions-review-note">Gemini propone. La miss debe revisar y puede modificar todo antes de aprobar.</p>
         {% for q in upload_preview.questions %}
         <div class="question-row" style="background: {{ q.bg }}">
           <div class="question-row__label" style="color: {{ q.label_color }}">{{ q.label }}</div>
@@ -95,7 +134,8 @@
     </div>
 
     <div class="result-modal__footer">
-      <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Listo</button>
+      <button type="button" class="btn btn--ghost" id="resultCancelBtn">Cancelar</button>
+      <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Aprobar y guardar</button>
     </div>
   </div>
 </div>

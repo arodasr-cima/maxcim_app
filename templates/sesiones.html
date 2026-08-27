@@ -1,8 +1,208 @@
 {% extends "app_shell.html" %}
 
-{% block title %}Sesiones · SocioComunica{% endblock %}
+{% block title %}Interacciones · MAXCIM{% endblock %}
 
 {% block content %}
-<h1 class="sesiones__title">Sesiones</h1>
-<p class="sesiones__placeholder">Todavía no hay nada por aquí.</p>
+<div class="page-heading">
+  <div>
+    <p class="page-heading__eyebrow">Interacción oral</p>
+    <h1 class="sesiones__title">Sesiones con MAXCIM</h1>
+    <p class="page-heading__description">Inicia la actividad desde aquí. MAXCIM identificará al alumno con la cámara y asociará automáticamente sus respuestas.</p>
+  </div>
+  <div class="robot-status" aria-label="Estado del robot">
+    <span class="robot-status__dot"></span>
+    Preparado para una sesión
+  </div>
+</div>
+
+<div class="session-layout">
+  <section class="session-panel" aria-labelledby="newSessionTitle">
+    <div class="session-panel__header">
+      <div>
+        <p class="session-panel__step">Paso 1</p>
+        <h2 id="newSessionTitle">Preparar interacción</h2>
+      </div>
+      <span class="session-panel__icon" aria-hidden="true">◉</span>
+    </div>
+
+    <form id="sessionForm" class="session-form">
+      <label class="field">
+        <span class="field__label">Aula</span>
+        <select id="sessionClassroom" class="field__control" required>
+          <option value="">Selecciona un aula</option>
+          {% for aula in aulas %}
+          <option value="{{ aula.id }}">{{ aula.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Material</span>
+        <select id="sessionMaterial" class="field__control">
+          <option value="">Conversación sin material</option>
+          {% for material in materials %}
+          <option value="{{ material.id }}">{{ material.nombre_material }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label class="field field--wide">
+        <span class="field__label">Objetivo de la actividad</span>
+        <textarea id="sessionObjective" class="field__control field__control--textarea" required placeholder="Ej.: fortalecer la escucha activa y la expresión de ideas"></textarea>
+      </label>
+
+      <div class="session-form__footer field--wide">
+        <p>El alumno no inicia sesión. Su identidad llegará desde el reconocimiento facial institucional.</p>
+        <button type="submit" class="btn btn--primary" id="startSessionBtn">Iniciar reconocimiento</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="live-session" id="liveSession" hidden aria-live="polite">
+    <div class="live-session__header">
+      <div>
+        <p class="session-panel__step">Sesión en curso</p>
+        <h2 id="liveSessionTitle">Esperando identificación</h2>
+      </div>
+      <span class="status-pill" id="liveSessionStatus">Esperando rostro</span>
+    </div>
+
+    <div class="identity-card">
+      <div class="identity-card__avatar" id="studentInitials">?</div>
+      <div>
+        <span class="identity-card__label">Alumno identificado</span>
+        <strong id="studentName">MAXCIM está observando la cámara…</strong>
+        <small id="studentMeta">La actividad comenzará al confirmar la identidad.</small>
+      </div>
+    </div>
+
+    <div class="live-session__timeline">
+      <div class="timeline-step is-active" id="recognitionStep">
+        <span>1</span>
+        <div><strong>Identificación facial</strong><small>Validación con el registro institucional</small></div>
+      </div>
+      <div class="timeline-step" id="conversationStep">
+        <span>2</span>
+        <div><strong>Conversación oral</strong><small>MAXCIM registra los turnos y respuestas</small></div>
+      </div>
+      <div class="timeline-step" id="evaluationStep">
+        <span>3</span>
+        <div><strong>Evaluación docente</strong><small>La IA propone y la docente confirma</small></div>
+      </div>
+    </div>
+
+    <div class="live-session__actions">
+      {% if demo_mode %}
+      <button type="button" class="btn btn--ghost" id="simulateFaceBtn">Simular rostro</button>
+      <button type="button" class="btn btn--ghost" id="simulateTurnsBtn" disabled>Simular conversación</button>
+      {% endif %}
+      <button type="button" class="btn btn--primary" id="finishSessionBtn" disabled>Finalizar y evaluar</button>
+    </div>
+  </section>
+</div>
+
+<section class="evaluation-panel" id="evaluationPanel" hidden>
+  <div class="session-panel__header">
+    <div>
+      <p class="session-panel__step">Revisión obligatoria</p>
+      <h2>Evaluación propuesta por la IA</h2>
+    </div>
+    <span class="review-badge" id="evaluationReviewBadge">Pendiente de la docente</span>
+  </div>
+
+  <div class="evaluation-grid">
+    <label class="metric-editor">
+      <span>Participación</span>
+      <div><input type="number" id="participationScore" min="0" max="100">%</div>
+    </label>
+    <label class="metric-editor">
+      <span>Comprensión</span>
+      <div><input type="number" id="comprehensionScore" min="0" max="100">%</div>
+    </label>
+    <label class="metric-editor">
+      <span>Interacción oral</span>
+      <div><input type="number" id="oralScore" min="0" max="100">%</div>
+    </label>
+    <label class="metric-editor metric-editor--primary">
+      <span>Resultado general</span>
+      <div><input type="number" id="overallScore" min="0" max="100">%</div>
+    </label>
+  </div>
+
+  <div class="evaluation-summary">
+    <h3>Resumen y evidencias</h3>
+    <p id="evaluationSummary">La sesión todavía no ha sido evaluada.</p>
+    <div id="evaluationCriteria" class="criteria-list"></div>
+  </div>
+
+  <label class="field">
+    <span class="field__label">Observaciones de la docente</span>
+    <textarea id="teacherFeedback" class="field__control field__control--textarea" placeholder="Corrige, complementa o contextualiza la evaluación antes de aprobarla."></textarea>
+  </label>
+
+  <div class="evaluation-panel__footer">
+    <p>La propuesta de la IA no se considera definitiva hasta que la docente la apruebe.</p>
+    <button type="button" class="btn btn--primary" id="approveEvaluationBtn">Aprobar evaluación</button>
+  </div>
+</section>
+
+<section class="sessions-history">
+  <div class="sessions-history__header">
+    <div>
+      <p class="page-heading__eyebrow">Seguimiento</p>
+      <h2>Interacciones recientes</h2>
+    </div>
+    <span>{{ sessions|length }} registrada{{ '' if sessions|length == 1 else 's' }}</span>
+  </div>
+
+  {% if sessions %}
+  <div class="sessions-table-wrap">
+    <table class="sessions-table">
+      <thead>
+        <tr>
+          <th>Alumno</th>
+          <th>Aula</th>
+          <th>Material</th>
+          <th>Estado</th>
+          <th>Resultado</th>
+          <th>Fecha</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for session in sessions %}
+        <tr>
+          <td><strong>{{ session.alumno_nombre or 'Esperando identificación' }}</strong></td>
+          <td>{{ session.id_aula_institucional }}</td>
+          <td>{{ session.material.nombre_material if session.material else 'Conversación libre' }}</td>
+          <td><span class="table-status table-status--{{ session.estado }}">{{ session.estado|replace('_', ' ') }}</span></td>
+          <td>{{ '%.0f%%'|format(session.evaluacion.porcentaje_general) if session.evaluacion and session.evaluacion.porcentaje_general is not none else '—' }}</td>
+          <td>{{ session.creada_en.strftime('%d/%m/%Y %H:%M') if session.creada_en else '—' }}</td>
+          <td>
+            <button type="button" class="table-action session-review-btn" data-session-uuid="{{ session.uuid }}">
+              {{ 'Ver' if session.estado == 'evaluacion_aprobada' else 'Revisar' }}
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <span aria-hidden="true">◎</span>
+    <strong>Aún no hay interacciones</strong>
+    <p>La primera sesión aparecerá aquí después de iniciarla.</p>
+  </div>
+  {% endif %}
+</section>
+
+<div class="toast" id="sessionToast" role="status" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.MAXCIM_SESSION_CONFIG = {{ {"demoMode": demo_mode}|tojson }};
+</script>
+<script src="{{ url_for('static', filename='js/sesiones.js') }}"></script>
 {% endblock %}
