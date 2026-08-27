@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Acceso docente · MAXCIM{% endblock %}
+
+{% block content %}
+<main class="auth-layout">
+  <section class="auth-story" aria-labelledby="brandTitle">
+    <div class="auth-story__content">
+      <div class="auth-brand">
+        <div class="auth-brand__mark" aria-hidden="true">MX</div>
+        <div>
+          <div class="auth-brand__eyebrow">COLEGIO CIMA</div>
+          <div class="auth-brand__name">MAXCIM</div>
+        </div>
+      </div>
+      <div class="auth-story__hero">
+        <span class="auth-story__badge">ENTORNO SOCIOCOMUNICATIVO</span>
+        <h1 id="brandTitle">Historias que enseñan a escuchar, dialogar y crecer.</h1>
+        <p>Convierte lecturas en audios, preguntas y sesiones educativas desde un espacio claro y preparado para demostrar todo el flujo.</p>
+      </div>
+      <div class="auth-story__features" aria-label="Funciones principales">
+        <div><strong>01</strong><span>Material inteligente</span></div>
+        <div><strong>02</strong><span>Seguimiento por aula</span></div>
+        <div><strong>03</strong><span>Sesiones educativas</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="auth-access" aria-labelledby="loginTitle">
+    <div class="auth-card">
+      <div class="auth-card__header">
+        <span class="auth-card__kicker">PANEL DOCENTE</span>
+        <h2 id="loginTitle">Bienvenido a MAXCIM</h2>
+        <p>Ingresa para explorar la demostración completa.</p>
+      </div>
+
+      <form method="post" class="auth-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="auth-field">
+          <span>Correo institucional</span>
+          <input id="email" name="email" type="email" autocomplete="username" required placeholder="docente@colegio.edu">
+        </label>
+        <label class="auth-field">
+          <span>Contraseña</span>
+          <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="Ingresa tu contraseña">
+        </label>
+        <button class="auth-submit" type="submit">
+          <span>Ingresar al panel</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
+        </button>
+      </form>
+
+      {% if demo_mode %}
+      <div class="demo-access" id="demoAccess" data-email="{{ demo_email }}" data-password="{{ demo_password }}">
+        <div class="demo-access__top">
+          <span class="demo-access__dot" aria-hidden="true"></span>
+          <strong>Acceso de demostración</strong>
+        </div>
+        <dl>
+          <div><dt>Correo</dt><dd>{{ demo_email }}</dd></div>
+          <div><dt>Contraseña</dt><dd>{{ demo_password }}</dd></div>
+        </dl>
+        <button type="button" id="demoFillButton">Completar credenciales</button>
+      </div>
+      {% endif %}
+
+      <p class="auth-card__foot">Datos completamente ficticios para fines demostrativos.</p>
+    </div>
+  </section>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/login.js') }}" defer></script>
+{% endblock %}

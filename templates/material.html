@@ -6,155 +6,96 @@
 {% block content %}
 <div class="page-heading page-heading--simple">
   <div>
-    <div class="page-heading__eyebrow">BIBLIOTECA</div>
-    <h1 class="page-heading__title">Material</h1>
+    <div class="page-heading__eyebrow">BIBLIOTECA INTELIGENTE</div>
+    <h1 class="page-heading__title">Material educativo</h1>
+    <p class="page-heading__subtitle">Transforma documentos en texto, resumen, audio y preguntas.</p>
   </div>
+  {% if demo_mode %}<span class="mode-chip"><span aria-hidden="true"></span>IA demostrativa activa</span>{% endif %}
 </div>
 
 <div class="material__toolbar">
   <div class="material__filter-wrap">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
     <select class="material__select" id="materialSkillFilter" aria-label="Filtrar por habilidad">
-      {% for skill in skills %}
-      <option>{{ skill }}</option>
-      {% endfor %}
+      {% for skill in skills %}<option>{{ skill }}</option>{% endfor %}
     </select>
   </div>
   <div class="material__search-wrap">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
-    <input type="text" class="material__search" id="materialSearch" placeholder="Buscar material..." aria-label="Buscar material">
+    <input type="search" class="material__search" id="materialSearch" placeholder="Buscar material..." aria-label="Buscar material">
   </div>
-  <button type="button" class="material__add-btn" id="uploadOpenBtn">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-    Agregar
-  </button>
+  <button type="button" class="material__add-btn" id="uploadOpenBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Agregar material</button>
 </div>
 
-<div class="overlay" id="uploadOverlay">
-  <div class="upload-modal">
-    <div class="upload-modal__title">Nuevo cuento</div>
-
+<div class="overlay" id="uploadOverlay" aria-hidden="true">
+  <div class="upload-modal" role="dialog" aria-modal="true" aria-labelledby="uploadTitle">
+    <div class="upload-modal__title" id="uploadTitle">Nuevo material</div>
+    <p class="upload-modal__subtitle">Selecciona una lectura y la habilidad que deseas trabajar.</p>
     <label class="dropzone" id="dropzone" for="uploadFileInput">
-      <div class="dropzone__icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5"/><path d="M5 13v6.5h14V13"/></svg>
-      </div>
+      <div class="dropzone__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5"/><path d="M5 13v6.5h14V13"/></svg></div>
       <div class="dropzone__text" id="dropzoneText">Arrastra el archivo aquí o haz clic para seleccionar</div>
-      <div class="dropzone__hint">DOC, TXT o PDF · máx. 50 MB</div>
-      <input type="file" id="uploadFileInput" accept=".doc,.docx,.txt,.pdf" hidden>
+      <div class="dropzone__hint">TXT, PDF o DOCX · máximo 16 MB</div>
+      <input type="file" id="uploadFileInput" accept=".txt,.pdf,.docx" hidden>
     </label>
-
-    <div class="upload-modal__row">
-      <input type="text" class="upload-modal__input" id="uploadTitleInput" placeholder="Título del cuento">
+    <div class="upload-modal__row upload-modal__row--grid">
+      <label><span>Título</span><input type="text" class="upload-modal__input" id="uploadTitleInput" maxlength="120" placeholder="Título de la lectura"></label>
+      <label><span>Habilidad principal</span><select class="upload-modal__input" id="uploadSkillInput">{% for skill in skills[1:] %}<option>{{ skill }}</option>{% endfor %}</select></label>
     </div>
-
-    <div class="upload-modal__actions">
-      <button type="button" class="btn btn--ghost" id="uploadCancelBtn">Cancelar</button>
-      <button type="button" class="btn btn--primary" id="uploadStartBtn" disabled>Subir</button>
-    </div>
+    <div class="upload-modal__actions"><button type="button" class="btn btn--ghost" id="uploadCancelBtn">Cancelar</button><button type="button" class="btn btn--primary" id="uploadStartBtn" disabled>Procesar</button></div>
   </div>
 </div>
 
-<div class="overlay" id="loadingOverlay">
-  <div class="loading-modal">
-    <div class="spinner" id="loadingSpinner"></div>
-    <div class="loading-modal__text" id="loadingText">Procesando documento...</div>
-    <button type="button" class="btn btn--ghost" id="loadingCloseBtn" hidden>Cerrar</button>
-  </div>
+<div class="overlay" id="loadingOverlay" aria-hidden="true">
+  <div class="loading-modal" role="status" aria-live="polite"><div class="spinner" id="loadingSpinner"></div><div class="loading-modal__text" id="loadingText">Procesando documento...</div><button type="button" class="btn btn--ghost" id="loadingCloseBtn" hidden>Cerrar</button></div>
 </div>
 
-<div class="overlay" id="resultOverlay">
-  <div class="result-modal">
-    <div class="result-modal__title">Contenido generado</div>
-    <div class="result-modal__subtitle">A partir del documento original</div>
-
+<div class="overlay" id="resultOverlay" aria-hidden="true">
+  <div class="result-modal" role="dialog" aria-modal="true" aria-labelledby="resultTitle">
+    <div class="result-modal__title" id="resultTitle">Contenido generado</div>
+    <div class="result-modal__subtitle">Puedes revisar y editar todo antes de guardar.</div>
     <div class="result-modal__columns">
       <div class="result-col result-col--border">
         <div class="result-col__title">Textos</div>
-        <div class="result-block">
-          <div class="result-block__label">Texto completo</div>
-          <div class="result-block__box" id="resultTranscribedText" contenteditable="true" spellcheck="false">{{ upload_preview.transcribed_text }}</div>
-        </div>
-        <div class="result-block result-block--divider">
-          <div class="result-block__label">Resumen del texto</div>
-          <div class="result-block__box result-block__box--short" id="resultSummaryText" contenteditable="true" spellcheck="false">{{ upload_preview.summary_text }}</div>
-        </div>
+        <div class="result-block"><div class="result-block__label">Texto completo</div><div class="result-block__box" id="resultTranscribedText" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="true"></div></div>
+        <div class="result-block result-block--divider"><div class="result-block__label">Resumen</div><div class="result-block__box result-block__box--short" id="resultSummaryText" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="true"></div></div>
       </div>
-
       <div class="result-col result-col--border">
         <div class="result-col__title">Audios</div>
-        <div class="result-audio-row">
-          <div class="result-audio-row__top">
-            <div class="result-audio-row__label">Audio completo</div>
-            <button type="button" class="btn btn--accent" id="generateAudioFullBtn">Generar</button>
-          </div>
-          <audio controls id="resultAudioFull"></audio>
-        </div>
-        <div class="result-audio-row result-audio-row--divider">
-          <div class="result-audio-row__top">
-            <div class="result-audio-row__label">Audio resumen</div>
-            <button type="button" class="btn btn--accent" id="generateAudioSummaryBtn">Generar</button>
-          </div>
-          <audio controls id="resultAudioSummary"></audio>
-        </div>
+        <div class="result-audio-row"><div class="result-audio-row__top"><div class="result-audio-row__label">Audio completo</div><button type="button" class="btn btn--accent" id="generateAudioFullBtn">Generar</button></div><audio controls id="resultAudioFull"></audio></div>
+        <div class="result-audio-row result-audio-row--divider"><div class="result-audio-row__top"><div class="result-audio-row__label">Audio resumen</div><button type="button" class="btn btn--accent" id="generateAudioSummaryBtn">Generar</button></div><audio controls id="resultAudioSummary"></audio></div>
       </div>
-
       <div class="result-col">
         <div class="result-col__title">Preguntas</div>
-        {% for q in upload_preview.questions %}
-        <div class="question-row" style="background: {{ q.bg }}">
-          <div class="question-row__label" style="color: {{ q.label_color }}">{{ q.label }}</div>
-          <input type="number" min="0" max="15" value="{{ q.default }}" class="question-row__input" data-question-type="{{ q.key }}" style="color: {{ q.value_color }}; border-color: {{ q.border }}">
-        </div>
-        {% endfor %}
+        {% set question_rows = [('literales', 'Literales', 3), ('inferenciales', 'Inferenciales', 2), ('criticas', 'Críticas', 1)] %}
+        {% for key, label, default in question_rows %}<div class="question-row"><div class="question-row__label">{{ label }}</div><input type="number" min="0" max="15" value="{{ default }}" class="question-row__input" data-question-type="{{ key }}" aria-label="Cantidad de preguntas {{ label|lower }}"></div>{% endfor %}
         <button type="button" class="btn btn--accent btn--block" id="generateQuestionsBtn">Generar preguntas</button>
         <div class="questions-result" id="questionsResult"></div>
       </div>
     </div>
-
-    <div class="result-modal__footer">
-      <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Listo</button>
-    </div>
+    <div class="result-modal__footer"><button type="button" class="btn btn--ghost" id="resultCancelBtn">Cancelar</button><button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Guardar material</button></div>
   </div>
 </div>
 
-<div class="material__list" id="materialList">
+<div class="material__list" id="materialList" data-empty-label="No encontramos materiales con esos filtros.">
   {% for m in materials %}
-  <div class="material-card" data-title="{{ m.nombre_material|lower }}">
-    <button type="button" class="material-card__header">
-      <div class="material-card__icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11a2 2 0 0 1 2 2v16a2.5 2.5 0 0 0-2.5-2.5H4Z"/><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v18a2.5 2.5 0 0 1 2.5-2.5H20Z"/></svg>
-      </div>
-      <div class="material-card__meta">
-        <div class="material-card__name">{{ m.nombre_material }}</div>
-        <div class="material-card__sub">Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}</div>
-      </div>
-      <span class="material-card__chevron" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg>
-      </span>
+  <article class="material-card" data-title="{{ m.nombre_material|lower }}" data-skill="{{ m.skill }}" data-material-id="{{ m.id }}">
+    <button type="button" class="material-card__header" aria-expanded="false">
+      <div class="material-card__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11a2 2 0 0 1 2 2v16a2.5 2.5 0 0 0-2.5-2.5H4Z"/><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v18a2.5 2.5 0 0 1 2.5-2.5H20Z"/></svg></div>
+      <div class="material-card__meta"><div class="material-card__name">{{ m.nombre_material }}</div><div class="material-card__sub">{{ m.skill }} · {{ m.fecha_subido.strftime('%d/%m/%Y') }}</div></div>
+      <span class="material-card__chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg></span>
     </button>
     <div class="material-card__detail">
-      <div class="material-card__audio-row">
-        <div class="material-card__audio-label">Audio completo</div>
-        <audio controls src="{{ url_for('static', filename=m.path_audio) }}"></audio>
-      </div>
-      <div class="material-card__audio-row">
-        <div class="material-card__audio-label">Audio resumen</div>
-        <audio controls src="{{ url_for('static', filename=m.path_audio_resumen) }}"></audio>
-      </div>
+      <div class="material-card__audio-row"><div class="material-card__audio-label">Audio completo</div><audio controls preload="none" src="{{ url_for('api.material_file', material_id=m.id, kind='audio') }}"></audio></div>
+      <div class="material-card__audio-row"><div class="material-card__audio-label">Audio resumen</div><audio controls preload="none" src="{{ url_for('api.material_file', material_id=m.id, kind='audio-resumen') }}"></audio></div>
       <div class="material-card__actions">
-        <div class="material-card__links">
-          <a href="{{ url_for('static', filename=m.path_texto) }}" download>Descargar texto completo</a>
-          <a href="{{ url_for('static', filename=m.path_texto_resumen) }}" download>Descargar texto resumido</a>
-          <a href="{{ url_for('static', filename=m.path_preguntas) }}" download>Preguntas generadas</a>
-        </div>
-        <a href="#" class="material-card__delete">Eliminar</a>
+        <div class="material-card__links"><a href="{{ url_for('api.material_file', material_id=m.id, kind='texto') }}">Descargar texto completo</a><a href="{{ url_for('api.material_file', material_id=m.id, kind='resumen') }}">Descargar resumen</a><a href="{{ url_for('api.material_file', material_id=m.id, kind='preguntas') }}">Descargar preguntas</a></div>
+        <button type="button" class="material-card__delete" data-delete-url="{{ url_for('api.delete_material', material_id=m.id) }}">Eliminar</button>
       </div>
     </div>
-  </div>
+  </article>
   {% endfor %}
 </div>
+<div class="material-empty" id="materialEmpty" {% if materials %}hidden{% endif %}><div aria-hidden="true">MX</div><h2>Aún no hay materiales</h2><p>Agrega una lectura para demostrar el flujo completo de MAXCIM.</p></div>
 {% endblock %}
 
-{% block scripts %}
-<script src="{{ url_for('static', filename='js/material.js') }}"></script>
-{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/material.js') }}" defer></script>{% endblock %}

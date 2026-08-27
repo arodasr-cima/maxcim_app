@@ -6,14 +6,43 @@
 {% block content %}
 <div class="page-heading page-heading--simple">
   <div>
-    <div class="page-heading__eyebrow">SEGUIMIENTO</div>
-    <h1 class="page-heading__title">Sesiones</h1>
+    <div class="page-heading__eyebrow">PLANIFICACIÓN</div>
+    <h1 class="page-heading__title">Sesiones educativas</h1>
+    <p class="page-heading__subtitle">Programa y registra actividades sociocomunicativas por aula.</p>
   </div>
+  <span class="mode-chip mode-chip--neutral">{{ sessions|length }} sesiones registradas</span>
 </div>
-<div class="empty-state">
-  <div class="empty-state__icon" aria-hidden="true">
-    <svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="15" rx="2"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17"/><path d="M8 14h8M8 17h5"/></svg>
-  </div>
-  <p class="sesiones__placeholder">Todavía no hay nada por aquí.</p>
+
+<div class="sessions-layout">
+  <section class="session-composer" aria-labelledby="newSessionTitle">
+    <div class="session-composer__head"><div class="session-composer__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div><div><h2 id="newSessionTitle">Nueva sesión</h2><p>Registra una actividad para la demostración.</p></div></div>
+    <form action="{{ url_for('web.create_session') }}" method="post" class="session-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label><span>Título de la actividad</span><input name="title" maxlength="120" required placeholder="Ej. Debate y escucha activa"></label>
+      <label><span>Aula</span><select name="classroom" required>{% for classroom in classrooms %}<option>{{ classroom }}</option>{% endfor %}</select></label>
+      <label><span>Fecha y hora</span><input name="scheduled_at" type="datetime-local" required></label>
+      <button type="submit" class="session-form__submit">Programar sesión<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5"/></svg></button>
+    </form>
+  </section>
+
+  <section class="sessions-list" aria-labelledby="sessionsListTitle">
+    <div class="section-heading"><h2 class="aulas__title" id="sessionsListTitle">Cronograma</h2><span class="section-heading__count">{{ sessions|length }}</span></div>
+    {% if sessions %}
+      <div class="session-cards">
+        {% for item in sessions %}
+        <article class="session-card session-card--{{ item.status }}">
+          <div class="session-card__date"><strong>{{ item.scheduled_at.strftime('%d') }}</strong><span>{{ item.scheduled_at.strftime('%m/%Y') }}</span></div>
+          <div class="session-card__body"><div class="session-card__meta"><span>{{ item.classroom }}</span><span>{{ item.scheduled_at.strftime('%H:%M') }}</span></div><h3>{{ item.title }}</h3><span class="session-status">{{ item.status|capitalize }}</span></div>
+          <form action="{{ url_for('web.toggle_session_status', session_id=item.id) }}" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="session-card__action">{% if item.status == 'completada' %}Reabrir{% else %}Completar{% endif %}</button>
+          </form>
+        </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="sessions-empty"><h3>No hay sesiones programadas</h3><p>Usa el formulario para registrar la primera.</p></div>
+    {% endif %}
+  </section>
 </div>
 {% endblock %}

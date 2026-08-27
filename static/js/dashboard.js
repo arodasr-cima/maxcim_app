@@ -4,18 +4,25 @@ document.addEventListener("DOMContentLoaded", () => {
   const profileTrigger = document.getElementById("profileTrigger");
   const profileMenu = document.getElementById("profileMenu");
 
-  sidebarToggle.addEventListener("click", () => {
-    sidebar.classList.toggle("is-collapsed");
-  });
+  if (sidebar && sidebarToggle) {
+    sidebarToggle.addEventListener("click", () => {
+      const collapsed = sidebar.classList.toggle("is-collapsed");
+      sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
+    });
+  }
 
-  profileTrigger.addEventListener("click", (event) => {
-    event.stopPropagation();
-    profileMenu.classList.toggle("is-open");
-  });
+  if (profileTrigger && profileMenu) {
+    profileTrigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const open = profileMenu.classList.toggle("is-open");
+      profileTrigger.setAttribute("aria-expanded", String(open));
+    });
 
-  document.addEventListener("click", (event) => {
-    if (!profileMenu.contains(event.target) && !profileTrigger.contains(event.target)) {
-      profileMenu.classList.remove("is-open");
-    }
-  });
+    document.addEventListener("click", (event) => {
+      if (!profileMenu.contains(event.target) && !profileTrigger.contains(event.target)) {
+        profileMenu.classList.remove("is-open");
+        profileTrigger.setAttribute("aria-expanded", "false");
+      }
+    });
+  }
 });

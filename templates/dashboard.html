@@ -8,6 +8,7 @@
   <div>
     <div class="page-heading__eyebrow">RESUMEN GENERAL</div>
     <h1 class="page-heading__title">Panel docente</h1>
+    <p class="page-heading__subtitle">Indicadores sociocomunicativos de la demostración académica.</p>
   </div>
   <div class="content__date">
     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="15" rx="2"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17"/></svg>
@@ -15,63 +16,36 @@
   </div>
 </div>
 
-<section class="stat-grid">
+<section class="stat-grid" aria-label="Indicadores generales">
   {% for card in stat_cards %}
-  <div class="stat-card" style="--accent: {{ card.color }}">
+  <article class="stat-card" style="--accent: {{ card.color }}">
     <div class="stat-card__icon" aria-hidden="true">
-      {% if loop.index == 1 %}
-      <svg viewBox="0 0 24 24"><path d="M4 6.5 12 3l8 3.5-8 3.5Z"/><path d="M7 9v5.5c0 1.7 2.2 3 5 3s5-1.3 5-3V9M20 7v6"/></svg>
-      {% elif loop.index == 2 %}
-      <svg viewBox="0 0 24 24"><path d="M8 4h8M9 3v3M15 3v3"/><rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 11h8M8 15h5"/></svg>
-      {% elif loop.index == 3 %}
-      <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
-      {% else %}
-      <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3.5 20v-1.5A4.5 4.5 0 0 1 8 14h2a4.5 4.5 0 0 1 4.5 4.5V20"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14h1.5a3.5 3.5 0 0 1 3.5 3.5V19"/></svg>
-      {% endif %}
+      {% if loop.index == 1 %}<svg viewBox="0 0 24 24"><path d="M4 6.5 12 3l8 3.5-8 3.5Z"/><path d="M7 9v5.5c0 1.7 2.2 3 5 3s5-1.3 5-3V9M20 7v6"/></svg>
+      {% elif loop.index == 2 %}<svg viewBox="0 0 24 24"><path d="M8 4h8M9 3v3M15 3v3"/><rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 11h8M8 15h5"/></svg>
+      {% elif loop.index == 3 %}<svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
+      {% else %}<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3.5 20v-1.5A4.5 4.5 0 0 1 8 14h2a4.5 4.5 0 0 1 4.5 4.5V20"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14h1.5a3.5 3.5 0 0 1 3.5 3.5V19"/></svg>{% endif %}
     </div>
-    <div class="stat-card__copy">
-      <div class="stat-card__value">{{ card.value }}</div>
-      <div class="stat-card__label">{{ card.label }}</div>
-    </div>
-  </div>
+    <div class="stat-card__copy"><div class="stat-card__value">{{ card.value }}</div><div class="stat-card__label">{{ card.label }}</div></div>
+  </article>
   {% endfor %}
 </section>
 
-<section class="aulas">
-  <div class="section-heading">
-    <h2 class="aulas__title">Mis aulas</h2>
-    <span class="section-heading__count">{{ aulas|length }}</span>
-  </div>
+<section class="aulas" aria-labelledby="classroomsTitle">
+  <div class="section-heading"><h2 class="aulas__title" id="classroomsTitle">Mis aulas</h2><span class="section-heading__count">{{ aulas|length }}</span></div>
   <div class="aulas__grid">
     {% for aula in aulas %}
-    <div class="aula-card">
+    <article class="aula-card">
       <div class="aula-card__header">
         <div class="aula-card__avatar" style="background: {{ aula.avatar_bg }}">{{ aula.initials }}</div>
-        <div class="aula-card__meta">
-          <div class="aula-card__name">{{ aula.name }}</div>
-          <div class="aula-card__grade">{{ aula.grade }} · Tutor: {{ aula.tutor }}</div>
-        </div>
+        <div class="aula-card__meta"><div class="aula-card__name">{{ aula.name }}</div><div class="aula-card__grade">{{ aula.grade }}</div></div>
       </div>
-
-      <div class="aula-card__badges">
-        <span class="badge badge--score">{{ aula.score }}% promedio</span>
-        <span class="badge badge--pending">{{ aula.pendientes }} pendiente{{ 's' if aula.pendientes != 1 else '' }}</span>
-      </div>
-
+      <div class="aula-card__badges"><span class="badge badge--score">Promedio {{ aula.score }}%</span><span class="badge badge--pending">{{ aula.pendientes }} pendientes</span></div>
       <div class="aula-card__skills">
         {% for skill in aula.skills %}
-        <div class="skill">
-          <div class="skill__label">
-            <span>{{ skill.name }}</span>
-            <span>{{ skill.value }}%</span>
-          </div>
-          <div class="skill__bar">
-            <div class="skill__fill" style="width: {{ skill.value }}%; background: {{ skill.color }}"></div>
-          </div>
-        </div>
+        <div class="skill"><div class="skill__label"><span>{{ skill.name }}</span><strong>{{ skill.value }}%</strong></div><div class="skill__bar"><div class="skill__fill" style="width: {{ skill.value }}%; background: {{ skill.color }}"></div></div></div>
         {% endfor %}
       </div>
-    </div>
+    </article>
     {% endfor %}
   </div>
 </section>

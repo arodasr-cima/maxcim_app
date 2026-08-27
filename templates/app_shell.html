@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="description" content="Panel docente MAXCIM.">
   <title>{% block title %}MAXCIM{% endblock %}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
   <div class="app-shell">
-
     <aside class="sidebar" id="sidebar">
       <div class="sidebar__brand">
         <div class="sidebar__logo" aria-hidden="true">MX</div>
@@ -20,65 +20,70 @@
       </div>
 
       <nav class="sidebar__nav" aria-label="Navegación principal">
-        <a href="{{ url_for('dashboard') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'tablon' else '' }}">
-          <span class="sidebar__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/><path d="M9.5 19.5v-6h5v6"/></svg>
-          </span>
+        <a href="{{ url_for('web.dashboard') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'tablon' else '' }}">
+          <span class="sidebar__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/><path d="M9.5 19.5v-6h5v6"/></svg></span>
           <span class="sidebar__label">Tablón</span>
         </a>
-        <a href="{{ url_for('material') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'material' else '' }}">
-          <span class="sidebar__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2h9v10.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19Z"/><path d="M3.5 9h17"/></svg>
-          </span>
+        <a href="{{ url_for('web.material') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'material' else '' }}">
+          <span class="sidebar__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2h9v10.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19Z"/><path d="M3.5 9h17"/></svg></span>
           <span class="sidebar__label">Material</span>
         </a>
-        <a href="{{ url_for('sesiones') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'sesiones' else '' }}">
-          <span class="sidebar__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="15" rx="2"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17"/><path d="M8 14h2M14 14h2M8 17.5h2M14 17.5h2"/></svg>
-          </span>
+        <a href="{{ url_for('web.sesiones') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'sesiones' else '' }}">
+          <span class="sidebar__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="15" rx="2"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17"/><path d="M8 14h2M14 14h2M8 17.5h2M14 17.5h2"/></svg></span>
           <span class="sidebar__label">Sesiones</span>
         </a>
       </nav>
+
+      {% if demo_mode %}
+      <div class="sidebar__demo">
+        <span aria-hidden="true"></span>
+        <div><strong>Modo demostración</strong><small>Datos ficticios activos</small></div>
+      </div>
+      {% endif %}
     </aside>
 
     <div class="main">
-
       <header class="topbar">
         <div class="topbar__start">
-          <button type="button" class="topbar__toggle" id="sidebarToggle" aria-label="Mostrar u ocultar menú">
+          <button type="button" class="topbar__toggle" id="sidebarToggle" aria-label="Mostrar u ocultar menú" aria-expanded="true">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
           </button>
           <div class="topbar__heading">{% block topbar_title %}Panel docente{% endblock %}</div>
         </div>
 
         <div class="profile">
-          <button type="button" class="profile__trigger" id="profileTrigger" aria-label="Abrir menú de perfil">
+          <button type="button" class="profile__trigger" id="profileTrigger" aria-label="Abrir menú de perfil" aria-expanded="false">
             <div class="profile__avatar">{{ user.initials }}</div>
             <div class="profile__info">
-              <div class="profile__name">{{ user.name }}</div>
+              <div class="profile__name">{{ user.display_name }}</div>
               <div class="profile__role">{{ user.role }}</div>
             </div>
-            <span class="profile__caret" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg>
-            </span>
+            <span class="profile__caret" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg></span>
           </button>
           <div class="profile__menu" id="profileMenu">
-            <a href="#">Mi perfil</a>
-            <a href="#">Configuración</a>
-            <a href="#">Ayuda</a>
+            <div class="profile__menu-user"><strong>{{ user.display_name }}</strong><span>{{ user.email }}</span></div>
             <div class="profile__menu-divider"></div>
-            <a href="#" class="profile__menu-danger">Cerrar sesión</a>
+            <form action="{{ url_for('auth.logout') }}" method="post">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="profile__menu-danger">Cerrar sesión</button>
+            </form>
           </div>
         </div>
       </header>
 
-      <main class="content">
-        {% block content %}{% endblock %}
-      </main>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="app-flashes" role="status" aria-live="polite">
+            {% for category, message in messages %}<div class="app-flash app-flash--{{ category }}">{{ message }}</div>{% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <main class="content">{% block content %}{% endblock %}</main>
     </div>
   </div>
-
-  <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  <div class="toast" id="appToast" role="status" aria-live="polite"></div>
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
