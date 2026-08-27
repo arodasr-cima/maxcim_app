@@ -3,52 +3,76 @@
 {% block title %}Avance de {{ classroom.name }} · MAXCIM{% endblock %}
 
 {% block content %}
-<header class="page-heading">
-  <div>
-    <p class="page-heading__eyebrow">Avance del aula</p>
-    <h1 class="sesiones__title">{{ classroom.name }}</h1>
-    <p class="page-heading__description">Aciertos registrados en materiales de esta docente.</p>
-  </div>
-  <a class="btn btn--ghost" href="{{ url_for('classroom_detail', classroom_id=classroom.institutional_id) }}">Volver a alumnos</a>
-</header>
+<div class="teacher-view">
+  <header class="page-heading teacher-heading">
+    <div>
+      <p class="page-heading__eyebrow">Mis aulas <span aria-hidden="true">/</span> Avance del aula</p>
+      <h1 class="sesiones__title">{{ classroom.name }}</h1>
+      <p class="page-heading__description">Revisa los aciertos y oportunidades de mejora de cada estudiante.</p>
+    </div>
+    <a class="btn btn--ghost teacher-heading__action" href="{{ url_for('classroom_detail', classroom_id=classroom.institutional_id) }}"><span aria-hidden="true">←</span> Volver a estudiantes</a>
+  </header>
 
-<section class="sessions-history">
-  <div class="sessions-table-wrap">
-    <table class="sessions-table classroom-table">
-      <thead>
-        <tr>
-          <th>Alumno</th>
-          <th>Interacciones</th>
-          <th>Aciertos</th>
-          <th>Detalle</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in progress_rows %}
-        <tr>
-          <td><strong>{{ row.student.full_name }}</strong></td>
-          <td>
-            {% if row.interactions %}
-            <ol class="interaction-results" aria-label="Resultados de {{ row.student.full_name }}">
-              {% for interaction in row.interactions %}
-              <li title="{{ interaction.material.nombre_material }}: {{ interaction.pregunta }}">
-                <span class="answer-mark answer-mark--{{ 'correct' if interaction.rpta_correcta else 'incorrect' }}" aria-label="{{ 'Correcta' if interaction.rpta_correcta else 'Incorrecta' }}">
-                  {{ '✓' if interaction.rpta_correcta else '✕' }}
-                </span>
-                <span>{{ interaction.material.nombre_material }}</span>
-              </li>
-              {% endfor %}
-            </ol>
-            {% else %}
-            <span>Sin interacciones</span>
-            {% endif %}
-          </td>
-          <td><strong>{{ row.correct }}/{{ row.total }}</strong></td>
-          <td><a class="table-action" href="{{ url_for('student_detail', classroom_id=classroom.institutional_id, student_id=row.student.institutional_id) }}">Ver respuestas</a></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+  <section class="sessions-history teacher-panel" aria-labelledby="progressTitle">
+    <div class="sessions-history__header">
+      <div>
+        <p class="page-heading__eyebrow">Resultados individuales</p>
+        <h2 id="progressTitle">Avance de estudiantes</h2>
+      </div>
+      <span class="panel-count">{{ progress_rows|length }} estudiante{{ '' if progress_rows|length == 1 else 's' }}</span>
+    </div>
+
+    {% if progress_rows %}
+    <div class="sessions-table-wrap" tabindex="0" role="region" aria-label="Avance del aula; desplázate horizontalmente para ver todas las columnas">
+      <table class="sessions-table classroom-table progress-table">
+        <caption class="visually-hidden">Avance de los estudiantes de {{ classroom.name }}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Estudiante</th>
+            <th scope="col">Resultados por material</th>
+            <th scope="col" class="table-tally-column">Aciertos</th>
+            <th scope="col" class="table-action-column">Detalle</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in progress_rows %}
+          <tr class="table-row--clickable">
+            <td>
+              <a class="table-row-link" href="{{ url_for('student_detail', classroom_id=classroom.institutional_id, student_id=row.student.institutional_id) }}" aria-label="Ver las respuestas de {{ row.student.full_name }}">
+                <strong>{{ row.student.full_name }}</strong>
+              </a>
+            </td>
+            <td>
+              {% if row.interactions %}
+              <ol class="interaction-results" aria-label="Resultados de {{ row.student.full_name }}">
+                {% for interaction in row.interactions %}
+                <li title="{{ interaction.material.nombre_material }}: {{ interaction.pregunta }}">
+                  <span class="answer-mark answer-mark--{{ 'correct' if interaction.rpta_correcta else 'incorrect' }}">
+                    <span aria-hidden="true">{{ '✓' if interaction.rpta_correcta else '✕' }}</span>
+                    <span class="visually-hidden">Respuesta {{ 'correcta' if interaction.rpta_correcta else 'incorrecta' }}:</span>
+                  </span>
+                  <span class="interaction-results__material">{{ interaction.material.nombre_material }}</span>
+                </li>
+                {% endfor %}
+              </ol>
+              {% else %}
+              <span class="no-results"><span aria-hidden="true">—</span> Sin interacciones todavía</span>
+              {% endif %}
+            </td>
+            <td class="table-tally-column"><strong class="progress-tally" aria-label="{{ row.correct }} aciertos de {{ row.total }} interacciones">{{ row.correct }}/{{ row.total }}</strong></td>
+            <td class="table-action-column"><span class="table-action">Ver respuestas <span aria-hidden="true">→</span></span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <span aria-hidden="true">◎</span>
+      <strong>Aún no hay estudiantes para mostrar</strong>
+      <p>El avance aparecerá aquí cuando el aula tenga estudiantes matriculados.</p>
+    </div>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}

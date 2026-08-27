@@ -3,61 +3,71 @@
 {% block title %}{{ student.full_name }} · MAXCIM{% endblock %}
 
 {% block content %}
-<header class="page-heading">
-  <div>
-    <p class="page-heading__eyebrow">{{ classroom.name }}</p>
-    <h1 class="sesiones__title">{{ student.full_name }}</h1>
-    <p class="page-heading__description">Preguntas, respuestas y apreciaciones registradas por MAXCIM.</p>
-  </div>
-  <a class="btn btn--ghost" href="{{ url_for('classroom_detail', classroom_id=classroom.institutional_id) }}">Volver al aula</a>
-</header>
-
-<section class="sessions-history">
-  <div class="sessions-history__header">
+<div class="teacher-view">
+  <header class="page-heading teacher-heading">
     <div>
-      <p class="page-heading__eyebrow">Historial</p>
-      <h2>Interacciones</h2>
+      <p class="page-heading__eyebrow">{{ classroom.name }} <span aria-hidden="true">/</span> Historial del estudiante</p>
+      <h1 class="sesiones__title">{{ student.full_name }}</h1>
+      <p class="page-heading__description">Preguntas, respuestas y apreciaciones registradas por MAXCIM.</p>
     </div>
-    <span>{{ interactions|length }} registrada{{ '' if interactions|length == 1 else 's' }}</span>
-  </div>
+    <a class="btn btn--ghost teacher-heading__action" href="{{ url_for('classroom_detail', classroom_id=classroom.institutional_id) }}"><span aria-hidden="true">←</span> Volver al aula</a>
+  </header>
 
-  {% if interactions %}
-  <div class="sessions-table-wrap">
-    <table class="sessions-table interaction-detail-table">
-      <thead>
-        <tr>
-          <th>Fecha</th>
-          <th>Material</th>
-          <th>Pregunta</th>
-          <th>Respuesta del alumno</th>
-          <th>Apreciación del robot</th>
-          <th>Resultado</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for interaction in interactions %}
-        <tr>
-          <td>{{ interaction.fecha_hora.strftime('%d/%m/%Y %H:%M') if interaction.fecha_hora else '—' }}</td>
-          <td><strong>{{ interaction.material.nombre_material }}</strong></td>
-          <td>{{ interaction.pregunta }}</td>
-          <td>{{ interaction.respuesta }}</td>
-          <td>{{ interaction.apreciacion_robot }}</td>
-          <td>
-            <span class="answer-mark answer-mark--{{ 'correct' if interaction.rpta_correcta else 'incorrect' }}">
-              {{ '✓ Correcta' if interaction.rpta_correcta else '✕ Incorrecta' }}
-            </span>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="empty-state">
-    <span aria-hidden="true">◎</span>
-    <strong>Aún no hay interacciones</strong>
-    <p>Las respuestas del alumno aparecerán aquí cuando MAXCIM las registre.</p>
-  </div>
-  {% endif %}
-</section>
+  <section class="sessions-history teacher-panel" aria-labelledby="interactionsTitle">
+    <div class="sessions-history__header">
+      <div>
+        <p class="page-heading__eyebrow">Historial de aprendizaje</p>
+        <h2 id="interactionsTitle">Interacciones</h2>
+      </div>
+      <span class="panel-count">{{ interactions|length }} registrada{{ '' if interactions|length == 1 else 's' }}</span>
+    </div>
+
+    {% if interactions %}
+    <div class="sessions-table-wrap" tabindex="0" role="region" aria-label="Historial de interacciones; desplázate horizontalmente para ver todas las columnas">
+      <table class="sessions-table interaction-detail-table">
+        <caption class="visually-hidden">Interacciones registradas de {{ student.full_name }}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Fecha</th>
+            <th scope="col">Material</th>
+            <th scope="col">Pregunta</th>
+            <th scope="col">Respuesta del estudiante</th>
+            <th scope="col">Apreciación del robot</th>
+            <th scope="col">Resultado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for interaction in interactions %}
+          <tr>
+            <td class="interaction-date">
+              {% if interaction.fecha_hora %}
+              <time datetime="{{ interaction.fecha_hora.isoformat() }}">{{ interaction.fecha_hora.strftime('%d/%m/%Y') }}<span>{{ interaction.fecha_hora.strftime('%H:%M') }}</span></time>
+              {% else %}
+              <span aria-label="Fecha no registrada">—</span>
+              {% endif %}
+            </td>
+            <td><strong>{{ interaction.material.nombre_material }}</strong></td>
+            <td>{{ interaction.pregunta }}</td>
+            <td>{{ interaction.respuesta }}</td>
+            <td>{{ interaction.apreciacion_robot }}</td>
+            <td>
+              <span class="answer-mark answer-mark--{{ 'correct' if interaction.rpta_correcta else 'incorrect' }}">
+                <span aria-hidden="true">{{ '✓' if interaction.rpta_correcta else '✕' }}</span>
+                {{ 'Correcta' if interaction.rpta_correcta else 'Incorrecta' }}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <span aria-hidden="true">◎</span>
+      <strong>Este estudiante aún no tiene interacciones</strong>
+      <p>Sus preguntas, respuestas y apreciaciones aparecerán aquí cuando empiece a trabajar con MAXCIM.</p>
+    </div>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}
