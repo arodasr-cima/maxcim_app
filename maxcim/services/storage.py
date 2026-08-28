@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -74,4 +77,10 @@ def delete_bundle(root: str | Path, directory_name: str) -> None:
     directory = (root_path / directory_name).resolve()
     if root_path not in directory.parents:
         raise ValueError("Invalid storage directory")
+    if not directory.exists():
+        return
     shutil.rmtree(directory, ignore_errors=True)
+    if directory.exists():
+        logger.warning(
+            "Could not fully delete material bundle %s at %s", directory_name, directory
+        )
