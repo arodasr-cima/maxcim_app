@@ -8,7 +8,7 @@
   <div>
     <div class="page-heading__eyebrow">RESUMEN GENERAL</div>
     <h1 class="page-heading__title">Panel docente</h1>
-    <p class="page-heading__subtitle">{% if official_mode %}Aulas asignadas por el servicio oficial de CIMA.{% else %}Indicadores sociocomunicativos de la demostración académica.{% endif %}</p>
+    <p class="page-heading__subtitle">{% if official_mode %}Aulas asignadas por el servicio oficial de CIMA.{% elif google_mode %}Cuenta docente verificada mediante Google Workspace.{% else %}Indicadores sociocomunicativos de la demostración académica.{% endif %}</p>
   </div>
   <div class="content__date">
     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="15" rx="2"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17"/></svg>
@@ -35,9 +35,15 @@
   {% if integration_error %}
   <div class="integration-alert" role="alert"><strong>No se pudieron actualizar las aulas.</strong><span>{{ integration_error }}</span></div>
   {% endif %}
+  {% if classroom_notice %}
+  <div class="integration-alert"><strong>Acceso institucional activo</strong><span>{{ classroom_notice }}</span></div>
+  {% endif %}
   <div class="aulas__grid">
     {% if official_mode and not aulas and not integration_error %}
     <div class="empty-state empty-state--wide"><div class="empty-state__icon" aria-hidden="true">AU</div><h3>No hay aulas asignadas</h3><p>Cuando CIMA asigne aulas a tu cuenta, aparecerán aquí.</p></div>
+    {% endif %}
+    {% if google_mode and not aulas %}
+    <div class="empty-state empty-state--wide"><div class="empty-state__icon" aria-hidden="true">GI</div><h3>Cuenta institucional verificada</h3><p>El panel está listo; las aulas aparecerán cuando CIMA habilite el intercambio seguro con Google.</p></div>
     {% endif %}
     {% for aula in aulas %}
     {% if official_mode %}

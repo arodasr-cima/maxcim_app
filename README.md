@@ -87,6 +87,37 @@ El arranque oficial exige HTTPS, verificación TLS y cookie `Secure`. Para una p
 
 Con `AUTO_CREATE_DB=true`, SQLAlchemy crea las tres tablas nuevas de integración. Antes de usar `AUTO_CREATE_DB=false` en una base institucional existente, el equipo de despliegue debe versionar y ejecutar la migración equivalente para `cima_identities`, `cima_sessions` y `cima_learning_sessions`.
 
+## Activar el acceso institucional con Google
+
+MAXCIM también permite que los docentes entren con su cuenta administrada de Google Workspace. Crea un cliente OAuth de tipo **Aplicación web** y registra exactamente esta URI local:
+
+```text
+http://127.0.0.1:5000/login/google/callback
+```
+
+En Google Auth Platform configura la audiencia como **Internal** para el Workspace de CIMA y completa el branding con datos institucionales. Si la consola solo permite audiencia **External**, agrega los usuarios de prueba y completa el proceso de publicación requerido antes de habilitar el sistema.
+
+Luego configura:
+
+```dotenv
+AUTH_PROVIDER=google
+SECRET_KEY=un_valor_aleatorio_largo_y_persistente
+GOOGLE_OAUTH_CLIENT_ID=cliente_web.apps.googleusercontent.com
+GOOGLE_OAUTH_CLIENT_SECRET=secreto_del_cliente_web
+GOOGLE_OAUTH_REDIRECT_URI=http://127.0.0.1:5000/login/google/callback
+GOOGLE_WORKSPACE_DOMAIN=colegiocima.edu.pe
+GOOGLE_ALLOWED_TEACHER_EMAILS=docente1@colegiocima.edu.pe,docente2@colegiocima.edu.pe
+GOOGLE_ALLOW_INSECURE_LOCAL_COOKIES=true
+```
+
+En producción, la redirección debe usar HTTPS, `SESSION_COOKIE_SECURE=true` y `GOOGLE_ALLOW_INSECURE_LOCAL_COOKIES=false`. El sistema verifica firma, audiencia, emisor, expiración, `state`, `nonce`, PKCE, `email_verified`, el claim `hd` del dominio Workspace y la lista exacta de docentes. Solo conserva el `sub` estable, el correo y el nombre; descarta los tokens de Google al terminar el acceso.
+
+El dominio institucional no demuestra que una cuenta sea docente, porque también puede contener estudiantes. Por eso `GOOGLE_ALLOWED_TEACHER_EMAILS` es obligatorio. Para automatizar esa autorización en el futuro se necesita una fuente institucional de roles o grupos.
+
+Importante: el acceso de Google autentica al docente en MAXCIM, pero el documento entregado por CIMA solo permite obtener su JWT mediante usuario/contraseña. MAXCIM no envía un token de Google a endpoints no documentados ni simula aulas. CIMA debe proporcionar un intercambio de tokens o una autorización servidor-a-servidor antes de mostrar aulas con `AUTH_PROVIDER=google`. Consulta [`docs/GOOGLE_INSTITUTIONAL_LOGIN.md`](docs/GOOGLE_INSTITUTIONAL_LOGIN.md).
+
+Con `AUTO_CREATE_DB=true`, SQLAlchemy crea `google_identities`. En una base institucional con `AUTO_CREATE_DB=false`, crea y ejecuta primero una migración versionada equivalente.
+
 ## Arquitectura
 
 | Capa | Ubicación |
@@ -98,6 +129,7 @@ Con `AUTO_CREATE_DB=true`, SQLAlchemy crea las tres tablas nuevas de integració
 | Datos ficticios | `maxcim/demo.py` |
 | Cliente oficial CIMA | `maxcim/services/cima_api.py` |
 | Sesiones CIMA cifradas | `maxcim/services/cima_session.py`, `maxcim/models/cima.py` |
+| Identidad institucional Google | `maxcim/services/google_identity.py`, `maxcim/models/google.py` |
 | Interfaz | `templates/`, `static/` |
 | Pruebas | `tests/` |
 

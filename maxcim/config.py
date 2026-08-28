@@ -34,6 +34,15 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+def env_csv(name: str) -> tuple[str, ...]:
+    values = {
+        value.strip().casefold()
+        for value in os.getenv(name, "").split(",")
+        if value.strip()
+    }
+    return tuple(sorted(values))
+
+
 def database_uri() -> str:
     uri = os.getenv("DATABASE_URL", "").strip()
     if not uri:
@@ -52,13 +61,14 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
 
+    AUTH_PROVIDER = os.getenv("AUTH_PROVIDER", "demo").strip().lower()
+
     DEMO_MODE = env_flag("DEMO_MODE", not bool(os.getenv("GOOGLE_API_KEY")))
     DEMO_EMAIL = os.getenv("DEMO_EMAIL", "docente@maxcim.demo")
     DEMO_PASSWORD = os.getenv("DEMO_PASSWORD", "MaxcimDemo2026!")
-    SEED_DEMO_DATA = env_flag("SEED_DEMO_DATA", DEMO_MODE)
+    SEED_DEMO_DATA = env_flag("SEED_DEMO_DATA", DEMO_MODE and AUTH_PROVIDER == "demo")
     AUTO_CREATE_DB = env_flag("AUTO_CREATE_DB", True)
 
-    AUTH_PROVIDER = os.getenv("AUTH_PROVIDER", "demo").strip().lower()
     CIMA_API_BASE_URL = os.getenv(
         "CIMA_API_BASE_URL", "https://apicima.colegiocima.edu.pe:8086"
     ).strip()
@@ -84,6 +94,19 @@ class Config:
     CIMA_API_SESSION_MAX_AGE_SECONDS = env_int("CIMA_API_SESSION_MAX_AGE_SECONDS", 28_800)
     CIMA_TOKEN_ENCRYPTION_KEY = os.getenv("CIMA_TOKEN_ENCRYPTION_KEY", "").strip()
     CIMA_ALLOW_INSECURE_LOCAL_COOKIES = env_flag("CIMA_ALLOW_INSECURE_LOCAL_COOKIES", False)
+
+    GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+    GOOGLE_OAUTH_REDIRECT_URI = os.getenv("GOOGLE_OAUTH_REDIRECT_URI", "").strip()
+    GOOGLE_WORKSPACE_DOMAIN = os.getenv(
+        "GOOGLE_WORKSPACE_DOMAIN", "colegiocima.edu.pe"
+    ).strip().casefold()
+    GOOGLE_ALLOWED_TEACHER_EMAILS = env_csv("GOOGLE_ALLOWED_TEACHER_EMAILS")
+    GOOGLE_OAUTH_FLOW_MAX_AGE_SECONDS = env_int("GOOGLE_OAUTH_FLOW_MAX_AGE_SECONDS", 600)
+    GOOGLE_OAUTH_TIMEOUT_SECONDS = env_float("GOOGLE_OAUTH_TIMEOUT_SECONDS", 10.0)
+    GOOGLE_ALLOW_INSECURE_LOCAL_COOKIES = env_flag(
+        "GOOGLE_ALLOW_INSECURE_LOCAL_COOKIES", False
+    )
 
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")

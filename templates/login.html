@@ -31,9 +31,22 @@
       <div class="auth-card__header">
         <span class="auth-card__kicker">PANEL DOCENTE</span>
         <h2 id="loginTitle">Bienvenido a MAXCIM</h2>
-        <p>{% if auth_provider == "cima" %}Ingresa con tu cuenta institucional CIMA.{% else %}Ingresa para explorar la demostración completa.{% endif %}</p>
+        <p>{% if auth_provider == "google" %}Ingresa con tu cuenta institucional de Google Workspace.{% elif auth_provider == "cima" %}Ingresa con tu cuenta institucional CIMA.{% else %}Ingresa para explorar la demostración completa.{% endif %}</p>
       </div>
 
+      {% if auth_provider == "google" %}
+      <div class="google-access">
+        <a class="google-login" href="{{ url_for('auth.google_login', next=request.args.get('next', '')) }}">
+          <span class="google-login__mark" aria-hidden="true">G</span>
+          <span>Continuar con Google</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
+        </a>
+        <div class="google-access__policy">
+          <strong>Solo docentes autorizados</strong>
+          <span>Dominio {{ google_workspace_domain }}</span>
+        </div>
+      </div>
+      {% else %}
       <form method="post" class="auth-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label class="auth-field">
@@ -49,6 +62,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
         </button>
       </form>
+      {% endif %}
 
       {% if auth_provider == "demo" and demo_mode %}
       <div class="demo-access" id="demoAccess" data-email="{{ demo_email }}" data-password="{{ demo_password }}">
@@ -65,7 +79,7 @@
       {% endif %}
 
       <p class="auth-card__foot">
-        {% if auth_provider == "cima" %}La contraseña se envía directamente a CIMA y MAXCIM no la almacena.{% else %}Datos completamente ficticios para fines demostrativos.{% endif %}
+        {% if auth_provider == "google" %}MAXCIM valida la identidad con Google y no almacena tokens de acceso.{% elif auth_provider == "cima" %}La contraseña se envía directamente a CIMA y MAXCIM no la almacena.{% else %}Datos completamente ficticios para fines demostrativos.{% endif %}
       </p>
     </div>
   </section>

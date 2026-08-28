@@ -15,8 +15,9 @@
 
 <div class="sessions-layout">
   <section class="session-composer" aria-labelledby="newSessionTitle">
-    <div class="session-composer__head"><div class="session-composer__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div><div><h2 id="newSessionTitle">Nueva sesión</h2><p>{% if config["AUTH_PROVIDER"] == "cima" %}Registra una actividad para un aula oficial.{% else %}Registra una actividad para la demostración.{% endif %}</p></div></div>
+    <div class="session-composer__head"><div class="session-composer__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div><div><h2 id="newSessionTitle">Nueva sesión</h2><p>{% if config["AUTH_PROVIDER"] == "cima" %}Registra una actividad para un aula oficial.{% elif config["AUTH_PROVIDER"] == "google" %}La cuenta docente está verificada; falta enlazar las aulas de CIMA.{% else %}Registra una actividad para la demostración.{% endif %}</p></div></div>
     {% if integration_error %}<div class="integration-alert" role="alert"><strong>No se pudieron cargar las aulas.</strong><span>{{ integration_error }}</span></div>{% endif %}
+    {% if integration_notice %}<div class="integration-alert"><strong>Integración pendiente de CIMA</strong><span>{{ integration_notice }}</span></div>{% endif %}
     <form action="{{ url_for('web.create_session') }}" method="post" class="session-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label><span>Título de la actividad</span><input name="title" maxlength="120" required placeholder="Ej. Debate y escucha activa"></label>

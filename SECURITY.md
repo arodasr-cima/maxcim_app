@@ -17,6 +17,8 @@ La cuenta `docente@maxcim.demo` y su contraseña visible son exclusivamente fict
 - El JWT de CIMA se cifra con una clave Fernet independiente y se guarda del lado servidor; nunca se guarda la contraseña ni el token en la cookie.
 - Cada consulta de alumnos vuelve a comprobar que el aula pertenece al docente autenticado.
 - La vista de alumnos descarta DNI, correo y fotografía recibidos desde CIMA.
+- El acceso Google usa Authorization Code, PKCE, `state`, `nonce` y validación del ID token en el servidor.
+- Google se restringe por el claim Workspace `hd` y por una lista exacta de correos docentes; los tokens no se persisten.
 
 ## Antes de un uso institucional
 
@@ -30,6 +32,9 @@ La cuenta `docente@maxcim.demo` y su contraseña visible son exclusivamente fict
 8. Mantén `CIMA_API_VERIFY_TLS=true`; no uses una cuenta personal compartida ni guardes credenciales en `.env`.
 9. Confirma que el claim docente sea estable y único antes de asociarlo a materiales o sesiones privadas.
 10. Ejecuta una migración versionada de las tablas CIMA antes de desactivar `AUTO_CREATE_DB`.
+11. En Google OAuth registra una URI exacta por entorno, usa HTTPS y conserva el secreto únicamente en variables protegidas.
+12. Mantén una fuente autorizada para la lista docente; no trates la pertenencia al dominio como prueba del rol.
+13. Ejecuta una migración versionada para `google_identities` antes de desactivar `AUTO_CREATE_DB`.
 
 El SQL heredado fue retirado del árbol actual. Si alguna revisión confirma que sus versiones históricas contenían datos reales, habrá que purgar el historial Git y coordinar una nueva clonación; este cambio no reescribe historia automáticamente.
 

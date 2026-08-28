@@ -21,6 +21,10 @@ def _official_mode() -> bool:
     return current_app.config["AUTH_PROVIDER"] == "cima"
 
 
+def _google_mode() -> bool:
+    return current_app.config["AUTH_PROVIDER"] == "google"
+
+
 def _official_classrooms() -> list[Classroom]:
     authorization, teacher_id = current_cima_access()
     return get_cima_client(current_app.config).list_classrooms(authorization, teacher_id)
@@ -69,6 +73,8 @@ def index():
 def health():
     if _official_mode():
         mode = "cima"
+    elif _google_mode():
+        mode = "google"
     else:
         mode = "demo" if current_app.config["DEMO_MODE"] else "gemini"
     return {"status": "ok", "mode": mode}
@@ -79,6 +85,7 @@ def health():
 def dashboard():
     now = local_now(current_app)
     integration_error = None
+    classroom_notice = None
     response_status = 200
     if _official_mode():
         try:
@@ -101,6 +108,13 @@ def dashboard():
             if integration_error is None
             else []
         )
+    elif _google_mode():
+        aulas = []
+        stat_cards = []
+        classroom_notice = (
+            "Tu identidad institucional está verificada. Para mostrar aulas y alumnos, "
+            "CIMA debe habilitar un intercambio de tokens de Google con su API."
+        )
     else:
         aulas = CLASSROOMS
         stat_cards = STAT_CARDS
@@ -115,7 +129,9 @@ def dashboard():
             periodo_range=period_label(now),
             demo_mode=current_app.config["DEMO_MODE"],
             official_mode=_official_mode(),
+            google_mode=_google_mode(),
             integration_error=integration_error,
+            classroom_notice=classroom_notice,
         ),
         response_status,
     )
@@ -200,6 +216,7 @@ def sesiones():
         .all()
     )
     integration_error = None
+    integration_notice = None
     if _official_mode():
         try:
             classrooms = [
@@ -214,6 +231,12 @@ def sesiones():
         except CimaAPIError as exc:
             classrooms = []
             integration_error = _cima_error_message(exc)
+    elif _google_mode():
+        classrooms = []
+        integration_notice = (
+            "La cuenta Google está activa, pero CIMA aún no ofrece un intercambio "
+            "documentado para consultar las aulas sin contraseña."
+        )
     else:
         classrooms = [{"value": item["name"], "label": item["name"]} for item in CLASSROOMS]
     return render_template(
@@ -224,6 +247,7 @@ def sesiones():
         classrooms=classrooms,
         demo_mode=current_app.config["DEMO_MODE"],
         integration_error=integration_error,
+        integration_notice=integration_notice,
     )
 
 
@@ -248,6 +272,12 @@ def create_session():
             return redirect(url_for("web.sesiones"))
         official_classroom = available_classrooms.get(classroom)
         classroom_label = official_classroom.description if official_classroom else ""
+    elif _google_mode():
+        flash(
+            "Las aulas oficiales todavía no están disponibles mediante el acceso de Google.",
+            "error",
+        )
+        return redirect(url_for("web.sesiones"))
     else:
         valid_classrooms = {item["name"] for item in CLASSROOMS}
         classroom_label = classroom if classroom in valid_classrooms else ""

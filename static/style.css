@@ -202,6 +202,41 @@ svg {
 .auth-submit:hover { transform: translateY(-1px); box-shadow: 0 16px 36px rgba(47,97,218,.31); }
 .auth-submit svg { width: 19px; height: 19px; }
 
+.google-access { display: grid; gap: 16px; margin-top: 32px; }
+.google-login {
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 32px 1fr 20px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border: 1px solid #c7d2e3;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(10,30,65,.08);
+  color: var(--navy-900);
+  font-weight: 750;
+  text-decoration: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+.google-login:hover { border-color: #93a8c7; box-shadow: 0 12px 30px rgba(10,30,65,.13); transform: translateY(-1px); }
+.google-login:focus-visible { outline: 3px solid rgba(47,97,218,.25); outline-offset: 3px; }
+.google-login__mark {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d7dfeb;
+  border-radius: 50%;
+  color: #244f9f;
+  font-size: 15px;
+  font-weight: 850;
+}
+.google-login svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.google-access__policy { display: grid; gap: 4px; padding: 14px 16px; border: 1px solid #d8e4fb; border-radius: 12px; background: #edf3ff; }
+.google-access__policy strong { color: var(--navy-800); font-size: 12px; }
+.google-access__policy span { color: #66758d; font-size: 11px; overflow-wrap: anywhere; }
+
 .demo-access {
   margin-top: 24px;
   padding: 16px;
