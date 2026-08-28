@@ -15,13 +15,14 @@
 
 <div class="sessions-layout">
   <section class="session-composer" aria-labelledby="newSessionTitle">
-    <div class="session-composer__head"><div class="session-composer__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div><div><h2 id="newSessionTitle">Nueva sesión</h2><p>Registra una actividad para la demostración.</p></div></div>
+    <div class="session-composer__head"><div class="session-composer__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div><div><h2 id="newSessionTitle">Nueva sesión</h2><p>{% if config["AUTH_PROVIDER"] == "cima" %}Registra una actividad para un aula oficial.{% else %}Registra una actividad para la demostración.{% endif %}</p></div></div>
+    {% if integration_error %}<div class="integration-alert" role="alert"><strong>No se pudieron cargar las aulas.</strong><span>{{ integration_error }}</span></div>{% endif %}
     <form action="{{ url_for('web.create_session') }}" method="post" class="session-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label><span>Título de la actividad</span><input name="title" maxlength="120" required placeholder="Ej. Debate y escucha activa"></label>
-      <label><span>Aula</span><select name="classroom" required>{% for classroom in classrooms %}<option>{{ classroom }}</option>{% endfor %}</select></label>
+      <label><span>Aula</span><select name="classroom" required {{ 'disabled' if not classrooms else '' }}>{% if not classrooms %}<option>No hay aulas asignadas</option>{% endif %}{% for classroom in classrooms %}<option value="{{ classroom.value }}">{{ classroom.label }}</option>{% endfor %}</select></label>
       <label><span>Fecha y hora</span><input name="scheduled_at" type="datetime-local" required></label>
-      <button type="submit" class="session-form__submit">Programar sesión<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5"/></svg></button>
+      <button type="submit" class="session-form__submit" {{ 'disabled' if not classrooms else '' }}>Programar sesión<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5"/></svg></button>
     </form>
   </section>
 

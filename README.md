@@ -58,6 +58,35 @@ GOOGLE_API_KEY=tu_clave
 
 El código usará los modelos configurados mediante `GEMINI_MODEL`, `GEMINI_TTS_MODEL` y `GEMINI_TTS_VOICE`.
 
+## Activar el acceso oficial de CIMA
+
+La autenticación institucional es independiente del modo de Gemini. Copia `.env.example` a `.env` y configura:
+
+```dotenv
+AUTH_PROVIDER=cima
+SECRET_KEY=un_valor_aleatorio_largo_y_persistente
+CIMA_TOKEN_ENCRYPTION_KEY=una_clave_fernet_independiente
+CIMA_API_IDENTIFIER=identificador_confirmado_por_cima
+CIMA_API_TEACHER_ID_CLAIM=claim_confirmado_por_cima
+SESSION_COOKIE_SECURE=true
+```
+
+La clave Fernet se genera una vez con:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Después, cada docente escribe su correo institucional o usuario y su contraseña en `/login`. La contraseña se envía a la API CIMA únicamente durante el acceso y no se almacena. El JWT queda cifrado del lado servidor; la cookie solo contiene un identificador aleatorio de sesión.
+
+La integración implementa los cuatro endpoints entregados por CIMA: autenticación con usuario, autenticación con correo, aulas del docente y alumnos del aula. La interfaz solo utiliza `idPerson`, nombre y apellido del alumno; descarta foto, correo institucional y DNI.
+
+El proveedor todavía debe confirmar el nombre exacto del claim estable y único que contiene `idDocente`, además del significado operativo de `identifier`. Fuera de pruebas, MAXCIM no arranca sin ese claim explícito; también falla de forma cerrada si es inexistente y nunca sustituye una caída de CIMA con datos ficticios.
+
+El arranque oficial exige HTTPS, verificación TLS y cookie `Secure`. Para una prueba estrictamente local sobre HTTP se puede activar conscientemente `CIMA_ALLOW_INSECURE_LOCAL_COOKIES=true`; esa excepción no debe usarse en un despliegue compartido.
+
+Con `AUTO_CREATE_DB=true`, SQLAlchemy crea las tres tablas nuevas de integración. Antes de usar `AUTO_CREATE_DB=false` en una base institucional existente, el equipo de despliegue debe versionar y ejecutar la migración equivalente para `cima_identities`, `cima_sessions` y `cima_learning_sessions`.
+
 ## Arquitectura
 
 | Capa | Ubicación |
@@ -67,6 +96,8 @@ El código usará los modelos configurados mediante `GEMINI_MODEL`, `GEMINI_TTS_
 | Rutas web, autenticación y API | `maxcim/routes/` |
 | IA y almacenamiento | `maxcim/services/` |
 | Datos ficticios | `maxcim/demo.py` |
+| Cliente oficial CIMA | `maxcim/services/cima_api.py` |
+| Sesiones CIMA cifradas | `maxcim/services/cima_session.py`, `maxcim/models/cima.py` |
 | Interfaz | `templates/`, `static/` |
 | Pruebas | `tests/` |
 

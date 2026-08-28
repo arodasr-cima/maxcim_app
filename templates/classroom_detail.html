@@ -1,0 +1,46 @@
+{% extends "app_shell.html" %}
+
+{% block title %}{{ classroom.name }} · MAXCIM{% endblock %}
+{% block topbar_title %}Aula{% endblock %}
+
+{% block content %}
+<div class="page-heading classroom-heading">
+  <div>
+    <a class="back-link" href="{{ url_for('web.dashboard') }}">← Volver a mis aulas</a>
+    <div class="page-heading__eyebrow">AULA OFICIAL CIMA</div>
+    <h1 class="page-heading__title">{{ classroom.name }}</h1>
+    <p class="page-heading__subtitle">{{ classroom.grade }} · Estado informado por CIMA: {{ 'true' if classroom.status else 'false' }}</p>
+  </div>
+  <form class="order-form" method="get">
+    <input type="hidden" name="type" value="{{ classroom.type }}">
+    <label for="studentOrder">Ordenar alumnos</label>
+    <select id="studentOrder" name="order">
+      <option value="A" {{ 'selected' if order == 'A' else '' }}>Ascendente</option>
+      <option value="N" {{ 'selected' if order == 'N' else '' }}>Descendente</option>
+    </select>
+    <button type="submit">Aplicar</button>
+  </form>
+</div>
+
+<section class="students-panel" aria-labelledby="studentsTitle">
+  <div class="section-heading">
+    <h2 class="aulas__title" id="studentsTitle">Alumnos del aula</h2>
+    <span class="section-heading__count">{{ students|length }}</span>
+  </div>
+  {% if students %}
+  <div class="student-list">
+    {% for student in students %}
+    <article class="student-row">
+      <div class="student-row__avatar" aria-hidden="true">{{ student.initials }}</div>
+      <div class="student-row__name"><strong>{{ student.full_name }}</strong><span>Alumno matriculado</span></div>
+      <span class="student-row__source">CIMA</span>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state empty-state--wide"><div class="empty-state__icon" aria-hidden="true">AL</div><h3>No hay alumnos en esta aula</h3><p>La API CIMA devolvió una lista vacía.</p></div>
+  {% endif %}
+</section>
+
+<p class="privacy-note">Por privacidad, MAXCIM no muestra ni conserva el DNI, correo o fotografía devueltos por la API.</p>
+{% endblock %}

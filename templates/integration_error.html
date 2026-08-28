@@ -1,0 +1,11 @@
+{% extends "app_shell.html" %}
+
+{% block title %}Conexión CIMA · MAXCIM{% endblock %}
+{% block topbar_title %}Conexión institucional{% endblock %}
+
+{% block content %}
+<section class="integration-error" role="alert">
+  <div class="integration-error__mark" aria-hidden="true">!</div>
+  <div><div class="page-heading__eyebrow">SERVICIO INSTITUCIONAL</div><h1>No se pudo cargar esta aula</h1><p>{{ message }}</p><a href="{{ url_for('web.dashboard') }}">Volver al tablón</a></div>
+</section>
+{% endblock %}

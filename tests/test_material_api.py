@@ -93,6 +93,9 @@ def test_save_download_and_delete_material(logged_client, app):
     downloaded = logged_client.get(f"/media/materials/{material_id}/texto")
     assert downloaded.status_code == 200
     assert b"Texto completo" in downloaded.data
+    # Release the file handle kept open by the test client so the storage
+    # directory can be removed on platforms with mandatory file locking (Windows).
+    downloaded.close()
 
     with app.app_context():
         directory = db.session.get(Material, material_id).storage_directory

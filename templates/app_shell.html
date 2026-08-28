@@ -34,7 +34,12 @@
         </a>
       </nav>
 
-      {% if demo_mode %}
+      {% if config["AUTH_PROVIDER"] == "cima" %}
+      <div class="sidebar__demo sidebar__demo--official">
+        <span aria-hidden="true"></span>
+        <div><strong>Fuente institucional CIMA</strong><small>Sin aulas ficticias</small></div>
+      </div>
+      {% elif demo_mode %}
       <div class="sidebar__demo">
         <span aria-hidden="true"></span>
         <div><strong>Modo demostración</strong><small>Datos ficticios activos</small></div>
@@ -61,7 +66,7 @@
             <span class="profile__caret" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg></span>
           </button>
           <div class="profile__menu" id="profileMenu">
-            <div class="profile__menu-user"><strong>{{ user.display_name }}</strong><span>{{ user.email }}</span></div>
+            <div class="profile__menu-user"><strong>{{ user.display_name }}</strong><span>{% if config["AUTH_PROVIDER"] == "cima" %}Cuenta institucional CIMA{% else %}{{ user.email }}{% endif %}</span></div>
             <div class="profile__menu-divider"></div>
             <form action="{{ url_for('auth.logout') }}" method="post">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
