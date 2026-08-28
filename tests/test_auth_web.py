@@ -133,3 +133,8 @@ def test_security_headers_are_present(logged_client):
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["X-Frame-Options"] == "DENY"
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+
+
+def test_classroom_pages_are_never_cached(logged_client):
+    response = logged_client.get("/aulas/2165?type=N")
+    assert response.headers["Cache-Control"] == "no-store"

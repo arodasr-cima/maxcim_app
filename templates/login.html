@@ -31,14 +31,14 @@
       <div class="auth-card__header">
         <span class="auth-card__kicker">PANEL DOCENTE</span>
         <h2 id="loginTitle">Bienvenido a MAXCIM</h2>
-        <p>Ingresa para explorar la demostración completa.</p>
+        <p>{% if auth_provider == "cima" %}Ingresa con tu cuenta institucional CIMA.{% else %}Ingresa para explorar la demostración completa.{% endif %}</p>
       </div>
 
       <form method="post" class="auth-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label class="auth-field">
-          <span>Correo institucional</span>
-          <input id="email" name="email" type="email" autocomplete="username" required placeholder="docente@colegio.edu">
+          <span>{% if auth_provider == "cima" %}Correo institucional o usuario{% else %}Correo institucional{% endif %}</span>
+          <input id="email" name="identity" type="text" autocomplete="username" required placeholder="docente@colegio.edu">
         </label>
         <label class="auth-field">
           <span>Contraseña</span>
@@ -50,7 +50,7 @@
         </button>
       </form>
 
-      {% if demo_mode %}
+      {% if auth_provider == "demo" and demo_mode %}
       <div class="demo-access" id="demoAccess" data-email="{{ demo_email }}" data-password="{{ demo_password }}">
         <div class="demo-access__top">
           <span class="demo-access__dot" aria-hidden="true"></span>
@@ -64,7 +64,9 @@
       </div>
       {% endif %}
 
-      <p class="auth-card__foot">Datos completamente ficticios para fines demostrativos.</p>
+      <p class="auth-card__foot">
+        {% if auth_provider == "cima" %}La contraseña se envía directamente a CIMA y MAXCIM no la almacena.{% else %}Datos completamente ficticios para fines demostrativos.{% endif %}
+      </p>
     </div>
   </section>
 </main>

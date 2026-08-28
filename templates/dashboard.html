@@ -8,7 +8,7 @@
   <div>
     <div class="page-heading__eyebrow">RESUMEN GENERAL</div>
     <h1 class="page-heading__title">Panel docente</h1>
-    <p class="page-heading__subtitle">Indicadores sociocomunicativos de la demostración académica.</p>
+    <p class="page-heading__subtitle">{% if official_mode %}Aulas asignadas por el servicio oficial de CIMA.{% else %}Indicadores sociocomunicativos de la demostración académica.{% endif %}</p>
   </div>
   <div class="content__date">
     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="15" rx="2"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17"/></svg>
@@ -16,7 +16,7 @@
   </div>
 </div>
 
-<section class="stat-grid" aria-label="Indicadores generales">
+{% if stat_cards %}<section class="stat-grid {{ 'stat-grid--official' if official_mode else '' }}" aria-label="Indicadores generales">
   {% for card in stat_cards %}
   <article class="stat-card" style="--accent: {{ card.color }}">
     <div class="stat-card__icon" aria-hidden="true">
@@ -28,12 +28,32 @@
     <div class="stat-card__copy"><div class="stat-card__value">{{ card.value }}</div><div class="stat-card__label">{{ card.label }}</div></div>
   </article>
   {% endfor %}
-</section>
+</section>{% endif %}
 
 <section class="aulas" aria-labelledby="classroomsTitle">
   <div class="section-heading"><h2 class="aulas__title" id="classroomsTitle">Mis aulas</h2><span class="section-heading__count">{{ aulas|length }}</span></div>
+  {% if integration_error %}
+  <div class="integration-alert" role="alert"><strong>No se pudieron actualizar las aulas.</strong><span>{{ integration_error }}</span></div>
+  {% endif %}
   <div class="aulas__grid">
+    {% if official_mode and not aulas and not integration_error %}
+    <div class="empty-state empty-state--wide"><div class="empty-state__icon" aria-hidden="true">AU</div><h3>No hay aulas asignadas</h3><p>Cuando CIMA asigne aulas a tu cuenta, aparecerán aquí.</p></div>
+    {% endif %}
     {% for aula in aulas %}
+    {% if official_mode %}
+    <a class="aula-card aula-card--link" href="{{ url_for('web.classroom_detail', classroom_id=aula.id, type=aula.type) }}">
+      <div class="aula-card__header">
+        <div class="aula-card__avatar" style="background: {{ aula.avatar_bg }}">{{ aula.initials }}</div>
+        <div class="aula-card__meta"><div class="aula-card__name">{{ aula.name }}</div><div class="aula-card__grade">{{ aula.grade }}</div></div>
+        <span class="aula-card__arrow" aria-hidden="true">→</span>
+      </div>
+      <div class="aula-card__badges">
+        <span class="badge badge--score">Tipo {{ aula.type }}</span>
+        <span class="badge badge--neutral">Estado API: {{ 'true' if aula.status else 'false' }}</span>
+      </div>
+      <div class="aula-card__official-summary"><span>Consultar alumnos</span><strong>Entrar al aula</strong></div>
+    </a>
+    {% else %}
     <article class="aula-card">
       <div class="aula-card__header">
         <div class="aula-card__avatar" style="background: {{ aula.avatar_bg }}">{{ aula.initials }}</div>
@@ -46,6 +66,7 @@
         {% endfor %}
       </div>
     </article>
+    {% endif %}
     {% endfor %}
   </div>
 </section>
