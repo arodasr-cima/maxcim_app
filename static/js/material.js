@@ -9,7 +9,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const list = document.getElementById("materialList");
   const search = document.getElementById("materialSearch");
-  const skillFilter = document.getElementById("materialSkillFilter");
+  const typeFilter = document.getElementById("materialTypeFilter");
   const cards = Array.from(list.querySelectorAll(".material-card"));
 
   cards.forEach((card) => {
@@ -25,17 +25,66 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function applyFilters() {
     const query = search.value.trim().toLowerCase();
-    const skill = skillFilter.value;
+    const tipo = typeFilter.value;
 
     cards.forEach((card) => {
-      const matchesSkill = skill === "Todas las habilidades" || !card.dataset.skill || card.dataset.skill === skill;
+      const matchesType = !tipo || card.dataset.tipo === tipo;
       const matchesQuery = !query || card.dataset.title.includes(query);
-      card.classList.toggle("is-hidden", !(matchesSkill && matchesQuery));
+      card.classList.toggle("is-hidden", !(matchesType && matchesQuery));
     });
   }
 
   search.addEventListener("input", applyFilters);
-  skillFilter.addEventListener("change", applyFilters);
+  typeFilter.addEventListener("change", applyFilters);
+
+  // Delete flow: click "Eliminar" on a card -> confirm -> DELETE -> reload
+  const deleteOverlay = document.getElementById("deleteOverlay");
+  const deleteMaterialName = document.getElementById("deleteMaterialName");
+  const deleteCancelBtn = document.getElementById("deleteCancelBtn");
+  const deleteConfirmBtn = document.getElementById("deleteConfirmBtn");
+  let pendingDeleteId = null;
+
+  cards.forEach((card) => {
+    const deleteBtn = card.querySelector(".material-card__delete");
+    if (!deleteBtn) return;
+    deleteBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      pendingDeleteId = deleteBtn.dataset.materialId;
+      deleteMaterialName.textContent = deleteBtn.dataset.materialName || "este material";
+      deleteOverlay.classList.add("is-open");
+    });
+  });
+
+  function closeDeleteOverlay() {
+    deleteOverlay.classList.remove("is-open");
+    pendingDeleteId = null;
+  }
+
+  deleteCancelBtn.addEventListener("click", closeDeleteOverlay);
+
+  deleteConfirmBtn.addEventListener("click", async () => {
+    if (!pendingDeleteId) return;
+
+    const originalLabel = deleteConfirmBtn.textContent;
+    deleteConfirmBtn.disabled = true;
+    deleteConfirmBtn.textContent = "Eliminando...";
+
+    try {
+      const response = await authorizedFetch(`/api/material/${pendingDeleteId}`, {
+        method: "DELETE",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo eliminar el material.");
+      }
+      window.location.reload();
+    } catch (error) {
+      alert(error.message || "No se pudo eliminar el material.");
+      deleteConfirmBtn.disabled = false;
+      deleteConfirmBtn.textContent = originalLabel;
+      closeDeleteOverlay();
+    }
+  });
 
   // Upload flow: dropzone -> loading -> results
   const uploadOpenBtn = document.getElementById("uploadOpenBtn");
@@ -61,13 +110,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const storyCancelBtn = document.getElementById("storyCancelBtn");
   const storyForm = document.getElementById("storyForm");
   const storyGenerateBtn = document.getElementById("storyGenerateBtn");
-  const sentenceOverlay = document.getElementById("sentenceOverlay");
-  const sentenceOpenBtn = document.getElementById("sentenceOpenBtn");
-  const sentenceCancelBtn = document.getElementById("sentenceCancelBtn");
-  const sentenceForm = document.getElementById("sentenceForm");
-  const sentenceSaveBtn = document.getElementById("sentenceSaveBtn");
+  const uploadTypeCuentoBtn = document.getElementById("uploadTypeCuentoBtn");
+  const uploadTypeOracionBtn = document.getElementById("uploadTypeOracionBtn");
+  const resultTranscribedLabel = document.getElementById("resultTranscribedLabel");
+  const resultTranscribedBlock = document.getElementById("resultTranscribedBlock");
+  const resultSummaryBlock = document.getElementById("resultSummaryBlock");
+  const resultSentencesBlock = document.getElementById("resultSentencesBlock");
+  const resultSentencesList = document.getElementById("resultSentencesList");
+  const resultAudioColumn = document.getElementById("resultAudioColumn");
+  const resultQuestionsColumn = document.getElementById("resultQuestionsColumn");
 
   let selectedFile = null;
+  let currentUploadType = "cuento";
+  let currentResultType = "cuento";
   let currentMaterialTitle = "";
   let audioFullReady = false;
   let audioSummaryReady = false;
@@ -78,12 +133,42 @@ document.addEventListener("DOMContentLoaded", () => {
   let audioFullDurationSeconds = null;
   let audioSummaryDurationSeconds = null;
 
+  function setUploadType(type) {
+    currentUploadType = type;
+    const isOracion = type === "oracion";
+    uploadTypeCuentoBtn.classList.toggle("is-active", !isOracion);
+    uploadTypeOracionBtn.classList.toggle("is-active", isOracion);
+    uploadTypeCuentoBtn.setAttribute("aria-selected", String(!isOracion));
+    uploadTypeOracionBtn.setAttribute("aria-selected", String(isOracion));
+    uploadTitleInput.placeholder = isOracion ? "Título del material" : "Título del cuento";
+    updateUploadButtonState();
+  }
+
+  // Ajusta la pantalla de revisión de contenido extraído por IA según el
+  // tipo: las oraciones solo revisan el texto, sin resumen, audios ni
+  // preguntas (eso es exclusivo de los cuentos).
+  function configureResultModalForType(type) {
+    currentResultType = type;
+    const isOracion = type === "oracion";
+    resultTranscribedLabel.textContent = "Texto completo";
+    resultTranscribedBlock.hidden = isOracion;
+    resultSummaryBlock.hidden = isOracion;
+    resultSentencesBlock.hidden = !isOracion;
+    resultAudioColumn.hidden = isOracion;
+    resultQuestionsColumn.hidden = isOracion;
+    resultDoneBtn.textContent = isOracion ? "Aprobar y guardar oraciones" : "Aprobar y guardar";
+  }
+
+  function updateUploadButtonState() {
+    uploadStartBtn.disabled = !selectedFile;
+  }
+
   function resetUploadForm() {
     selectedFile = null;
     uploadTitleInput.value = "";
     uploadFileInput.value = "";
     dropzoneText.textContent = "Arrastra el archivo aquí o haz clic para seleccionar";
-    uploadStartBtn.disabled = true;
+    setUploadType("cuento");
   }
 
   function openUpload() {
@@ -99,11 +184,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!file) return;
     selectedFile = file;
     dropzoneText.textContent = file.name;
-    uploadStartBtn.disabled = false;
+    updateUploadButtonState();
   }
 
   uploadOpenBtn.addEventListener("click", openUpload);
   uploadCancelBtn.addEventListener("click", closeUpload);
+  uploadTypeCuentoBtn.addEventListener("click", () => setUploadType("cuento"));
+  uploadTypeOracionBtn.addEventListener("click", () => setUploadType("oracion"));
 
   dropzone.addEventListener("dragover", (event) => {
     event.preventDefault();
@@ -138,17 +225,38 @@ document.addEventListener("DOMContentLoaded", () => {
     loadingCloseBtn.hidden = false;
   }
 
+  async function saveSentenceMaterial(sentences) {
+    const formData = new FormData();
+    formData.append("tipo_material", "oracion");
+    formData.append("title", currentMaterialTitle);
+    formData.append("sentences_json", JSON.stringify(sentences));
+
+    const response = await authorizedFetch("/api/material/save", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "No se pudieron guardar las oraciones.");
+    }
+  }
+
   uploadStartBtn.addEventListener("click", async () => {
     if (!selectedFile) return;
 
     currentMaterialTitle = uploadTitleInput.value.trim() || selectedFile.name;
+    const uploadType = currentUploadType;
 
     const formData = new FormData();
     formData.append("file", selectedFile);
     formData.append("title", currentMaterialTitle);
+    formData.append("tipo_material", uploadType);
 
     closeUpload();
     showLoading();
+    if (uploadType === "oracion") {
+      loadingText.textContent = "Identificando las oraciones con IA...";
+    }
 
     try {
       const response = await authorizedFetch("/api/material/process", {
@@ -161,11 +269,18 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error(data.error || "No se pudo procesar el documento.");
       }
 
-      resultTranscribedText.textContent = data.transcribed_text;
-      resultSummaryText.textContent = data.summary_text;
       currentTargetDurationMinutes = null;
-      resultSubtitle.textContent = "A partir del documento original · revisa el contenido antes de aprobar";
+      configureResultModalForType(uploadType);
       resetResultState();
+
+      if (uploadType === "oracion") {
+        renderSentences(data.sentences || []);
+        resultSubtitle.textContent = "A partir del documento original · revisa las oraciones identificadas antes de aprobar";
+      } else {
+        resultTranscribedText.textContent = data.transcribed_text;
+        resultSummaryText.textContent = data.summary_text;
+        resultSubtitle.textContent = "A partir del documento original · revisa el contenido antes de aprobar";
+      }
 
       loadingOverlay.classList.remove("is-open");
       resultOverlay.classList.add("is-open");
@@ -190,42 +305,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   storyCancelBtn.addEventListener("click", () => {
     storyOverlay.classList.remove("is-open");
-  });
-
-  sentenceOpenBtn.addEventListener("click", () => {
-    sentenceForm.reset();
-    sentenceOverlay.classList.add("is-open");
-  });
-
-  sentenceCancelBtn.addEventListener("click", () => {
-    sentenceOverlay.classList.remove("is-open");
-  });
-
-  sentenceForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    sentenceSaveBtn.disabled = true;
-    sentenceSaveBtn.textContent = "Guardando...";
-    const formData = new FormData();
-    formData.append("tipo_material", "oracion");
-    formData.append("title", document.getElementById("sentenceTitle").value.trim());
-    formData.append("sentences_text", document.getElementById("sentenceText").value.trim());
-    try {
-      const response = await authorizedFetch("/api/material/save", {
-        method: "POST",
-        body: formData,
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "No se pudieron guardar las oraciones.");
-      }
-      sentenceOverlay.classList.remove("is-open");
-      window.location.reload();
-    } catch (error) {
-      alert(error.message || "No se pudieron guardar las oraciones.");
-    } finally {
-      sentenceSaveBtn.disabled = false;
-      sentenceSaveBtn.textContent = "Guardar oraciones";
-    }
   });
 
   storyForm.addEventListener("submit", async (event) => {
@@ -260,6 +339,7 @@ document.addEventListener("DOMContentLoaded", () => {
       currentTargetDurationMinutes = data.target_duration_minutes;
       resultTranscribedText.textContent = data.story;
       resultSummaryText.textContent = data.summary;
+      configureResultModalForType("cuento");
       resultSubtitle.textContent = `Creado para ${data.target_duration_minutes} min · ${data.word_count} palabras · la miss puede editarlo antes de aprobar`;
       resetResultState();
       loadingOverlay.classList.remove("is-open");
@@ -273,9 +353,30 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   resultDoneBtn.addEventListener("click", async () => {
-    const transcribedText = resultTranscribedText.textContent.trim();
-    const summaryText = resultSummaryText.textContent.trim();
+    if (currentResultType === "oracion") {
+      const sentences = getSentencesData();
+      if (!sentences.length) {
+        alert("No hay oraciones para guardar.");
+        return;
+      }
+      const originalLabel = resultDoneBtn.textContent;
+      resultDoneBtn.disabled = true;
+      resultDoneBtn.textContent = "Guardando...";
+      try {
+        await saveSentenceMaterial(sentences);
+        resultOverlay.classList.remove("is-open");
+        window.location.reload();
+      } catch (error) {
+        alert(error.message || "No se pudieron guardar las oraciones.");
+        resultDoneBtn.disabled = false;
+        resultDoneBtn.textContent = originalLabel;
+      }
+      return;
+    }
 
+    const transcribedText = resultTranscribedText.textContent.trim();
+
+    const summaryText = resultSummaryText.textContent.trim();
     const questionsData = getQuestionsData();
 
     if (!transcribedText || !summaryText) {
@@ -368,6 +469,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   resultTranscribedText.addEventListener("input", () => {
     if (audioFullReady) invalidateAudio(resultAudioFull, "full");
+    updateDoneButtonState();
   });
   resultSummaryText.addEventListener("input", () => {
     if (audioSummaryReady) invalidateAudio(resultAudioSummary, "summary");
@@ -450,7 +552,9 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   function updateDoneButtonState() {
-    resultDoneBtn.disabled = !(audioFullReady && audioSummaryReady && questionsReady);
+    resultDoneBtn.disabled = currentResultType === "oracion"
+      ? getSentencesData().length === 0
+      : !(audioFullReady && audioSummaryReady && questionsReady);
   }
 
   function resetResultState() {
@@ -473,8 +577,47 @@ document.addEventListener("DOMContentLoaded", () => {
     resultAudioFullMeta.textContent = "";
     resultAudioSummaryMeta.textContent = "";
     questionsResult.innerHTML = "";
+    resultSentencesList.innerHTML = "";
 
     updateDoneButtonState();
+  }
+
+  // Sentence review: one editable line per sentence the IA identified. The
+  // teacher can fix wording or clear a line to drop it, mirroring how the
+  // story questions are reviewed before saving.
+  function renderSentences(sentences) {
+    resultSentencesList.innerHTML = "";
+    (sentences || []).forEach((sentence) => {
+      const item = document.createElement("li");
+      item.className = "sentences-review__item";
+
+      const editable = document.createElement("div");
+      editable.className = "sentences-review__editable";
+      editable.contentEditable = "true";
+      editable.spellcheck = true;
+      editable.textContent = typeof sentence === "string" ? sentence : "";
+      editable.addEventListener("input", updateDoneButtonState);
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "sentences-review__remove";
+      remove.title = "Quitar esta oración";
+      remove.textContent = "✕";
+      remove.addEventListener("click", () => {
+        item.remove();
+        updateDoneButtonState();
+      });
+
+      item.append(editable, remove);
+      resultSentencesList.appendChild(item);
+    });
+    updateDoneButtonState();
+  }
+
+  function getSentencesData() {
+    return Array.from(resultSentencesList.querySelectorAll(".sentences-review__editable"))
+      .map((el) => el.textContent.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
   }
 
   // Question generation: request N questions per type and list them, editable, by category

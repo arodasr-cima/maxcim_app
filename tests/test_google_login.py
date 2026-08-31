@@ -1,5 +1,7 @@
+import time
 from urllib.parse import parse_qs, urlparse
 
+import jwt
 import pytest
 from cryptography.fernet import Fernet
 
@@ -240,21 +242,28 @@ def test_institutional_api_maps_google_token_to_an_active_teacher(monkeypatch):
         classrooms_path="/v1/teachers/{teacher_id}/classrooms",
         student_path="/v1/students/{person_id}",
         service_token="service-token",
+        id_system=21,
     )
     captured = {}
+    now = int(time.time())
+    # CIMA no firma con una clave que MAXCIM conozca: se decodifica sin
+    # verificar la firma, así que un JWT firmado con cualquier clave alcanza
+    # para probar el parseo de claims.
+    fake_jwt = jwt.encode(
+        {
+            "idPersona": "70385",
+            "nombres": "RODAS ROSALES OSCAR ALEXIS",
+            "grupoPersonal": "DOCENTE COLEGIO",
+            "iat": now,
+            "exp": now + 3600,
+        },
+        key="unused-test-key-padded-to-32-bytes!!",
+        algorithm="HS256",
+    )
 
     def fake_request(method, path, *, token=None, payload=None):
         captured.update(method=method, path=path, token=token, payload=payload)
-        return {
-            "access_token": "institutional-token",
-            "expires_in": 3600,
-            "teacher": {
-                "id": "DOC-1",
-                "display_name": "Docente Institucional",
-                "role": "DOCENTE",
-                "status": "ACTIVO",
-            },
-        }
+        return {"content": {"token": f"Bearer {fake_jwt}"}}
 
     monkeypatch.setattr(client, "_request", fake_request)
     teacher = client.authenticate_google("verified-id-token")
@@ -264,5 +273,7 @@ def test_institutional_api_maps_google_token_to_an_active_teacher(monkeypatch):
         "token": None,
         "payload": {"id_token": "verified-id-token"},
     }
-    assert teacher.institutional_id == "DOC-1"
-    assert teacher.access_token == "institutional-token"
+    assert teacher.institutional_id == "70385"
+    assert teacher.display_name == "Rodas Rosales Oscar Alexis"
+    assert teacher.role == "DOCENTE"
+    assert teacher.access_token == fake_jwt

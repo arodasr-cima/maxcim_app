@@ -1,3 +1,6 @@
+import json
+import os
+
 from extensions import db
 from models import Interaccion, Material, TIPO_CUENTO
 
@@ -110,17 +113,20 @@ def test_student_detail_shows_question_answer_and_robot_appraisal(app, client):
     assert "¿Qué hizo Luna para ayudar?" in html
     assert "Escuchó a sus amigos." in html
     assert "Respuesta clara y completa." in html
+    # El audio de la respuesta se muestra debajo del texto.
+    assert '<audio class="interaction-answer__audio"' in html
+    assert "/static/fixtures/respuesta.wav" in html
     assert "El bosque que escucha" in html
 
 
-def test_saving_sentence_material_uses_only_path_preguntas(app, client):
-    sentence_text = "La luna brilla.\nEl río canta."
+def test_saving_sentence_material_writes_a_json_list(app, client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "static_folder", str(tmp_path))
     response = client.post(
         "/api/material/save",
         data={
             "tipo_material": "oracion",
             "title": "Oraciones de práctica",
-            "sentences_text": sentence_text,
+            "sentences_json": json.dumps(["La luna brilla.", "El río canta."]),
         },
     )
 
@@ -128,8 +134,32 @@ def test_saving_sentence_material_uses_only_path_preguntas(app, client):
     with app.app_context():
         material = db.session.get(Material, response.get_json()["material_id"])
         assert material.tipo_material == "oracion"
-        assert material.path_preguntas == sentence_text
+        assert material.path_preguntas.startswith("uploads/")
+        assert material.path_preguntas.endswith("/oraciones.json")
         assert material.path_texto is None
         assert material.path_texto_resumen is None
         assert material.path_audio is None
         assert material.path_audio_resumen is None
+
+        stored = os.path.join(app.static_folder, material.path_preguntas)
+        with open(stored, "r", encoding="utf-8") as f:
+            assert json.load(f) == ["La luna brilla.", "El río canta."]
+
+
+def test_saving_sentence_material_still_accepts_raw_text(app, client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "static_folder", str(tmp_path))
+    response = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion",
+            "title": "Oraciones heredadas",
+            "sentences_text": "La luna brilla.\nEl río canta.",
+        },
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        material = db.session.get(Material, response.get_json()["material_id"])
+        stored = os.path.join(app.static_folder, material.path_preguntas)
+        with open(stored, "r", encoding="utf-8") as f:
+            assert json.load(f) == ["La luna brilla.", "El río canta."]

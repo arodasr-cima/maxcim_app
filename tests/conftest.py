@@ -40,7 +40,7 @@ class FakeInstitutionalClient:
             period="Periodo activo",
         )]
 
-    def list_classroom_students(self, access_token, classroom_id):
+    def list_classroom_students(self, access_token, classroom_id, section_type=None):
         assert classroom_id == "AULA-REAL-1"
         return [
             ClassroomStudent("ALU-TEST-1", "Pérez Flores", "Ana Lucía"),
