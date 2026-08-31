@@ -55,6 +55,24 @@ def test_registrar_interaccion_creates_a_record(app, client):
         assert Interaccion.query.count() == 1
 
 
+def test_registrar_interaccion_without_material_is_a_conversation(app, client):
+    response = register_interaction(client, None)
+    assert response.status_code == 201
+    data = response.get_json()
+    assert data["id_material"] is None
+
+    with app.app_context():
+        interaccion = Interaccion.query.one()
+        assert interaccion.id_material is None
+        assert interaccion.material is None
+
+
+def test_registrar_interaccion_still_rejects_a_non_numeric_material(client):
+    response = register_interaction(client, "abc")
+    assert response.status_code == 400
+    assert "id_material" in response.get_json()["error"]
+
+
 def test_registrar_interaccion_requires_all_fields(app, client):
     with app.app_context():
         material_id = seed_material().id
@@ -166,6 +184,7 @@ def test_get_cuento_material_round_trips_through_robot_api(
         "tipo_material": TIPO_CUENTO,
         "fecha_subido": fecha_subido,
         "fk_user": TEST_TEACHER_ID,
+        "docente": None,
         "texto_completo_url": "http://localhost/static/material/texto.txt",
         "texto_resumen_url": "http://localhost/static/material/resumen.txt",
         "audio_completo_url": "http://localhost/static/material/audio.wav",
@@ -176,12 +195,13 @@ def test_get_cuento_material_round_trips_through_robot_api(
 
 
 def test_get_oracion_material_round_trips_through_robot_api(app, client):
-    sentence_text = "La luna brilla.\nEl río canta."
+    # A legacy row stores plain text in path_preguntas; the robot API still
+    # serves it as a list, split into individual sentences on the fly.
     with app.app_context():
         material = seed_material(
             nombre_material="Oraciones de práctica",
             tipo_material=TIPO_ORACION,
-            path_preguntas=sentence_text,
+            path_preguntas="La luna brilla.\nEl río canta.",
             path_texto=None,
             path_texto_resumen=None,
             path_audio=None,
@@ -198,7 +218,9 @@ def test_get_oracion_material_round_trips_through_robot_api(app, client):
         "tipo_material": TIPO_ORACION,
         "fecha_subido": fecha_subido,
         "fk_user": TEST_TEACHER_ID,
-        "oraciones": sentence_text,
+        "docente": None,
+        "oraciones": ["La luna brilla.", "El río canta."],
+        "oraciones_url": None,
         "texto_completo_url": None,
         "texto_resumen_url": None,
         "audio_completo_url": None,
@@ -206,6 +228,26 @@ def test_get_oracion_material_round_trips_through_robot_api(app, client):
         "preguntas_url": None,
         "preguntas": [],
     }
+
+
+def test_get_oracion_material_serves_the_json_list_written_on_save(
+    app, client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(app, "static_folder", str(tmp_path))
+    save = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": TIPO_ORACION,
+            "title": "Oraciones nuevas",
+            "sentences_json": json.dumps(["Hoy llueve.", "Mañana saldrá el sol."]),
+        },
+    )
+    assert save.status_code == 200
+    material_id = save.get_json()["material_id"]
+
+    body = client.get(f"/api/materials/{material_id}").get_json()
+    assert body["oraciones"] == ["Hoy llueve.", "Mañana saldrá el sol."]
+    assert body["oraciones_url"].endswith("/oraciones.json")
 
 
 def test_material_save_requires_reviewed_expected_answers(client):

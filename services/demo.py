@@ -86,7 +86,7 @@ class DemoInstitutionalClient:
         return list(DEMO_CLASSROOMS)
 
     def list_classroom_students(
-        self, access_token: str, classroom_id: str
+        self, access_token: str, classroom_id: str, section_type: str | None = None
     ) -> list[ClassroomStudent]:
         return list(DEMO_CLASSROOM_STUDENTS.get(classroom_id, ()))
 
@@ -185,6 +185,31 @@ def create_demo_questions(text: str, counts: dict[str, int]) -> dict[str, list[d
             for index in range(count)
         ]
     return result
+
+
+def extract_demo_sentences(file_storage) -> list[str]:
+    """Deterministic sentence segmentation for DEMO_MODE: reuses the demo
+    document text and splits it by line breaks and sentence-final punctuation."""
+    text, _summary = process_demo_document(file_storage)
+    sentences: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        sentences.extend(
+            part.strip()
+            for part in re.split(r"(?<=[.!?…])\s+", line)
+            if part.strip()
+        )
+    # De-dupe keeping order, so a short demo file still yields a tidy list.
+    seen: set[str] = set()
+    unique = []
+    for sentence in sentences:
+        key = sentence.casefold()
+        if key not in seen:
+            seen.add(key)
+            unique.append(sentence)
+    return unique
 
 
 def process_demo_document(file_storage) -> tuple[str, str]:

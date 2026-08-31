@@ -6,7 +6,7 @@
 <div class="teacher-view">
   <header class="page-heading teacher-heading">
     <div>
-      <p class="page-heading__eyebrow">Mis aulas <span aria-hidden="true">/</span> Avance del aula</p>
+      <p class="page-heading__eyebrow"><a href="{{ url_for('dashboard') }}">Mis aulas</a> <span aria-hidden="true">/</span> Avance del aula</p>
       <h1 class="sesiones__title">{{ classroom.name }}</h1>
       <p class="page-heading__description">Revisa los aciertos y oportunidades de mejora de cada estudiante.</p>
     </div>
@@ -46,12 +46,13 @@
               {% if row.interactions %}
               <ol class="interaction-results" aria-label="Resultados de {{ row.student.full_name }}">
                 {% for interaction in row.interactions %}
-                <li title="{{ interaction.material.nombre_material }}: {{ interaction.pregunta }}">
+                {% set material_label = interaction.material.nombre_material if interaction.material else "Conversación" %}
+                <li title="{{ material_label }}: {{ interaction.pregunta }}">
                   <span class="answer-mark answer-mark--{{ 'correct' if interaction.rpta_correcta else 'incorrect' }}">
                     <span aria-hidden="true">{{ '✓' if interaction.rpta_correcta else '✕' }}</span>
                     <span class="visually-hidden">Respuesta {{ 'correcta' if interaction.rpta_correcta else 'incorrecta' }}:</span>
                   </span>
-                  <span class="interaction-results__material">{{ interaction.material.nombre_material }}</span>
+                  <span class="interaction-results__material{{ ' interaction-results__material--conversation' if not interaction.material }}">{{ material_label }}</span>
                 </li>
                 {% endfor %}
               </ol>

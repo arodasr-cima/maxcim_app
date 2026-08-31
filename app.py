@@ -38,6 +38,7 @@ from services.demo import (
     create_demo_questions,
     create_demo_story,
     create_demo_wav,
+    extract_demo_sentences,
     process_demo_document,
 )
 from services.google_oauth import GoogleOIDCClient, GoogleOIDCError
@@ -97,8 +98,19 @@ EXTRACT_PROMPT = (
     "interpretar ni agregar comentarios. Responde solo con el texto extraído."
 )
 SUMMARY_PROMPT_TEMPLATE = (
-    "Resume el siguiente texto en 2 o 3 oraciones, en español, de forma clara "
+    "Genera un resumen del siguiente texto, reduce el contenido de tal manera que no se pierda"
+    "el sentido literal, en español, de forma clara "
     "y concisa:\n\n{text}"
+)
+SENTENCES_PROMPT = (
+    "Este documento contiene una lista de oraciones que una docente quiere usar "
+    "como material de práctica de lectura oral. Identifica cada oración individual "
+    "tal como la docente la escribió: no resumas, no reformules, no inventes "
+    "oraciones nuevas y no unas ni dividas oraciones. Corrige únicamente errores "
+    "evidentes de espaciado o de salto de línea. Ignora títulos, numeración, "
+    "viñetas y encabezados que no sean parte de una oración. Responde únicamente "
+    'con un JSON de la forma {"oraciones": ["primera oración", "segunda oración"]}, '
+    "en el mismo orden del documento y sin texto fuera del JSON."
 )
 
 QUESTION_TYPES = ["literales", "inferenciales", "criticas"]
@@ -158,7 +170,8 @@ TTS_MAX_WORDS_PER_MINUTE = 170
 # short enough that the voice stays consistent from start to finish.
 TTS_CHUNK_MAX_CHARS = 700
 TTS_STYLE_INSTRUCTION = (
-    "Narra el siguiente fragmento en español latinoamericano, en voz alta, con un tono alegre, "
+    "Narra el siguiente fragmento en español latinoamericano, en voz alta, con un tono super alegre," \
+    "desbordante de energia, como si estuvieras riendo a carcajadas, "
     "natural y propio de un cuento infantil. Mantén EXACTAMENTE la misma "
     "tonalidad, ritmo, energía, volumen y claridad de principio a fin de este "
     "fragmento, sin que la voz decaiga, se apague, acelere o pierda entonación "
@@ -170,8 +183,13 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {".doc", ".docx", ".pdf", ".txt"}
 MAX_SOURCE_TEXT_CHARS = 120_000
 MAX_SUMMARY_CHARS = 20_000
-# Las oraciones se guardan como texto en `path_preguntas` (ver models.py).
+# Las oraciones se guardan como una lista JSON en `uploads/<id>/oraciones.json`,
+# igual que las preguntas de un cuento; `path_preguntas` guarda esa ruta (ver
+# models.py). Los registros antiguos con texto plano en `path_preguntas` se
+# siguen leyendo dividiéndolos en oraciones al vuelo.
 MAX_SENTENCES_CHARS = 20_000
+MAX_SENTENCES_PER_MATERIAL = 120
+MAX_SENTENCE_CHARS = 600
 MAX_TTS_TEXT_CHARS = 30_000
 MAX_TRANSCRIPT_CHARS = 20_000
 MAX_OBJECTIVE_CHARS = 2_000
@@ -198,6 +216,20 @@ QUESTION_CONFIGURATION = [
     {"key": "inferenciales", "label": "Inferenciales", "default": 2},
     {"key": "criticas", "label": "Críticas", "default": 1},
 ]
+
+# Recursos descargables de un `cuento` vía la API del robot. Cada entrada mapea
+# el segmento de la URL (/api/materials/<id>/<recurso>) a la columna de
+# `Material` con la ruta relativa bajo static/, el Content-Type de la descarga y
+# el nombre de archivo sugerido. Una `oracion` solo expone `oraciones` (ver
+# download_material_resource).
+# El framework añade `; charset=utf-8` a los tipos text/* y application/json.
+MATERIAL_DOWNLOADS = {
+    "texto": ("path_texto", "text/plain", "texto.txt"),
+    "resumen": ("path_texto_resumen", "text/plain", "resumen.txt"),
+    "audio": ("path_audio", "audio/wav", "audio.wav"),
+    "audio-resumen": ("path_audio_resumen", "audio/wav", "audio_resumen.wav"),
+    "preguntas": ("path_preguntas", "application/json", "preguntas.json"),
+}
 
 
 def extract_and_summarize(file_storage) -> tuple[str, str]:
@@ -231,6 +263,76 @@ def extract_and_summarize(file_storage) -> tuple[str, str]:
         summary_text = summary_response.text.strip()
 
         return transcribed_text, summary_text
+    finally:
+        if uploaded_file is not None:
+            try:
+                gemini_client.files.delete(name=uploaded_file.name)
+            except Exception:
+                pass
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def normalize_sentences(raw_sentences) -> list[str]:
+    """Cleans a raw list of sentence strings: trims, drops empties and
+    duplicates, and caps both the per-sentence length and the total count."""
+    seen: set[str] = set()
+    sentences: list[str] = []
+    for raw in raw_sentences or []:
+        sentence = " ".join(str(raw or "").split()).strip()
+        if not sentence:
+            continue
+        sentence = sentence[:MAX_SENTENCE_CHARS].strip()
+        key = sentence.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        sentences.append(sentence)
+        if len(sentences) >= MAX_SENTENCES_PER_MATERIAL:
+            break
+    return sentences
+
+
+def split_text_into_sentences(text: str) -> list[str]:
+    """Best-effort sentence segmentation for plain text: splits on line breaks
+    first (the docente usually writes one sentence per line) and then on
+    sentence-final punctuation."""
+    pieces: list[str] = []
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pieces.extend(part for part in re.split(r"(?<=[.!?…])\s+", line) if part.strip())
+    return normalize_sentences(pieces)
+
+
+def extract_sentences(file_storage) -> list[str]:
+    """Uploads the file to Gemini and asks it to identify each individual
+    sentence the teacher listed, mirroring extract_and_summarize."""
+    filename = file_storage.filename or "documento"
+    mime_type = file_storage.mimetype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    suffix = os.path.splitext(filename)[1]
+
+    tmp_path = None
+    uploaded_file = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            file_storage.save(tmp)
+            tmp_path = tmp.name
+
+        uploaded_file = gemini_client.files.upload(
+            file=tmp_path,
+            config={"mime_type": mime_type, "display_name": filename},
+        )
+
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[uploaded_file, SENTENCES_PROMPT],
+            config=types.GenerateContentConfig(response_mime_type="application/json"),
+        )
+        data = json.loads(response.text)
+        raw_sentences = data.get("oraciones") if isinstance(data, dict) else data
+        return normalize_sentences(raw_sentences if isinstance(raw_sentences, list) else [])
     finally:
         if uploaded_file is not None:
             try:
@@ -529,6 +631,7 @@ def create_app(test_config: dict | None = None):
         INSTITUTIONAL_API_STUDENTS_PATH=os.environ.get("INSTITUTIONAL_API_STUDENTS_PATH", ""),
         INSTITUTIONAL_API_STUDENT_PATH=os.environ.get("INSTITUTIONAL_API_STUDENT_PATH", ""),
         INSTITUTIONAL_API_SERVICE_TOKEN=os.environ.get("INSTITUTIONAL_API_SERVICE_TOKEN", ""),
+        INSTITUTIONAL_API_ID_SYSTEM=int(os.environ.get("INSTITUTIONAL_API_ID_SYSTEM", "0") or 0),
         INSTITUTIONAL_API_TIMEOUT_SECONDS=float(os.environ.get("INSTITUTIONAL_API_TIMEOUT_SECONDS", "8")),
         INSTITUTIONAL_API_VERIFY_TLS=env_bool("INSTITUTIONAL_API_VERIFY_TLS", True),
         GOOGLE_OAUTH_CLIENT_ID=os.environ.get("GOOGLE_OAUTH_CLIENT_ID", ""),
@@ -600,13 +703,14 @@ def create_app(test_config: dict | None = None):
         browser_session["teacher_id"] = authenticated.institutional_id
         browser_session["teacher_name"] = authenticated.display_name
         browser_session["teacher_role"] = authenticated.role
+        browser_session["teacher_photo"] = authenticated.photo_url
         browser_session["teacher_token"] = cipher.encrypt(
             authenticated.access_token.encode("utf-8")
         ).decode("ascii")
         browser_session["teacher_expires_at"] = (
             utc_now() + timedelta(seconds=authenticated.expires_in_seconds)
         ).isoformat()
-        browser_session.permanent = True
+        browser_session.permanent = False
         return redirect(destination)
 
     def login_readiness() -> dict[str, bool]:
@@ -690,6 +794,7 @@ def create_app(test_config: dict | None = None):
             "name": browser_session.get("teacher_name"),
             "initials": "".join(part[0].upper() for part in name_parts[:2]) or "DC",
             "role": browser_session.get("teacher_role"),
+            "photo_url": browser_session.get("teacher_photo") or "",
             "access_token": access_token,
         }
         g.maxcim_teacher = teacher
@@ -903,6 +1008,15 @@ def create_app(test_config: dict | None = None):
 
         teacher_materials = Material.query.filter_by(fk_user=str(teacher["id"])).all()
         material_ids = [material.id for material in teacher_materials]
+        # Estos agregados del tablón ("Interacciones registradas", "Promedio de
+        # aciertos", "Alumnos participantes") se limitan a las interacciones
+        # sobre materiales de la docente. Las conversaciones libres
+        # (id_material NULL) NO se incluyen aquí: no tienen material dueño, así
+        # que para atribuirlas a la docente habría que cruzar cada una con la
+        # matrícula del aula (una llamada por aula a la API institucional en
+        # cada carga del tablón, justo lo que este bloque evita). El desglose
+        # que sí las cuenta —rotuladas "Conversación"— vive en
+        # /aulas/<id>/avance y en el detalle del alumno.
         interactions = (
             Interaccion.query.filter(Interaccion.id_material.in_(material_ids)).all()
             if material_ids
@@ -921,9 +1035,10 @@ def create_app(test_config: dict | None = None):
             {"value": len(participating_students), "label": "Alumnos participantes", "color": "#132a5e"},
         ]
 
-        # `interaccion` no guarda el aula (ver bd_app.sql: solo id_material y
-        # fk_alumno). El desglose se construye en la vista de avance cruzando
-        # estos registros con la matrícula vigente de la API institucional.
+        # El desglose de interacciones por aula se ve en /aulas/<id>/avance
+        # (cruza cada interacción con la matrícula vigente de la API). Aquí no
+        # se calcula para no encadenar una llamada por aula en cada carga del
+        # tablón.
         aulas = []
         for classroom in institutional_classrooms:
             words = [word for word in classroom.name.split() if word]
@@ -936,7 +1051,6 @@ def create_app(test_config: dict | None = None):
                 "initials": "".join(word[0].upper() for word in words[:2]) or "AU",
                 "score": None,
                 "pending": 0,
-                "interactions": 0,
             })
 
         periods = sorted({classroom.period for classroom in institutional_classrooms if classroom.period})
@@ -980,7 +1094,7 @@ def create_app(test_config: dict | None = None):
     def classroom_context(teacher, classroom_id):
         classroom = teacher_classroom_or_error(teacher, classroom_id)
         students = institutional_client.list_classroom_students(
-            teacher["access_token"], classroom.institutional_id
+            teacher["access_token"], classroom.institutional_id, classroom.section_type
         )
         return classroom, students
 
@@ -1012,12 +1126,18 @@ def create_app(test_config: dict | None = None):
         student_ids = [str(student.institutional_id) for student in students]
         interactions = []
         if student_ids:
+            # outerjoin + el OR con id_material NULL: una conversación libre no
+            # tiene material dueño, así que se atribuye a la docente por la
+            # matrícula vigente del aula (igual criterio que docs/… sección 4).
             interactions = (
-                Interaccion.query.join(Material)
+                Interaccion.query.outerjoin(Material)
                 .options(contains_eager(Interaccion.material))
                 .filter(
                     Interaccion.fk_alumno.in_(student_ids),
-                    Material.fk_user == str(teacher["id"]),
+                    db.or_(
+                        Material.fk_user == str(teacher["id"]),
+                        Interaccion.id_material.is_(None),
+                    ),
                 )
                 .order_by(Interaccion.fecha_hora.asc(), Interaccion.id.asc())
                 .all()
@@ -1071,11 +1191,14 @@ def create_app(test_config: dict | None = None):
             )
 
         interactions = (
-            Interaccion.query.join(Material)
+            Interaccion.query.outerjoin(Material)
             .options(contains_eager(Interaccion.material))
             .filter(
                 Interaccion.fk_alumno == str(student.institutional_id),
-                Material.fk_user == str(teacher["id"]),
+                db.or_(
+                    Material.fk_user == str(teacher["id"]),
+                    Interaccion.id_material.is_(None),
+                ),
             )
             .order_by(Interaccion.fecha_hora.desc(), Interaccion.id.desc())
             .all()
@@ -1098,11 +1221,15 @@ def create_app(test_config: dict | None = None):
             .order_by(Material.fecha_subido.desc(), Material.id.desc())
             .all()
         )
+        sentences_by_material = {
+            m.id: material_sentences(m) for m in materials if m.es_oracion
+        }
         return render_template(
             "material.html",
             active_nav="material",
             user=teacher,
             materials=materials,
+            sentences_by_material=sentences_by_material,
             skills=MATERIAL_SKILLS,
             question_configuration=QUESTION_CONFIGURATION,
         )
@@ -1116,6 +1243,25 @@ def create_app(test_config: dict | None = None):
         extension = os.path.splitext(uploaded.filename)[1].lower()
         if extension not in ALLOWED_UPLOAD_EXTENSIONS:
             return jsonify({"error": "El archivo debe ser DOC, DOCX, PDF o TXT."}), 400
+
+        material_type = (request.form.get("tipo_material") or TIPO_CUENTO).strip()
+        if material_type not in TIPOS_MATERIAL:
+            return jsonify({"error": "El tipo de material no es válido."}), 400
+
+        if material_type == TIPO_ORACION:
+            if not gemini_client and app.config.get("DEMO_MODE"):
+                return jsonify({"sentences": extract_demo_sentences(uploaded)})
+            if not gemini_client:
+                return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+            try:
+                sentences = extract_sentences(uploaded)
+            except Exception:
+                app.logger.exception("No se pudieron identificar las oraciones con Gemini")
+                return jsonify({"error": "No se pudieron identificar las oraciones con Gemini."}), 502
+            if not sentences:
+                return jsonify({"error": "No se encontró ninguna oración en el documento."}), 422
+            return jsonify({"sentences": sentences})
+
         if not gemini_client and app.config.get("DEMO_MODE"):
             transcribed_text, summary_text = process_demo_document(uploaded)
             return jsonify({
@@ -1299,20 +1445,40 @@ def create_app(test_config: dict | None = None):
             return jsonify({"error": "El título excede el límite permitido."}), 413
 
         if material_type == TIPO_ORACION:
-            sentences_text = (request.form.get("sentences_text") or "").strip()
-            if not sentences_text:
+            sentences_json_raw = (request.form.get("sentences_json") or "").strip()
+            if sentences_json_raw:
+                try:
+                    parsed = json.loads(sentences_json_raw)
+                except json.JSONDecodeError:
+                    return jsonify({"error": "Las oraciones no tienen un formato JSON válido."}), 400
+                if not isinstance(parsed, list):
+                    return jsonify({"error": "Las oraciones no tienen un formato JSON válido."}), 400
+                sentences = normalize_sentences(parsed)
+            else:
+                # Compatibilidad: un cliente antiguo aún puede enviar el texto crudo.
+                sentences = split_text_into_sentences(request.form.get("sentences_text") or "")
+
+            if not sentences:
                 return jsonify({"error": "Escribe al menos una oración."}), 400
-            if len(sentences_text) > MAX_SENTENCES_CHARS:
+            if sum(len(sentence) for sentence in sentences) > MAX_SENTENCES_CHARS:
                 return jsonify({"error": "Las oraciones exceden el límite permitido."}), 413
+
+            material_dir_name = uuid.uuid4().hex
+            material_dir = os.path.join(app.static_folder, "uploads", material_dir_name)
+            os.makedirs(material_dir, exist_ok=True)
+            with open(os.path.join(material_dir, "oraciones.json"), "wb") as f:
+                f.write(json.dumps(sentences, ensure_ascii=False, indent=2).encode("utf-8"))
+
             material = Material(
                 nombre_material=title,
                 tipo_material=TIPO_ORACION,
-                path_preguntas=sentences_text,
+                path_preguntas=f"uploads/{material_dir_name}/oraciones.json",
                 path_texto=None,
                 path_texto_resumen=None,
                 path_audio=None,
                 path_audio_resumen=None,
                 fk_user=str(teacher["id"]),
+                fk_user_name=(str(teacher.get("name") or "").strip() or None),
             )
             db.session.add(material)
             db.session.commit()
@@ -1384,21 +1550,86 @@ def create_app(test_config: dict | None = None):
             path_audio=f"uploads/{material_dir_name}/audio.wav",
             path_audio_resumen=f"uploads/{material_dir_name}/audio_resumen.wav",
             fk_user=str(teacher["id"]),
+            fk_user_name=(str(teacher.get("name") or "").strip() or None),
         )
         db.session.add(material)
         db.session.commit()
 
         return jsonify({"material_id": material.id})
 
+    @app.route("/api/material/<int:material_id>", methods=["DELETE"])
+    @login_required
+    def delete_material(material_id):
+        teacher = current_teacher()
+        material = db.session.get(Material, material_id)
+        if not material or material.fk_user != str(teacher["id"]):
+            return jsonify({"error": "Material no encontrado."}), 404
+
+        interaction_count = Interaccion.query.filter_by(id_material=material.id).count()
+        if interaction_count:
+            return jsonify({
+                "error": (
+                    f"Este material tiene {interaction_count} interacción"
+                    f"{'es' if interaction_count != 1 else ''} registrada"
+                    f"{'s' if interaction_count != 1 else ''} y no se puede eliminar."
+                )
+            }), 409
+
+        # Tanto un cuento como una oración guardan sus archivos en la misma
+        # carpeta uploads/<id>/...; basta con tomar el directorio de una de sus
+        # rutas para borrarlos todos junto con el registro. Las oraciones
+        # antiguas (texto plano en path_preguntas) no tienen carpeta.
+        path_anchor = material.path_texto or (
+            material.path_preguntas
+            if stored_as_material_path(material.path_preguntas or "")
+            else None
+        )
+        material_dir = (
+            os.path.dirname(os.path.join(app.static_folder, path_anchor))
+            if path_anchor
+            else None
+        )
+
+        db.session.delete(material)
+        db.session.commit()
+
+        if material_dir and os.path.isdir(material_dir):
+            shutil.rmtree(material_dir, ignore_errors=True)
+
+        return jsonify({"deleted": True})
+
+    def stored_as_material_path(value: str) -> bool:
+        """A path_preguntas that points at a file we wrote, vs. legacy inline
+        text left over from before oraciones were stored as a JSON file."""
+        return value.startswith("uploads/") and value.endswith(".json")
+
+    def material_sentences(material) -> list[str]:
+        raw = material.path_preguntas or ""
+        if stored_as_material_path(raw):
+            try:
+                with open(os.path.join(app.static_folder, raw), "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                return []
+            return normalize_sentences(data if isinstance(data, list) else [])
+        return split_text_into_sentences(raw)
+
     def serialize_material(material):
         if material.es_oracion:
+            is_path = stored_as_material_path(material.path_preguntas or "")
             return {
                 "id": material.id,
                 "titulo": material.nombre_material,
                 "tipo_material": material.tipo_material,
                 "fecha_subido": material.fecha_subido.isoformat() if material.fecha_subido else None,
                 "fk_user": material.fk_user,
-                "oraciones": material.path_preguntas,
+                "docente": material.fk_user_name,
+                "oraciones": material_sentences(material),
+                "oraciones_url": (
+                    url_for("static", filename=material.path_preguntas, _external=True)
+                    if is_path
+                    else None
+                ),
                 "texto_completo_url": None,
                 "texto_resumen_url": None,
                 "audio_completo_url": None,
@@ -1418,6 +1649,7 @@ def create_app(test_config: dict | None = None):
             "tipo_material": material.tipo_material,
             "fecha_subido": material.fecha_subido.isoformat() if material.fecha_subido else None,
             "fk_user": material.fk_user,
+            "docente": material.fk_user_name,
             "texto_completo_url": url_for("static", filename=material.path_texto, _external=True),
             "texto_resumen_url": url_for("static", filename=material.path_texto_resumen, _external=True),
             "audio_completo_url": url_for("static", filename=material.path_audio, _external=True),
@@ -1426,30 +1658,128 @@ def create_app(test_config: dict | None = None):
             "preguntas": preguntas,
         }
 
+    def robot_teacher_query():
+        """Identificadores de la docente que llegan en la query del robot.
+
+        `docente` es el nombre tal como MAXCIM lo guarda en `fk_user_name`
+        (comparación sin distinguir mayúsculas ni acentos). `teacher_id` (alias
+        `dni`) es el `idPersona` de CIMA y se sigue aceptando como alternativa.
+        El nombre **no es único**: si dos docentes se llaman igual, la consulta
+        devuelve los materiales de ambas.
+        """
+        teacher_id = (request.args.get("teacher_id") or request.args.get("dni") or "").strip()
+        docente = " ".join((request.args.get("docente") or "").split())
+        return teacher_id, docente
+
+    def robot_owner_filter(teacher_id: str, docente: str):
+        if teacher_id:
+            return Material.fk_user == teacher_id
+        return db.func.lower(Material.fk_user_name) == docente.lower()
+
+    def robot_material_belongs(material, teacher_id: str, docente: str) -> bool:
+        if teacher_id:
+            return material.fk_user == teacher_id
+        return bool(material.fk_user_name) and (
+            material.fk_user_name.lower() == docente.lower()
+        )
+
+    def robot_material_or_error(material_id, *, require_identifier: bool):
+        """Carga un material para la API del robot y valida la propiedad por
+        nombre de la docente (o `idPersona`). Devuelve (material, None) o
+        (None, (resp, status))."""
+        teacher_id, docente = robot_teacher_query()
+        if require_identifier and not teacher_id and not docente:
+            return None, (
+                jsonify({"error": "Falta identificar a la docente (docente o teacher_id)."}),
+                400,
+            )
+        material = db.session.get(Material, material_id)
+        if not material:
+            return None, (jsonify({"error": "Material no encontrado."}), 404)
+        if (teacher_id or docente) and not robot_material_belongs(material, teacher_id, docente):
+            return None, (
+                jsonify({"error": "El material no pertenece a esa docente."}),
+                403,
+            )
+        return material, None
+
     # Robot-side endpoint. Every request must use the shared MAXCIM secret.
     @app.route("/api/materials", methods=["GET"])
     def list_materials():
         if not webhook_authorized():
             return jsonify({"error": "Integración no autorizada."}), 401
-        teacher_id = (request.args.get("teacher_id") or request.args.get("dni") or "").strip()
-        if not teacher_id:
-            return jsonify({"error": "Falta el ID institucional de la docente."}), 400
+        teacher_id, docente = robot_teacher_query()
+        if not teacher_id and not docente:
+            return jsonify({
+                "error": "Falta identificar a la docente (docente o teacher_id)."
+            }), 400
 
-        materials = (
-            Material.query.filter_by(fk_user=teacher_id)
-            .order_by(Material.fecha_subido.desc(), Material.id.desc())
-            .all()
-        )
+        tipo = (request.args.get("tipo") or "").strip().lower()
+        if tipo and tipo not in TIPOS_MATERIAL:
+            return jsonify({"error": "El tipo de material no es válido."}), 400
+
+        query = Material.query.filter(robot_owner_filter(teacher_id, docente))
+        if tipo:
+            query = query.filter_by(tipo_material=tipo)
+        materials = query.order_by(
+            Material.fecha_subido.desc(), Material.id.desc()
+        ).all()
         return jsonify([serialize_material(m) for m in materials])
 
     @app.route("/api/materials/<int:material_id>", methods=["GET"])
     def get_material(material_id):
         if not webhook_authorized():
             return jsonify({"error": "Integración no autorizada."}), 401
-        material = db.session.get(Material, material_id)
-        if not material:
-            return jsonify({"error": "Material no encontrado."}), 404
+        # El identificador (`docente` o `teacher_id`) es opcional aquí por
+        # compatibilidad; si se envía, se valida la propiedad. Las descargas por
+        # archivo sí lo exigen.
+        material, error = robot_material_or_error(material_id, require_identifier=False)
+        if error:
+            return error
         return jsonify(serialize_material(material))
+
+    # Robot-side endpoint: descarga el archivo exacto de un material del docente
+    # para guardarlo en local. Hace falta identificar a la docente (`docente`,
+    # el nombre, o `teacher_id`) y debe coincidir con el dueño del material. Un
+    # `cuento` expone texto/resumen/audio/audio-resumen/preguntas; una `oracion`
+    # solo expone `oraciones`.
+    @app.route("/api/materials/<int:material_id>/<recurso>", methods=["GET"])
+    def download_material_resource(material_id, recurso):
+        if not webhook_authorized():
+            return jsonify({"error": "Integración no autorizada."}), 401
+        material, error = robot_material_or_error(material_id, require_identifier=True)
+        if error:
+            return error
+
+        if recurso == "oraciones":
+            if not material.es_oracion:
+                return jsonify({
+                    "error": "Este material es un cuento; usa texto, resumen, audio, "
+                             "audio-resumen o preguntas."
+                }), 404
+            return jsonify({"oraciones": material_sentences(material)})
+
+        if recurso not in MATERIAL_DOWNLOADS:
+            return jsonify({"error": "Recurso de material no reconocido."}), 404
+        if material.es_oracion:
+            return jsonify({
+                "error": "Este material es una oración; solo expone 'oraciones'."
+            }), 404
+
+        attr, mimetype, download_name = MATERIAL_DOWNLOADS[recurso]
+        rel_path = getattr(material, attr) or ""
+        if not rel_path:
+            return jsonify({"error": f"El material no tiene {recurso}."}), 404
+        abs_path = os.path.join(app.static_folder, rel_path)
+        if not os.path.isfile(abs_path):
+            return jsonify({"error": f"No se encontró el archivo de {recurso}."}), 404
+        return send_from_directory(
+            app.static_folder,
+            rel_path,
+            mimetype=mimetype,
+            as_attachment=True,
+            download_name=download_name,
+        )
 
     def parse_optional_bool(value):
         if value is None:
@@ -1493,10 +1823,15 @@ def create_app(test_config: dict | None = None):
         path_audio_rpta = str(payload.get("path_audio_rpta") or "").strip()
         apreciacion_robot = str(payload.get("apreciacion_robot") or "").strip()
 
-        try:
-            material_id = int(payload.get("id_material"))
-        except (TypeError, ValueError):
-            return jsonify({"error": "id_material no es válido."}), 400
+        # `id_material` es opcional: si falta o llega vacío/null, el turno es
+        # una conversación libre del alumno con MAXCIM (sin material asociado).
+        raw_material_id = payload.get("id_material")
+        material_id = None
+        if raw_material_id not in (None, ""):
+            try:
+                material_id = int(raw_material_id)
+            except (TypeError, ValueError):
+                return jsonify({"error": "id_material no es válido."}), 400
         try:
             rpta_correcta = parse_optional_bool(payload.get("rpta_correcta"))
         except ValueError as exc:
@@ -1524,12 +1859,14 @@ def create_app(test_config: dict | None = None):
         if len(pregunta) > MAX_TRANSCRIPT_CHARS or len(respuesta) > MAX_TRANSCRIPT_CHARS:
             return jsonify({"error": "La pregunta o la respuesta exceden el límite permitido."}), 413
 
-        material = db.session.get(Material, material_id)
-        if not material:
-            return jsonify({"error": "Material no encontrado."}), 404
+        material = None
+        if material_id is not None:
+            material = db.session.get(Material, material_id)
+            if not material:
+                return jsonify({"error": "Material no encontrado."}), 404
 
         interaccion = Interaccion(
-            id_material=material.id,
+            id_material=material.id if material else None,
             fk_alumno=fk_alumno,
             pregunta=pregunta,
             respuesta=respuesta,

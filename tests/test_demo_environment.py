@@ -1,4 +1,5 @@
 import io
+import json
 import wave
 
 import pytest
@@ -113,6 +114,52 @@ def test_demo_story_questions_and_audio_work_without_gemini(demo_client):
     assert audio.headers["X-MAXCIM-Audio-Duration-Seconds"] == "60.00"
     with wave.open(io.BytesIO(audio.data), "rb") as wav_file:
         assert wav_file.getnframes() / wav_file.getframerate() == 60
+
+
+def test_demo_sentence_material_is_identified_and_saved_as_a_list(
+    demo_app, demo_client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(demo_app, "static_folder", str(tmp_path))
+    enter_demo(demo_client)
+    document = (
+        "El perro corre en el parque.\n"
+        "La maestra lee un cuento. Los niños escuchan con atención.\n"
+    )
+
+    processed = demo_client.post(
+        "/api/material/process",
+        data={
+            "tipo_material": "oracion",
+            "title": "Oraciones de práctica",
+            "file": (io.BytesIO(document.encode("utf-8")), "oraciones.txt"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert processed.status_code == 200
+    sentences = processed.get_json()["sentences"]
+    assert sentences == [
+        "El perro corre en el parque.",
+        "La maestra lee un cuento.",
+        "Los niños escuchan con atención.",
+    ]
+
+    saved = demo_client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion",
+            "title": "Oraciones de práctica",
+            "sentences_json": json.dumps(sentences),
+        },
+    )
+    assert saved.status_code == 200
+    material_id = saved.get_json()["material_id"]
+
+    robot_view = demo_client.get(f"/api/materials/{material_id}")
+    assert robot_view.get_json()["oraciones"] == sentences
+
+    page = demo_client.get("/material").get_data(as_text=True)
+    assert "El perro corre en el parque." in page
+    assert "3 oraciones" in page
 
 
 def test_demo_can_register_and_list_interactions(demo_app, demo_client):

@@ -43,9 +43,15 @@ class Material(db.Model):
     # as DEFAULT CURRENT_DATE for MySQL, which some managed MySQL versions
     # reject during schema creation.
     fecha_subido = db.Column(db.Date, nullable=False, default=date.today)
-    # ID institucional de la docente. No es una FK real: la tabla `docente`
-    # vive en la API institucional, no en esta base (ver bd_app.sql).
+    # ID institucional de la docente (`idPersona` de CIMA, p.ej. "70385"). No es
+    # una FK real: la tabla `docente` vive en la API institucional, no en esta
+    # base (ver bd_app.sql).
     fk_user = db.Column(db.String(50), nullable=False, index=True)
+    # Nombre de la docente (ya normalizado, p.ej. "Rodas Rosales Oscar Alexis")
+    # tal como estaba en su sesión al crear el material. Copia para que la API
+    # del robot pueda listar materiales por nombre (`?docente=`) y mostrarlo sin
+    # volver a consultar a CIMA. Nulo en registros creados antes de la columna.
+    fk_user_name = db.Column(db.String(255), nullable=True)
 
     interacciones = db.relationship(
         "Interaccion",
@@ -63,8 +69,13 @@ class Material(db.Model):
 
 
 class Interaccion(db.Model):
-    """One question/answer turn between an identified student and MAXCIM
-    about a material. Mirrors `interaccion` in bd_app.sql exactly.
+    """One question/answer turn between an identified student and MAXCIM.
+    Mirrors `interaccion` in bd_app.sql exactly.
+
+    Usually the turn is about a `material` the teacher prepared. When
+    `id_material` is NULL the turn is a free conversation the student held
+    with MAXCIM, not tied to any material; the teacher views label it
+    "Conversación".
     """
 
     __tablename__ = "interaccion"
@@ -73,7 +84,7 @@ class Interaccion(db.Model):
     id_material = db.Column(
         db.Integer,
         db.ForeignKey("material.id"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     # ID institucional del alumno, igual que `fk_user` en Material: no es una

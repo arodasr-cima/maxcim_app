@@ -1,6 +1,13 @@
+import time
+
+import jwt
 import pytest
 
-from services.institutional import InstitutionalAPIError, InstitutionalClient
+from services.institutional import (
+    InstitutionalAPIError,
+    InstitutionalAuthenticationError,
+    InstitutionalClient,
+)
 
 
 def make_client(**overrides):
@@ -8,69 +15,241 @@ def make_client(**overrides):
         "base_url": "https://api.cima.example",
         "login_path": "/v1/auth/login",
         "google_login_path": "/v1/auth/google",
-        "classrooms_path": "/v1/teachers/{teacher_id}/classrooms",
+        "classrooms_path": "/v1/teachers/{login_id}/classrooms",
         "students_path": "/v1/classrooms/{classroom_id}/students",
         "student_path": "/v1/students/{person_id}",
         "service_token": "service-token",
+        "id_system": 21,
     }
     settings.update(overrides)
     return InstitutionalClient(**settings)
 
 
-def test_list_classroom_students_maps_supported_name_spellings(monkeypatch):
+def make_cima_jwt(**claim_overrides):
+    now = int(time.time())
+    claims = {
+        "idPersona": "70385",
+        "nombres": "RODAS ROSALES OSCAR ALEXIS",
+        "grupoPersonal": "DOCENTE COLEGIO",
+        "iat": now,
+        "exp": now + 3600,
+    }
+    claims.update(claim_overrides)
+    # CIMA no firma con una clave que MAXCIM conozca; se decodifica sin
+    # verificar la firma (ver InstitutionalClient._parse_jwt_teacher), así
+    # que cualquier clave de prueba alcanza para producir un JWT válido.
+    return jwt.encode(claims, key="unused-test-key-padded-to-32-bytes!!", algorithm="HS256")
+
+
+def test_authenticate_sends_the_cima_login_contract(monkeypatch):
+    client = make_client()
+    captured = {}
+    fake_jwt = make_cima_jwt()
+
+    def fake_request(method, path, *, token=None, payload=None):
+        captured.update(method=method, path=path, token=token, payload=payload)
+        return {"content": {"token": f"Bearer {fake_jwt}"}}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    teacher = client.authenticate("orodasr", "72737674")
+
+    assert captured == {
+        "method": "POST",
+        "path": "/v1/auth/login",
+        "token": None,
+        "payload": {
+            "username": "orodasr",
+            "password": "72737674",
+            "idSystem": 21,
+            "identifier": "Sin IP",
+        },
+    }
+    assert teacher.institutional_id == "70385"
+    assert teacher.display_name == "Rodas Rosales Oscar Alexis"
+    assert teacher.role == "DOCENTE"
+    assert teacher.access_token == fake_jwt
+    assert teacher.expires_in_seconds == 3600
+    assert teacher.photo_url == ""
+
+
+def test_authenticate_rewrites_the_drive_photo_into_an_embeddable_url(monkeypatch):
+    client = make_client()
+    fake_jwt = make_cima_jwt(
+        rutaFoto="https://drive.google.com/file/d/ABC123xyz/view?usp=drivesdk"
+    )
+    monkeypatch.setattr(
+        client, "_request", lambda *a, **k: {"content": {"token": f"Bearer {fake_jwt}"}}
+    )
+
+    teacher = client.authenticate("orodasr", "72737674")
+
+    assert teacher.photo_url == (
+        "https://drive.google.com/thumbnail?id=ABC123xyz&sz=w160"
+    )
+
+
+def test_authenticate_ignores_a_photo_route_that_is_not_http(monkeypatch):
+    client = make_client()
+    fake_jwt = make_cima_jwt(rutaFoto="javascript:alert(1)")
+    monkeypatch.setattr(
+        client, "_request", lambda *a, **k: {"content": {"token": f"Bearer {fake_jwt}"}}
+    )
+
+    teacher = client.authenticate("orodasr", "72737674")
+
+    assert teacher.photo_url == ""
+
+
+def test_authenticate_rejects_accounts_outside_the_teaching_staff(monkeypatch):
+    client = make_client()
+    fake_jwt = make_cima_jwt(grupoPersonal="ALUMNO COLEGIO")
+    monkeypatch.setattr(
+        client, "_request", lambda *a, **k: {"content": {"token": fake_jwt}}
+    )
+
+    with pytest.raises(InstitutionalAuthenticationError):
+        client.authenticate("alumno1", "credencial")
+
+
+def test_authenticate_treats_a_missing_token_as_invalid_credentials(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda *a, **k: {"content": {}})
+
+    with pytest.raises(InstitutionalAuthenticationError):
+        client.authenticate("orodasr", "credencial-incorrecta")
+
+
+def test_list_teacher_classrooms_uses_idlogueo_from_the_token_not_teacher_id(monkeypatch):
+    client = make_client()
+    fake_token = make_cima_jwt(idLogueo="9716")
+    captured = {}
+
+    def fake_request(method, path, *, token=None, payload=None):
+        captured.update(method=method, path=path, token=token, payload=payload)
+        return [
+            {"id": 2331, "type": "N", "status": False, "description": "5TH - D PRIM. GRAU MAÑANA"},
+            {"id": 2332, "type": "N", "status": False, "description": "5TH - E PRIM. GRAU MAÑANA"},
+        ]
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    # El teacher_id pasado aquí (idPersona, "70385") es deliberadamente
+    # distinto del idLogueo del token, para probar que se ignora.
+    classrooms = client.list_teacher_classrooms(fake_token, "70385")
+
+    assert captured == {
+        "method": "GET",
+        "path": "/v1/teachers/9716/classrooms",
+        "token": fake_token,
+        "payload": None,
+    }
+    assert [c.institutional_id for c in classrooms] == ["2331", "2332"]
+    assert [c.name for c in classrooms] == [
+        "5TH - D PRIM. GRAU MAÑANA",
+        "5TH - E PRIM. GRAU MAÑANA",
+    ]
+    assert all(c.grade is None and c.course is None and c.period is None for c in classrooms)
+    assert [c.section_type for c in classrooms] == ["N", "N"]
+
+
+def test_list_teacher_classrooms_rejects_a_non_list_payload(monkeypatch):
+    client = make_client()
+    fake_token = make_cima_jwt(idLogueo="9716")
+    monkeypatch.setattr(client, "_request", lambda *a, **k: {"classrooms": []})
+
+    with pytest.raises(InstitutionalAPIError):
+        client.list_teacher_classrooms(fake_token, "70385")
+
+
+def test_list_classroom_students_sends_the_cima_students_path(monkeypatch):
+    client = make_client(
+        students_path="/api/v2/studentschool/list/gradesectiongroup/{classroom_id}/type/{section_type}/order/{order}"
+    )
+    captured = {}
+    monkeypatch.setattr(
+        client, "_request", lambda *a, **k: captured.update(
+            method=a[0], path=a[1], token=k.get("token"), payload=k.get("payload")
+        ) or []
+    )
+
+    client.list_classroom_students("teacher-token", "2331", "N")
+
+    assert captured == {
+        "method": "GET",
+        "path": "/api/v2/studentschool/list/gradesectiongroup/2331/type/N/order/A",
+        "token": "teacher-token",
+        "payload": None,
+    }
+
+
+def test_list_classroom_students_defaults_section_type_when_missing(monkeypatch):
+    client = make_client(
+        students_path="/api/v2/studentschool/list/gradesectiongroup/{classroom_id}/type/{section_type}/order/{order}"
+    )
+    captured = {}
+    monkeypatch.setattr(
+        client, "_request", lambda *a, **k: captured.update(path=a[1]) or []
+    )
+
+    # Sin section_type (ej. viene de un Classroom sin ese dato), se usa "N"
+    # por ser el único valor observado hasta ahora, en vez de fallar.
+    client.list_classroom_students("teacher-token", "2331")
+
+    assert captured["path"] == "/api/v2/studentschool/list/gradesectiongroup/2331/type/N/order/A"
+
+
+def test_list_classroom_students_maps_the_confirmed_cima_fields(monkeypatch):
     client = make_client()
     captured = {}
 
     def fake_request(method, path, *, token=None, payload=None):
         captured.update(method=method, path=path, token=token, payload=payload)
-        return {
-            "students": [
-                {"id": "ALU-1", "apellidos": "Pérez Rojas", "nombres": "Ana Lucía"},
-                {
-                    "institutional_id": "ALU-2",
-                    "last_name": "Smith",
-                    "first_name": "Jordan",
-                },
-                {
-                    "student_id": "ALU-3",
-                    "apellido_paterno": "Quispe",
-                    "apellido_materno": "Flores",
-                    "given_name": "Mateo",
-                },
-                {"id_alumno": "ALU-4", "full_name": "Soto Díaz, Elena María"},
-            ]
-        }
+        # Forma real observada (ver probar_conexion_alumnos.py); sin sobre,
+        # con campos extra (idPerson, photoRoute, institutionalEmail,
+        # studentSchool) que MAXCIM ignora.
+        return [
+            {
+                "idStudentSchool": 79398411,
+                "firstName": "CIELITO ABIGAIL",
+                "lastName": "CABRERA BURGA",
+                "idPerson": 66696,
+                "photoRoute": "https://drive.google.com/...",
+                "institutionalEmail": "79398411@colegiocima.edu.pe",
+                "studentSchool": "CABRERA BURGA CIELITO ABIGAIL",
+            },
+            {
+                "idStudentSchool": 79333645,
+                "firstName": "KIARA IVETT",
+                "lastName": "CAIRAMPOMA CORDOVA",
+                "idPerson": 66877,
+                "photoRoute": "https://drive.google.com/...",
+                "institutionalEmail": "79333645@colegiocima.edu.pe",
+                "studentSchool": "CAIRAMPOMA CORDOVA KIARA IVETT",
+            },
+        ]
 
     monkeypatch.setattr(client, "_request", fake_request)
 
-    students = client.list_classroom_students("teacher-token", "AULA-5B")
+    students = client.list_classroom_students("teacher-token", "2331", "N")
 
     assert captured == {
         "method": "GET",
-        "path": "/v1/classrooms/AULA-5B/students",
+        "path": "/v1/classrooms/2331/students",
         "token": "teacher-token",
         "payload": None,
     }
-    assert [student.institutional_id for student in students] == [
-        "ALU-1",
-        "ALU-2",
-        "ALU-3",
-        "ALU-4",
-    ]
+    assert [student.institutional_id for student in students] == ["79398411", "79333645"]
     assert [student.full_name for student in students] == [
-        "PÉREZ ROJAS, Ana Lucía",
-        "SMITH, Jordan",
-        "QUISPE FLORES, Mateo",
-        "SOTO DÍAZ, Elena María",
+        "CABRERA BURGA, Cielito Abigail",
+        "CAIRAMPOMA CORDOVA, Kiara Ivett",
     ]
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"students": "no-es-una-lista"},
-        {"students": [{"id": "ALU-SIN-NOMBRE"}]},
-        {"students": ["no-es-un-registro"]},
+        {"students": [{"idStudentSchool": 1, "lastName": "X", "firstName": "Y"}]},
+        [{"idStudentSchool": "ALU-SIN-NOMBRE"}],
+        ["no-es-un-registro"],
     ],
 )
 def test_list_classroom_students_rejects_malformed_payload(monkeypatch, payload):

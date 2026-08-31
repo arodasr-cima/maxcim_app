@@ -1,3 +1,6 @@
+import json
+import os
+
 from extensions import db
 from models import Interaccion, Material, TIPO_CUENTO
 
@@ -90,6 +93,64 @@ def test_progress_shows_results_and_ignores_other_teacher_materials(app, client)
     assert "Material ajeno" not in html
 
 
+def test_progress_and_detail_label_a_materialless_turn_as_conversation(app, client):
+    with app.app_context():
+        own_material = add_material("DOC-TEST-1", "Cuento del búho")
+        add_interaction(
+            own_material,
+            "ALU-TEST-1",
+            correct=True,
+            question="¿Quién ayudó al búho?",
+            answer="Sus amigos del bosque.",
+            appraisal="Identificó el dato del texto.",
+        )
+        # Two free conversations (id_material NULL): one right, one wrong, so the
+        # tally has to fold them in next to the material-backed turn.
+        add_interaction(
+            None,
+            "ALU-TEST-1",
+            correct=True,
+            question="¿De qué quieres hablar hoy?",
+            answer="De mi mascota nueva.",
+            appraisal="Conversación fluida y respetuosa.",
+        )
+        add_interaction(
+            None,
+            "ALU-TEST-1",
+            correct=False,
+            question="¿Cómo te sentiste en el recreo?",
+            answer="No sé.",
+            appraisal="Respuestas muy cortas.",
+        )
+        db.session.commit()
+
+    progress = client.get("/aulas/AULA-REAL-1/avance")
+    progress_html = progress.get_data(as_text=True)
+    assert progress.status_code == 200
+    # Material-less turns are labelled "Conversación"; the material one keeps its name.
+    assert "Conversación" in progress_html
+    assert "Cuento del búho" in progress_html
+    # The "Aciertos" tally counts the two conversation rows alongside the
+    # material row: 2 correct out of 3.
+    assert "2/3" in progress_html
+    # The row tooltip uses the label, never the literal "None".
+    assert "Conversación: ¿De qué quieres hablar hoy?" in progress_html
+    assert ">None<" not in progress_html
+    assert 'title="None' not in progress_html
+    assert "Conversación: None" not in progress_html
+
+    detail = client.get("/aulas/AULA-REAL-1/alumnos/ALU-TEST-1")
+    detail_html = detail.get_data(as_text=True)
+    assert detail.status_code == 200
+    assert "Conversación" in detail_html
+    assert "De mi mascota nueva." in detail_html
+    assert "¿De qué quieres hablar hoy?" in detail_html
+    # The material-backed turn still shows its material name and question.
+    assert "Cuento del búho" in detail_html
+    assert "Sus amigos del bosque." in detail_html
+    assert "<strong>None</strong>" not in detail_html
+
+
 def test_student_detail_shows_question_answer_and_robot_appraisal(app, client):
     with app.app_context():
         material = add_material("DOC-TEST-1", "El bosque que escucha")
@@ -110,17 +171,20 @@ def test_student_detail_shows_question_answer_and_robot_appraisal(app, client):
     assert "¿Qué hizo Luna para ayudar?" in html
     assert "Escuchó a sus amigos." in html
     assert "Respuesta clara y completa." in html
+    # El audio de la respuesta se muestra debajo del texto.
+    assert '<audio class="interaction-answer__audio"' in html
+    assert "/static/fixtures/respuesta.wav" in html
     assert "El bosque que escucha" in html
 
 
-def test_saving_sentence_material_uses_only_path_preguntas(app, client):
-    sentence_text = "La luna brilla.\nEl río canta."
+def test_saving_sentence_material_writes_a_json_list(app, client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "static_folder", str(tmp_path))
     response = client.post(
         "/api/material/save",
         data={
             "tipo_material": "oracion",
             "title": "Oraciones de práctica",
-            "sentences_text": sentence_text,
+            "sentences_json": json.dumps(["La luna brilla.", "El río canta."]),
         },
     )
 
@@ -128,8 +192,32 @@ def test_saving_sentence_material_uses_only_path_preguntas(app, client):
     with app.app_context():
         material = db.session.get(Material, response.get_json()["material_id"])
         assert material.tipo_material == "oracion"
-        assert material.path_preguntas == sentence_text
+        assert material.path_preguntas.startswith("uploads/")
+        assert material.path_preguntas.endswith("/oraciones.json")
         assert material.path_texto is None
         assert material.path_texto_resumen is None
         assert material.path_audio is None
         assert material.path_audio_resumen is None
+
+        stored = os.path.join(app.static_folder, material.path_preguntas)
+        with open(stored, "r", encoding="utf-8") as f:
+            assert json.load(f) == ["La luna brilla.", "El río canta."]
+
+
+def test_saving_sentence_material_still_accepts_raw_text(app, client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "static_folder", str(tmp_path))
+    response = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion",
+            "title": "Oraciones heredadas",
+            "sentences_text": "La luna brilla.\nEl río canta.",
+        },
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        material = db.session.get(Material, response.get_json()["material_id"])
+        stored = os.path.join(app.static_folder, material.path_preguntas)
+        with open(stored, "r", encoding="utf-8") as f:
+            assert json.load(f) == ["La luna brilla.", "El río canta."]

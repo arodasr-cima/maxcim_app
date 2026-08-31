@@ -46,9 +46,22 @@
               <span aria-label="Fecha no registrada">—</span>
               {% endif %}
             </td>
-            <td><strong>{{ interaction.material.nombre_material }}</strong></td>
+            <td>
+              {% if interaction.material %}
+              <strong>{{ interaction.material.nombre_material }}</strong>
+              {% else %}
+              <span class="material-tag material-tag--conversation">Conversación</span>
+              {% endif %}
+            </td>
             <td>{{ interaction.pregunta }}</td>
-            <td>{{ interaction.respuesta }}</td>
+            <td>
+              <p class="interaction-answer__text">{{ interaction.respuesta }}</p>
+              {% if interaction.path_audio_rpta %}
+              <audio class="interaction-answer__audio" controls preload="none" src="{{ url_for('static', filename=interaction.path_audio_rpta) }}">
+                Tu navegador no puede reproducir este audio.
+              </audio>
+              {% endif %}
+            </td>
             <td>{{ interaction.apreciacion_robot }}</td>
             <td>
               <span class="answer-mark answer-mark--{{ 'correct' if interaction.rpta_correcta else 'incorrect' }}">

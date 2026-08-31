@@ -74,8 +74,8 @@
         <form method="post" class="auth-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <label class="auth-field" for="institutional_id">
-            <span>ID institucional</span>
-            <input id="institutional_id" name="institutional_id" autocomplete="username" required maxlength="50" placeholder="Ej. DOC-0001" {% if demo_mode %}value="DOC-DEMO-01"{% endif %}>
+            <span>Usuario institucional</span>
+            <input id="institutional_id" name="institutional_id" autocomplete="username" required maxlength="50" placeholder="Ej. jperez" {% if demo_mode %}value="DOC-DEMO-01"{% endif %}>
           </label>
           <label class="auth-field" for="credential">
             <span>Credencial institucional</span>

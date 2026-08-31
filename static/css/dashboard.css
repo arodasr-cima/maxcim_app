@@ -184,6 +184,8 @@ body {
 }
 
 .profile__avatar {
+  position: relative;
+  overflow: hidden;
   width: 38px;
   height: 38px;
   border-radius: 50%;
@@ -195,6 +197,14 @@ body {
   font-weight: 700;
   font-size: 14px;
   flex-shrink: 0;
+}
+
+.profile__avatar-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .profile__info {
@@ -523,6 +533,26 @@ body {
   background: #e2eafe;
 }
 
+.material__ai-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.material__ai-btn:disabled:hover {
+  background: #eef3ff;
+}
+
+.material__ai-badge {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #dbe4fb;
+  color: #2f5bcf;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
 .material__add-btn:hover {
   background: #1a8749;
 }
@@ -660,10 +690,20 @@ body {
 }
 
 .material-card__delete {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
   font-size: 13px;
   font-weight: 700;
   color: #d64545;
   text-decoration: none;
+  cursor: pointer;
+}
+
+.material-card__delete:hover {
+  text-decoration: underline;
 }
 
 .material-card.is-hidden {
@@ -720,6 +760,20 @@ body {
 
 .btn--primary:disabled {
   background: #a9d9bc;
+  cursor: not-allowed;
+}
+
+.btn--danger {
+  background: #d64545;
+  color: #fff;
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: #b83a3a;
+}
+
+.btn--danger:disabled {
+  background: #eab0b0;
   cursor: not-allowed;
 }
 
@@ -835,6 +889,34 @@ body {
   font-weight: 700;
   color: #1f2937;
   margin-bottom: 14px;
+}
+
+.upload-modal__type-toggle {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+  border: 1px solid #dde2ea;
+  border-radius: 10px;
+  padding: 4px;
+  background: #f8fafc;
+}
+
+.upload-modal__type-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.upload-modal__type-btn.is-active {
+  background: #fff;
+  color: #2f5bcf;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
 }
 
 .dropzone {
@@ -1171,6 +1253,58 @@ body {
   box-shadow: 0 0 0 3px rgba(47, 91, 207, 0.12);
 }
 
+.sentences-review {
+  list-style: decimal;
+  margin: 8px 0 0;
+  padding: 0 0 0 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sentences-review__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.sentences-review__editable {
+  flex: 1;
+  min-height: 36px;
+  border: 1px solid #e3e8f0;
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #374151;
+  cursor: text;
+  white-space: pre-wrap;
+}
+
+.sentences-review__editable:focus {
+  outline: none;
+  border-color: #2f5bcf;
+  box-shadow: 0 0 0 3px rgba(47, 91, 207, 0.12);
+}
+
+.sentences-review__remove {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e3e8f0;
+  border-radius: 7px;
+  background: #fff;
+  color: #8a94a6;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.sentences-review__remove:hover {
+  border-color: #b93838;
+  color: #b93838;
+}
+
 .result-modal__footer {
   display: flex;
   justify-content: flex-end;
@@ -1215,6 +1349,16 @@ body {
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.page-heading__eyebrow a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.page-heading__eyebrow a:hover,
+.page-heading__eyebrow a:focus-visible {
+  text-decoration: underline;
 }
 
 .page-heading .sesiones__title {
@@ -2618,6 +2762,25 @@ body {
   white-space: pre-wrap;
 }
 
+.material-card__sentence-list {
+  margin: 0 0 10px;
+  padding: 12px 14px 12px 34px;
+  border-radius: 9px;
+  background: #f8fafc;
+  color: #3d485c;
+  line-height: 1.6;
+}
+
+.material-card__sentence-list li {
+  margin: 2px 0;
+}
+
+.material-card__sentence-count {
+  color: #7a8496;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 /* Diseño de aulas y seguimiento docente. */
 .dashboard-view,
 .teacher-view {
@@ -3090,6 +3253,16 @@ body {
   width: 130px;
 }
 
+.interaction-answer__text {
+  margin: 0;
+}
+
+.interaction-answer__audio {
+  width: 100%;
+  height: 34px;
+  margin-top: 8px;
+}
+
 .interaction-date time {
   color: #3c4c65;
   font-variant-numeric: tabular-nums;
@@ -3122,6 +3295,23 @@ body {
   color: #45536a;
   font-size: 0.72rem;
   text-overflow: ellipsis;
+}
+
+.interaction-results__material--conversation {
+  color: #2f5bcf;
+  font-style: italic;
+}
+
+/* Turno sin material: una conversación libre del alumno con MAXCIM. */
+.material-tag--conversation {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid #c7d4f0;
+  border-radius: 999px;
+  background: #eef3fd;
+  color: #2f5bcf;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
 .answer-mark {

@@ -6,36 +6,18 @@
 <h1 class="material__title">Material</h1>
 
 <div class="material__toolbar">
-  <select class="material__select" id="materialSkillFilter">
-    {% for skill in skills %}
-    <option>{{ skill }}</option>
-    {% endfor %}
+  <select class="material__select" id="materialTypeFilter">
+    <option value="">Todos los tipos</option>
+    <option value="cuento">Cuentos</option>
+    <option value="oracion">Oraciones</option>
   </select>
   <input type="text" class="material__search" id="materialSearch" placeholder="Buscar material...">
   <div class="material__toolbar-actions">
-    <button type="button" class="material__ai-btn" id="storyOpenBtn"><span>✨</span>Crear con IA</button>
-    <button type="button" class="btn btn--ghost" id="sentenceOpenBtn">Agregar oraciones</button>
+    <button type="button" class="material__ai-btn" id="storyOpenBtn" disabled title="Disponible próximamente">
+      <span>✨</span>Crear con IA<span class="material__ai-badge">Próximamente</span>
+    </button>
     <button type="button" class="material__add-btn" id="uploadOpenBtn"><span>+</span>Subir archivo</button>
   </div>
-</div>
-
-<div class="overlay" id="sentenceOverlay">
-  <form class="upload-modal" id="sentenceForm">
-    <div class="upload-modal__title">Nuevo material de oraciones</div>
-    <label class="field">
-      <span class="field__label">Nombre del material</span>
-      <input class="field__control" type="text" id="sentenceTitle" required maxlength="255" placeholder="Ej.: Oraciones con la letra M">
-    </label>
-    <label class="field">
-      <span class="field__label">Oraciones</span>
-      <textarea class="field__control field__control--textarea" id="sentenceText" required maxlength="20000" placeholder="Escribe las oraciones en texto plano, una por línea."></textarea>
-    </label>
-    <p class="page-heading__description">Este tipo de material no genera resúmenes ni audios.</p>
-    <div class="upload-modal__actions">
-      <button type="button" class="btn btn--ghost" id="sentenceCancelBtn">Cancelar</button>
-      <button type="submit" class="btn btn--primary" id="sentenceSaveBtn">Guardar oraciones</button>
-    </div>
-  </form>
 </div>
 
 <div class="overlay" id="storyOverlay">
@@ -80,7 +62,12 @@
 
 <div class="overlay" id="uploadOverlay">
   <div class="upload-modal">
-    <div class="upload-modal__title">Nuevo cuento</div>
+    <div class="upload-modal__title">Nuevo material</div>
+
+    <div class="upload-modal__type-toggle" role="tablist" aria-label="Tipo de material">
+      <button type="button" class="upload-modal__type-btn is-active" id="uploadTypeCuentoBtn" data-type="cuento" role="tab" aria-selected="true">📖 Cuento</button>
+      <button type="button" class="upload-modal__type-btn" id="uploadTypeOracionBtn" data-type="oracion" role="tab" aria-selected="false">✏️ Oraciones</button>
+    </div>
 
     <label class="dropzone" id="dropzone" for="uploadFileInput">
       <div class="dropzone__icon">📤</div>
@@ -96,6 +83,17 @@
     <div class="upload-modal__actions">
       <button type="button" class="btn btn--ghost" id="uploadCancelBtn">Cancelar</button>
       <button type="button" class="btn btn--primary" id="uploadStartBtn" disabled>Subir</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="deleteOverlay">
+  <div class="upload-modal">
+    <div class="upload-modal__title">Eliminar material</div>
+    <p class="page-heading__description">¿Eliminar <strong id="deleteMaterialName"></strong>? Esta acción no se puede deshacer.</p>
+    <div class="upload-modal__actions">
+      <button type="button" class="btn btn--ghost" id="deleteCancelBtn">Cancelar</button>
+      <button type="button" class="btn btn--danger" id="deleteConfirmBtn">Eliminar</button>
     </div>
   </div>
 </div>
@@ -116,17 +114,22 @@
     <div class="result-modal__columns">
       <div class="result-col result-col--border">
         <div class="result-col__title">Textos</div>
-        <div class="result-block">
-          <div class="result-block__label">Texto completo</div>
+        <div class="result-block" id="resultTranscribedBlock">
+          <div class="result-block__label" id="resultTranscribedLabel">Texto completo</div>
           <div class="result-block__box" id="resultTranscribedText" contenteditable="true" spellcheck="false"></div>
         </div>
-        <div class="result-block result-block--divider">
+        <div class="result-block result-block--divider" id="resultSummaryBlock">
           <div class="result-block__label">Resumen del texto</div>
           <div class="result-block__box result-block__box--short" id="resultSummaryText" contenteditable="true" spellcheck="false"></div>
         </div>
+        <div class="result-block" id="resultSentencesBlock" hidden>
+          <div class="result-block__label">Oraciones identificadas por la IA</div>
+          <p class="questions-review-note">La miss puede corregir cada oración; deja vacías las que no quiera guardar.</p>
+          <ol class="sentences-review" id="resultSentencesList"></ol>
+        </div>
       </div>
 
-      <div class="result-col result-col--border">
+      <div class="result-col result-col--border" id="resultAudioColumn">
         <div class="result-col__title">Audios</div>
         <div class="result-audio-row">
           <div class="result-audio-row__top">
@@ -146,7 +149,7 @@
         </div>
       </div>
 
-      <div class="result-col">
+      <div class="result-col" id="resultQuestionsColumn">
         <div class="result-col__title">Preguntas y respuestas esperadas</div>
         <p class="questions-review-note">Gemini propone. La miss debe revisar y puede modificar todo antes de aprobar.</p>
         {% for q in question_configuration %}
@@ -176,7 +179,7 @@
   </div>
   {% endif %}
   {% for m in materials %}
-  <div class="material-card" data-title="{{ m.nombre_material|lower }}">
+  <div class="material-card" data-title="{{ m.nombre_material|lower }}" data-tipo="{{ m.tipo_material }}">
     <button type="button" class="material-card__header">
       <div class="material-card__icon" style="background: #eaf0fd; color: #2f5bcf">{{ '✏️' if m.es_oracion else '📖' }}</div>
       <div class="material-card__meta">
@@ -191,7 +194,16 @@
     </button>
     <div class="material-card__detail">
       {% if m.es_oracion %}
-      <div class="material-card__sentence-text">{{ m.path_preguntas }}</div>
+      {% set sentences = sentences_by_material.get(m.id, []) %}
+      <ol class="material-card__sentence-list">
+        {% for sentence in sentences %}
+        <li>{{ sentence }}</li>
+        {% endfor %}
+      </ol>
+      <div class="material-card__actions">
+        <span class="material-card__sentence-count">{{ sentences|length }} {{ 'oraciones' if sentences|length != 1 else 'oración' }}</span>
+        <button type="button" class="material-card__delete" data-material-id="{{ m.id }}" data-material-name="{{ m.nombre_material }}">🗑 Eliminar</button>
+      </div>
       {% else %}
       <div class="material-card__audio-row">
         <div class="material-card__audio-label">Audio completo</div>
@@ -207,7 +219,7 @@
           <a href="{{ url_for('static', filename=m.path_texto_resumen) }}" download>📄 Descargar texto resumido</a>
           <a href="{{ url_for('static', filename=m.path_preguntas) }}" download>❓ Preguntas generadas</a>
         </div>
-        <a href="#" class="material-card__delete">🗑 Eliminar</a>
+        <button type="button" class="material-card__delete" data-material-id="{{ m.id }}" data-material-name="{{ m.nombre_material }}">🗑 Eliminar</button>
       </div>
       {% endif %}
     </div>

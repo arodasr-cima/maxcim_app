@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 
+import jwt
 import requests
+
+# CIMA no espera una IP real en "identifier": otros sistemas que ya consumen
+# esta misma API envían este valor literal (confirmado inspeccionando su
+# tráfico real). Se deja como constante para no reintroducir por error una
+# IP real u otro valor.
+CIMA_IDENTIFIER_PLACEHOLDER = "Sin IP"
 
 
 class InstitutionalAPIError(RuntimeError):
@@ -32,6 +40,10 @@ class AuthenticatedTeacher:
     role: str
     access_token: str
     expires_in_seconds: int
+    # URL ya normalizada para usarse directamente en un <img>. Cadena vacía
+    # cuando CIMA no envía `rutaFoto` o el enlace no es interpretable; en ese
+    # caso la UI muestra las iniciales.
+    photo_url: str = ""
 
     @property
     def initials(self) -> str:
@@ -46,6 +58,10 @@ class Classroom:
     grade: str | None
     course: str | None
     period: str | None
+    # Valor crudo del campo `type` de CIMA (ej. "N"). No se muestra en
+    # ninguna pantalla; se conserva porque el endpoint de alumnos por aula
+    # lo vuelve a pedir como parte de la URL (ver list_classroom_students).
+    section_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +101,7 @@ class InstitutionalClient:
         student_path: str,
         service_token: str,
         students_path: str = "",
+        id_system: int = 0,
         timeout_seconds: float = 8.0,
         verify_tls: bool = True,
     ):
@@ -95,6 +112,10 @@ class InstitutionalClient:
         self.students_path = students_path
         self.student_path = student_path
         self.service_token = service_token
+        # ID del sistema consumidor registrado ante CIMA (idSystem en el
+        # body de login). No confundir con el ID de la docente: identifica
+        # a MAXCIM frente a otras aplicaciones que comparten la misma API.
+        self.id_system = id_system
         self.timeout_seconds = timeout_seconds
         self.verify_tls = verify_tls
         self.http = requests.Session()
@@ -111,13 +132,14 @@ class InstitutionalClient:
             students_path=str(config.get("INSTITUTIONAL_API_STUDENTS_PATH") or "").strip(),
             student_path=str(config.get("INSTITUTIONAL_API_STUDENT_PATH") or "").strip(),
             service_token=str(config.get("INSTITUTIONAL_API_SERVICE_TOKEN") or "").strip(),
+            id_system=int(config.get("INSTITUTIONAL_API_ID_SYSTEM") or 0),
             timeout_seconds=float(config.get("INSTITUTIONAL_API_TIMEOUT_SECONDS") or 8),
             verify_tls=bool(config.get("INSTITUTIONAL_API_VERIFY_TLS", True)),
         )
 
     @property
     def login_ready(self) -> bool:
-        return bool(self.base_url and self.login_path and self.classrooms_path)
+        return bool(self.base_url and self.login_path and self.classrooms_path and self.id_system)
 
     @property
     def recognition_ready(self) -> bool:
@@ -182,34 +204,91 @@ class InstitutionalClient:
             )
         return value
 
-    def _parse_authenticated_teacher(self, payload: Any) -> AuthenticatedTeacher:
-        if not isinstance(payload, dict) or not isinstance(payload.get("teacher"), dict):
-            raise InstitutionalAPIError("La respuesta de inicio de sesión no cumple el contrato MAXCIM.")
+    def _parse_jwt_teacher(self, payload: Any) -> AuthenticatedTeacher:
+        """Parses CIMA's `POST .../authentication/with/user` response.
 
-        teacher = payload["teacher"]
-        access_token = self._required_text(payload, "access_token")
-        teacher_id = self._required_text(teacher, "id")
-        display_name = self._required_text(teacher, "display_name")
-        role = self._required_text(teacher, "role").upper()
-        status = self._required_text(teacher, "status").upper()
+        CIMA replies with `{"content": {"token": "Bearer <jwt>"}}`. There is
+        no separate `teacher` envelope: the identity travels as unsigned
+        claims inside the JWT itself (`idPersona`, `nombres`,
+        `grupoPersonal`, `iat`/`exp`, …). We decode without verifying the
+        signature because the token was obtained directly from CIMA over
+        HTTPS within this same request — never supplied by the browser —
+        so forging it would require compromising that channel, not MAXCIM.
+        """
+        content = payload.get("content") if isinstance(payload, dict) else None
+        raw_token = str(content.get("token") or "").strip() if isinstance(content, dict) else ""
+        if not raw_token:
+            # CIMA doesn't appear to use a dedicated error envelope for bad
+            # credentials on this endpoint: an otherwise-200 response with no
+            # token is the observed signal for a rejected login.
+            raise InstitutionalAuthenticationError()
 
-        if role not in {"DOCENTE", "TEACHER"}:
-            raise InstitutionalAuthenticationError("La cuenta institucional no pertenece a una docente.")
-        if status not in {"ACTIVO", "ACTIVE"}:
-            raise InstitutionalAuthenticationError("La cuenta institucional no está activa.")
-
+        token = raw_token.replace("Bearer", "").strip()
         try:
-            expires_in = max(300, int(payload.get("expires_in", 3600)))
-        except (TypeError, ValueError) as exc:
-            raise InstitutionalAPIError("La expiración del token institucional no es válida.") from exc
+            claims = jwt.decode(token, options={"verify_signature": False})
+        except jwt.PyJWTError as exc:
+            raise InstitutionalAPIError("El token institucional no se pudo decodificar.") from exc
+
+        teacher_id = self._required_text(claims, "idPersona")
+        raw_name = self._required_text(claims, "nombres")
+        grupo = self._required_text(claims, "grupoPersonal")
+        if "docente" not in grupo.lower():
+            raise InstitutionalAuthenticationError(
+                "La cuenta institucional no pertenece al personal docente."
+            )
 
         return AuthenticatedTeacher(
             institutional_id=teacher_id,
-            display_name=display_name,
+            display_name=self._format_display_name(raw_name),
             role="DOCENTE",
-            access_token=access_token,
-            expires_in_seconds=expires_in,
+            access_token=token,
+            expires_in_seconds=self._expires_in_from_claims(claims),
+            photo_url=self._normalize_drive_photo_url(claims.get("rutaFoto")),
         )
+
+    @staticmethod
+    def _normalize_drive_photo_url(raw: Any) -> str:
+        """Turns CIMA's `rutaFoto` into something a browser `<img>` can load.
+
+        CIMA sends a Google Drive *share* link (p.ej.
+        `https://drive.google.com/file/d/<id>/view?usp=drivesdk`), que no se
+        puede incrustar directamente. Si logramos extraer el id del archivo lo
+        reescribimos al endpoint de miniatura, que sí sirve un binario de
+        imagen cuando el archivo está compartido con enlace. Cualquier otra
+        URL http(s) se deja pasar tal cual; lo demás se descarta.
+        """
+        value = str(raw or "").strip()
+        if not value:
+            return ""
+
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"}:
+            return ""
+
+        host = parsed.netloc.lower()
+        if host.endswith("drive.google.com"):
+            match = re.search(r"/file/d/([^/]+)", parsed.path)
+            file_id = match.group(1) if match else (
+                parse_qs(parsed.query).get("id", [""])[0]
+            )
+            if file_id:
+                return f"https://drive.google.com/thumbnail?id={file_id}&sz=w160"
+        return value
+
+    @staticmethod
+    def _format_display_name(raw_name: str) -> str:
+        # CIMA envía apellidos y nombres juntos y en mayúsculas, p.ej.
+        # "RODAS ROSALES OSCAR ALEXIS", sin separar unos de otros. Solo
+        # normalizamos la capitalización para mostrarlo.
+        return " ".join(part.capitalize() for part in raw_name.split())
+
+    @staticmethod
+    def _expires_in_from_claims(claims: dict[str, Any]) -> int:
+        try:
+            expires_in = int(claims["exp"]) - int(claims["iat"])
+        except (KeyError, TypeError, ValueError):
+            return 3600
+        return max(300, expires_in)
 
     def authenticate(self, institutional_id: str, credential: str) -> AuthenticatedTeacher:
         if not self.login_ready:
@@ -217,9 +296,14 @@ class InstitutionalClient:
         payload = self._request(
             "POST",
             self.login_path,
-            payload={"institutional_id": institutional_id, "credential": credential},
+            payload={
+                "username": institutional_id,
+                "password": credential,
+                "idSystem": self.id_system,
+                "identifier": CIMA_IDENTIFIER_PLACEHOLDER,
+            },
         )
-        return self._parse_authenticated_teacher(payload)
+        return self._parse_jwt_teacher(payload)
 
     def authenticate_google(self, verified_id_token: str) -> AuthenticatedTeacher:
         """Exchange a verified Google ID token for the institutional session.
@@ -238,129 +322,101 @@ class InstitutionalClient:
             self.google_login_path,
             payload={"id_token": verified_id_token},
         )
-        return self._parse_authenticated_teacher(payload)
+        # Contrato sin confirmar todavía: se asume el mismo sobre
+        # {"content": {"token": "<jwt>"}} que el login con usuario y
+        # contraseña. Ajustar si CIMA confirma una forma distinta para este
+        # endpoint (ver docs/integration-contract.md, sección 3.2).
+        return self._parse_jwt_teacher(payload)
 
     def list_teacher_classrooms(self, access_token: str, teacher_id: str) -> list[Classroom]:
+        """Lists the sections assigned to a teacher.
+
+        Confirmed against the real API (see probar_conexion_aulas.py): the
+        path parameter CIMA expects here is `idLogueo`, a per-login id — NOT
+        `idPersona` (the stable person id used elsewhere as
+        `institutional_id`/`fk_user`). `idLogueo` lives inside the access
+        token itself, so it's decoded from `access_token` rather than taken
+        from `teacher_id`. `teacher_id` is kept in the signature only for
+        interface compatibility with `DemoInstitutionalClient`, which also
+        ignores it.
+        """
         if not self.login_ready:
             raise InstitutionalConfigurationError()
-        path = self.classrooms_path.format(teacher_id=teacher_id)
+        try:
+            claims = jwt.decode(access_token, options={"verify_signature": False})
+        except jwt.PyJWTError as exc:
+            raise InstitutionalAPIError("El token institucional no se pudo decodificar.") from exc
+        login_id = self._required_text(claims, "idLogueo")
+
+        path = self.classrooms_path.format(login_id=login_id)
         payload = self._request("GET", path, token=access_token)
-        records = payload.get("classrooms") if isinstance(payload, dict) else None
-        if not isinstance(records, list):
+        if not isinstance(payload, list):
             raise InstitutionalAPIError("La API institucional no devolvió la lista de aulas esperada.")
 
         classrooms: list[Classroom] = []
-        for record in records:
+        for record in payload:
             if not isinstance(record, dict):
                 raise InstitutionalAPIError("La API institucional devolvió un aula no válida.")
+            # CIMA no separa grado/sección/sede/turno: todo viene junto en
+            # `description` (ej. "5TH - D PRIM. GRAU MAÑANA"). Se usa tal
+            # cual como nombre en vez de intentar partirlo con heurísticas.
+            # `type` y `status` también vienen en la respuesta pero su
+            # significado no está confirmado (status es `false` en todas las
+            # aulas observadas hasta ahora), así que no se usan todavía.
             classrooms.append(Classroom(
                 institutional_id=self._required_text(record, "id"),
-                name=self._required_text(record, "name"),
-                grade=str(record.get("grade") or "").strip() or None,
-                course=str(record.get("course") or "").strip() or None,
-                period=str(record.get("period") or "").strip() or None,
+                name=self._required_text(record, "description"),
+                grade=None,
+                course=None,
+                period=None,
+                section_type=str(record.get("type") or "").strip() or None,
             ))
         return classrooms
 
     @classmethod
     def _map_classroom_student(cls, record: dict[str, Any]) -> ClassroomStudent:
-        """Mapea temporalmente las variantes previstas del contrato de alumnos.
+        """Mapea la respuesta confirmada de CIMA para alumnos por aula.
 
-        Los nombres reales de los campos aún deben ser confirmados por el
-        cliente. Todas las variantes están centralizadas aquí para que ese
-        ajuste futuro se haga en un solo lugar.
+        Verificado contra datos reales (ver probar_conexion_alumnos.py):
+        `idStudentSchool` coincide con el prefijo de `institutionalEmail`
+        (ej. "79398411" en "79398411@colegiocima.edu.pe"), así que es el ID
+        institucional estable del alumno — no `idPerson`, que es un ID
+        interno distinto de CIMA (paralelo a `idPersona` para docentes).
         """
-
-        def first_text(*fields: str) -> str:
-            for field in fields:
-                value = record.get(field)
-                if isinstance(value, (str, int)) and not isinstance(value, bool):
-                    normalized = str(value).strip()
-                    if normalized:
-                        return normalized
-            return ""
-
-        institutional_id = first_text(
-            "id", "institutional_id", "student_id", "id_alumno", "alumno_id"
-        )
-        apellidos = first_text("apellidos", "last_name", "last_names", "surname", "surnames")
-        nombres = first_text("nombres", "first_name", "given_name", "given_names", "nombre")
-
-        if not apellidos:
-            apellido_paterno = first_text("apellido_paterno", "paternal_surname")
-            apellido_materno = first_text("apellido_materno", "maternal_surname")
-            apellidos = " ".join(
-                part for part in (apellido_paterno, apellido_materno) if part
-            )
-
-        if not apellidos or not nombres:
-            combined_name = first_text("full_name", "display_name", "nombre_completo", "name")
-            if "," in combined_name:
-                combined_apellidos, combined_nombres = (
-                    part.strip() for part in combined_name.split(",", 1)
-                )
-            else:
-                parts = combined_name.split()
-                surname_count = 2 if len(parts) >= 3 else 1
-                combined_nombres = " ".join(parts[:-surname_count])
-                combined_apellidos = " ".join(parts[-surname_count:])
-            apellidos = apellidos or combined_apellidos
-            nombres = nombres or combined_nombres
-
-        missing_fields = [
-            field
-            for field, value in (
-                ("id", institutional_id),
-                ("apellidos", apellidos),
-                ("nombres", nombres),
-            )
-            if not value
-        ]
-        if missing_fields:
-            raise InstitutionalAPIError(
-                "La respuesta institucional del alumno no contiene datos válidos para: "
-                + ", ".join(missing_fields)
-                + "."
-            )
-
         return ClassroomStudent(
-            institutional_id=institutional_id,
-            apellidos=apellidos,
-            nombres=nombres,
+            institutional_id=cls._required_text(record, "idStudentSchool"),
+            apellidos=cls._required_text(record, "lastName"),
+            nombres=cls._required_text(record, "firstName"),
         )
 
     def list_classroom_students(
-        self, access_token: str, classroom_id: str
+        self, access_token: str, classroom_id: str, section_type: str | None = None
     ) -> list[ClassroomStudent]:
         if not self.students_ready:
             raise InstitutionalConfigurationError(
                 "La consulta institucional de alumnos por aula no está configurada."
             )
-        path = self.students_path.format(classroom_id=classroom_id)
+        # Confirmado contra la API real (ver probar_conexion_alumnos.py):
+        # además del ID del aula, esta ruta vuelve a pedir el `type` que ya
+        # vino en el listado de aulas ("N" es el único valor observado hasta
+        # ahora) y un orden ("A" ascendente / "N" descendente, MAXCIM siempre
+        # manda "A"). `section_type` es opcional porque `DemoInstitutionalClient`
+        # y los tests con rutas genéricas no lo necesitan; con la ruta real
+        # de CIMA sí hace falta pasar `classroom.section_type`.
+        path = self.students_path.format(
+            classroom_id=classroom_id,
+            section_type=section_type or "N",
+            order="A",
+        )
         payload = self._request("GET", path, token=access_token)
-        # La clave del sobre tampoco está confirmada por el cliente, igual que
-        # los campos de cada alumno en `_map_classroom_student`. Se aceptan las
-        # variantes previstas y la lista desnuda.
-        if isinstance(payload, list):
-            records = payload
-        elif isinstance(payload, dict):
-            records = next(
-                (
-                    payload[key]
-                    for key in ("students", "alumnos", "data", "items")
-                    if isinstance(payload.get(key), list)
-                ),
-                None,
-            )
-        else:
-            records = None
-        if not isinstance(records, list):
+        # Confirmado: una lista JSON desnuda, sin sobre.
+        if not isinstance(payload, list):
             raise InstitutionalAPIError(
                 "La API institucional no devolvió la lista de alumnos esperada."
             )
 
         students: list[ClassroomStudent] = []
-        for record in records:
+        for record in payload:
             if not isinstance(record, dict):
                 raise InstitutionalAPIError(
                     "La API institucional devolvió un alumno no válido."
