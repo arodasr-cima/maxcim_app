@@ -35,25 +35,66 @@ def add_interaction(material, student_id, *, correct, question, answer, appraisa
     return interaction
 
 
-def test_classroom_student_list_renders_adapter_students(client):
-    response = client.get("/aulas/AULA-REAL-1")
+def test_classroom_student_list_renders_adapter_students(client, urls):
+    response = client.get(urls.classroom("AULA-REAL-1"))
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
     assert "Pérez Flores" in html
     assert "Ana Lucía" in html
     assert "Quispe Rojas" in html
-    assert "/aulas/AULA-REAL-1/alumnos/ALU-TEST-1" in html
+    # El enlace al alumno usa el identificador opaco firmado, no los IDs crudos.
+    assert urls.student("AULA-REAL-1", "ALU-TEST-1") in html
+    assert "AULA-REAL-1" not in html
+    assert "ALU-TEST-1" not in html
 
 
-def test_teacher_cannot_open_a_classroom_that_is_not_theirs(client):
-    response = client.get("/aulas/AULA-AJENA")
+def test_teacher_cannot_open_a_classroom_that_is_not_theirs(client, urls):
+    response = client.get(urls.classroom("AULA-AJENA"))
 
     assert response.status_code == 404
     assert "no pertenece a la docente autenticada" in response.get_data(as_text=True)
 
 
-def test_progress_shows_results_and_ignores_other_teacher_materials(app, client):
+def test_a_tampered_or_foreign_ref_is_rejected(client):
+    assert client.get("/aulas/no-es-un-token-firmado").status_code == 404
+    assert client.get("/aulas/alumno/basura").status_code == 404
+
+
+def test_a_ref_of_the_wrong_kind_is_rejected(client, urls):
+    # Un token de alumno no debe abrir una ruta de aula, ni al revés.
+    student_token = urls.student("AULA-REAL-1", "ALU-TEST-1").rsplit("/", 1)[-1]
+    classroom_token = urls.classroom("AULA-REAL-1").rsplit("/", 1)[-1]
+    # token de alumno en rutas que esperan uno de aula
+    assert client.get(f"/aulas/{student_token}").status_code == 404
+    assert client.get(f"/aulas/{student_token}/avance").status_code == 404
+    # token de aula en la ruta que espera uno de alumno
+    assert client.get(f"/aulas/alumno/{classroom_token}").status_code == 404
+
+
+def test_media_token_is_bound_to_the_teacher(app, client):
+    from itsdangerous import URLSafeTimedSerializer
+
+    s = URLSafeTimedSerializer(app.config["SECRET_KEY"], salt="maxcim-media")
+    mine = s.dumps({"p": "x/y.txt", "t": "DOC-TEST-1"})
+    other = s.dumps({"p": "x/y.txt", "t": "OTRA-DOCENTE"})
+    no_owner = s.dumps({"p": "x/y.txt"})
+    # El mío pasa la verificación de dueño (404 solo porque el archivo no existe).
+    assert client.get(f"/media/{mine}").status_code == 404
+    assert client.get(f"/media/{other}").status_code == 403
+    assert client.get(f"/media/{no_owner}").status_code == 403
+
+
+def test_media_token_rejects_path_escape(app, client):
+    from itsdangerous import URLSafeTimedSerializer
+
+    s = URLSafeTimedSerializer(app.config["SECRET_KEY"], salt="maxcim-media")
+    for bad in ("../../secret.txt", "C:/Windows/win.ini", "/etc/passwd", "//host/share/x"):
+        tok = s.dumps({"p": bad, "t": "DOC-TEST-1"})
+        assert client.get(f"/media/{tok}").status_code == 404
+
+
+def test_progress_shows_results_and_ignores_other_teacher_materials(app, client, urls):
     with app.app_context():
         own_material = add_material("DOC-TEST-1", "Cuento autorizado")
         other_material = add_material("DOC-OTRA", "Material ajeno")
@@ -83,7 +124,7 @@ def test_progress_shows_results_and_ignores_other_teacher_materials(app, client)
         )
         db.session.commit()
 
-    response = client.get("/aulas/AULA-REAL-1/avance")
+    response = client.get(urls.progress("AULA-REAL-1"))
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
@@ -93,7 +134,7 @@ def test_progress_shows_results_and_ignores_other_teacher_materials(app, client)
     assert "Material ajeno" not in html
 
 
-def test_progress_and_detail_label_a_materialless_turn_as_conversation(app, client):
+def test_progress_and_detail_label_a_materialless_turn_as_conversation(app, client, urls):
     with app.app_context():
         own_material = add_material("DOC-TEST-1", "Cuento del búho")
         add_interaction(
@@ -124,7 +165,7 @@ def test_progress_and_detail_label_a_materialless_turn_as_conversation(app, clie
         )
         db.session.commit()
 
-    progress = client.get("/aulas/AULA-REAL-1/avance")
+    progress = client.get(urls.progress("AULA-REAL-1"))
     progress_html = progress.get_data(as_text=True)
     assert progress.status_code == 200
     # Material-less turns are labelled "Conversación"; the material one keeps its name.
@@ -139,7 +180,7 @@ def test_progress_and_detail_label_a_materialless_turn_as_conversation(app, clie
     assert 'title="None' not in progress_html
     assert "Conversación: None" not in progress_html
 
-    detail = client.get("/aulas/AULA-REAL-1/alumnos/ALU-TEST-1")
+    detail = client.get(urls.student("AULA-REAL-1", "ALU-TEST-1"))
     detail_html = detail.get_data(as_text=True)
     assert detail.status_code == 200
     assert "Conversación" in detail_html
@@ -151,7 +192,7 @@ def test_progress_and_detail_label_a_materialless_turn_as_conversation(app, clie
     assert "<strong>None</strong>" not in detail_html
 
 
-def test_student_detail_shows_question_answer_and_robot_appraisal(app, client):
+def test_student_detail_shows_question_answer_and_robot_appraisal(app, client, urls):
     with app.app_context():
         material = add_material("DOC-TEST-1", "El bosque que escucha")
         add_interaction(
@@ -164,21 +205,30 @@ def test_student_detail_shows_question_answer_and_robot_appraisal(app, client):
         )
         db.session.commit()
 
-    response = client.get("/aulas/AULA-REAL-1/alumnos/ALU-TEST-1")
+    response = client.get(urls.student("AULA-REAL-1", "ALU-TEST-1"))
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
     assert "¿Qué hizo Luna para ayudar?" in html
     assert "Escuchó a sus amigos." in html
     assert "Respuesta clara y completa." in html
-    # El audio de la respuesta se muestra debajo del texto.
+    # El audio de la respuesta se muestra debajo del texto, servido por una
+    # URL firmada (/media/<token>), nunca por /static/.
     assert '<audio class="interaction-answer__audio"' in html
-    assert "/static/fixtures/respuesta.wav" in html
+    assert 'src="/media/' in html
+    assert "/static/fixtures/respuesta.wav" not in html
     assert "El bosque que escucha" in html
 
 
+def _stored_upload(app, stored_path):
+    """Ruta en disco de un archivo de material (path guardado con prefijo
+    histórico `uploads/`, ahora relativo a UPLOADS_ROOT)."""
+    rel = stored_path[len("uploads/"):] if stored_path.startswith("uploads/") else stored_path
+    return os.path.join(app.config["UPLOADS_ROOT"], rel)
+
+
 def test_saving_sentence_material_writes_a_json_list(app, client, tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "static_folder", str(tmp_path))
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
     response = client.post(
         "/api/material/save",
         data={
@@ -199,13 +249,12 @@ def test_saving_sentence_material_writes_a_json_list(app, client, tmp_path, monk
         assert material.path_audio is None
         assert material.path_audio_resumen is None
 
-        stored = os.path.join(app.static_folder, material.path_preguntas)
-        with open(stored, "r", encoding="utf-8") as f:
+        with open(_stored_upload(app, material.path_preguntas), "r", encoding="utf-8") as f:
             assert json.load(f) == ["La luna brilla.", "El río canta."]
 
 
 def test_saving_sentence_material_still_accepts_raw_text(app, client, tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "static_folder", str(tmp_path))
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
     response = client.post(
         "/api/material/save",
         data={
@@ -218,6 +267,5 @@ def test_saving_sentence_material_still_accepts_raw_text(app, client, tmp_path, 
     assert response.status_code == 200
     with app.app_context():
         material = db.session.get(Material, response.get_json()["material_id"])
-        stored = os.path.join(app.static_folder, material.path_preguntas)
-        with open(stored, "r", encoding="utf-8") as f:
+        with open(_stored_upload(app, material.path_preguntas), "r", encoding="utf-8") as f:
             assert json.load(f) == ["La luna brilla.", "El río canta."]

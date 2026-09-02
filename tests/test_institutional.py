@@ -119,6 +119,31 @@ def test_authenticate_treats_a_missing_token_as_invalid_credentials(monkeypatch)
         client.authenticate("orodasr", "credencial-incorrecta")
 
 
+def test_authenticate_rejects_an_already_expired_jwt(monkeypatch):
+    client = make_client()
+    now = int(time.time())
+    fake_jwt = make_cima_jwt(iat=now - 7200, exp=now - 60)
+    monkeypatch.setattr(
+        client, "_request", lambda *a, **k: {"content": {"token": fake_jwt}}
+    )
+
+    with pytest.raises(InstitutionalAuthenticationError):
+        client.authenticate("orodasr", "credencial")
+
+
+def test_session_lifetime_never_exceeds_the_jwt_absolute_expiry(monkeypatch):
+    client = make_client()
+    now = int(time.time())
+    # Token de 5 h emitido hace 4 h 59 m: solo le queda ~60 s.
+    fake_jwt = make_cima_jwt(iat=now - 17_940, exp=now + 60)
+    monkeypatch.setattr(
+        client, "_request", lambda *a, **k: {"content": {"token": fake_jwt}}
+    )
+
+    teacher = client.authenticate("orodasr", "credencial")
+    assert teacher.expires_in_seconds <= 60
+
+
 def test_list_teacher_classrooms_uses_idlogueo_from_the_token_not_teacher_id(monkeypatch):
     client = make_client()
     fake_token = make_cima_jwt(idLogueo="9716")

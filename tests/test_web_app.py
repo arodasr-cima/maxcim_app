@@ -1,5 +1,5 @@
-def test_teacher_pages_and_pwa_assets_render(client):
-    for path in ("/dashboard", "/material", "/aulas/AULA-REAL-1"):
+def test_teacher_pages_and_pwa_assets_render(client, urls):
+    for path in ("/dashboard", "/material", urls.classroom("AULA-REAL-1")):
         response = client.get(path)
         assert response.status_code == 200
         assert b"MAXCIM" in response.data

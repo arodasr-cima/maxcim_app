@@ -150,7 +150,11 @@ def load_material_items(material: Material) -> list[dict]:
     """Devuelve una lista de 'items' de práctica del material. Para un cuento
     son las preguntas de preguntas.json; para una oración, cada oración."""
     raw = material.path_preguntas or ""
-    path = os.path.join(app.static_folder, raw) if raw.startswith("uploads/") else None
+    path = (
+        os.path.join(app.config["UPLOADS_ROOT"], raw[len("uploads/"):])
+        if raw.startswith("uploads/")
+        else None
+    )
 
     if material.tipo_material == TIPO_ORACION:
         sentences: list[str] = []

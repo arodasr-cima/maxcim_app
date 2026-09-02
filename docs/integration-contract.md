@@ -18,6 +18,8 @@ X-MAXCIM-Webhook-Secret: <valor de MAXCIM_WEBHOOK_SECRET>
 
 En producción, un secreto ausente o incorrecto devuelve `401`. Con `DEMO_MODE=true`, MAXCIM omite esta validación para permitir el uso del simulador aislado.
 
+Los archivos de los materiales (texto, resumen, audio, preguntas, oraciones) **no** se sirven como archivos estáticos públicos. Se descargan solo por los endpoints autenticados de la sección 2.5 (`GET /api/materials/{id}/{recurso}`), que exigen el secreto y el identificador de la docente. Los campos `*_url` del cuerpo de respuesta apuntan a esos endpoints, no a `/static/`.
+
 ## 2. Endpoints que MAXCIM expone al robot
 
 ### 2.0 Cómo se identifica a la docente
@@ -74,11 +76,11 @@ Un `cuento` devuelve `200` con esta forma:
   "fecha_subido": "2026-08-27",
   "fk_user": "<idPersona_de_cima>",
   "docente": "<nombre_de_la_docente_o_null>",
-  "texto_completo_url": "https://<maxcim>/static/uploads/.../texto.txt",
-  "texto_resumen_url": "https://<maxcim>/static/uploads/.../resumen.txt",
-  "audio_completo_url": "https://<maxcim>/static/uploads/.../audio.wav",
-  "audio_resumen_url": "https://<maxcim>/static/uploads/.../audio_resumen.wav",
-  "preguntas_url": "https://<maxcim>/static/uploads/.../preguntas.json",
+  "texto_completo_url": "https://<maxcim>/api/materials/12/texto",
+  "texto_resumen_url": "https://<maxcim>/api/materials/12/resumen",
+  "audio_completo_url": "https://<maxcim>/api/materials/12/audio",
+  "audio_resumen_url": "https://<maxcim>/api/materials/12/audio-resumen",
+  "preguntas_url": "https://<maxcim>/api/materials/12/preguntas",
   "preguntas": [
     {
       "pregunta": "¿Quién es el personaje?",
@@ -101,7 +103,7 @@ Una `oracion` devuelve `200` con esta forma:
   "fk_user": "<idPersona_de_cima>",
   "docente": "<nombre_de_la_docente_o_null>",
   "oraciones": ["La luna brilla.", "El río canta."],
-  "oraciones_url": "https://<maxcim>/static/uploads/.../oraciones.json",
+  "oraciones_url": "https://<maxcim>/api/materials/13/oraciones",
   "texto_completo_url": null,
   "texto_resumen_url": null,
   "audio_completo_url": null,
@@ -161,13 +163,13 @@ La respuesta `201` contiene el registro creado:
   "fecha_hora": "2026-08-27T17:30:00",
   "pregunta": "¿Qué hizo Luna para ayudar?",
   "respuesta": "Escuchó a sus amigos.",
-  "path_audio_rpta": "https://<maxcim>/static/uploads/respuestas/respuesta.wav",
+  "path_audio_rpta": "uploads/respuestas/respuesta.wav",
   "apreciacion_robot": "Respuesta clara y completa.",
   "rpta_correcta": true
 }
 ```
 
-`path_audio_rpta` se recibe hoy como una ruta relativa ya resuelta bajo `static/`; esta llamada no sube el archivo. Antes de integrar el robot real se debe acordar cómo llegará ese audio al servidor.
+`path_audio_rpta` se guarda y se devuelve **tal cual lo mandó el robot** (una ruta relativa, no una URL). Esta llamada no sube el archivo y MAXCIM no lo publica en ningún lado. Antes de integrar el robot real se debe acordar cómo llegará ese audio al servidor y desde qué URL autenticada se servirá.
 
 ### 2.4 Consultar interacciones
 
@@ -177,7 +179,7 @@ X-MAXCIM-Webhook-Secret: <secreto>
 Accept: application/json
 ```
 
-Los dos filtros son opcionales y se pueden combinar. La respuesta `200` es una lista de hasta 200 registros con la misma forma de la respuesta del `POST`, ordenados desde el más reciente. Un `id_material` no numérico devuelve `400`.
+Hay que enviar **al menos uno** de los dos filtros (`id_material` o `fk_alumno`); se pueden combinar. Sin ninguno, `400` (este endpoint no vuelca el historial completo). La respuesta `200` es una lista de hasta 200 registros con la misma forma de la respuesta del `POST`, ordenados desde el más reciente. Un `id_material` no numérico devuelve `400`.
 
 ### 2.5 Descargar un archivo de un material
 
@@ -437,14 +439,17 @@ como una respuesta institucional inválida.
 
 `interaccion` no almacena el aula. Solo relaciona un `fk_alumno` institucional con un `id_material` (que puede ser `NULL`); a su vez, `material.fk_user` identifica a la docente dueña.
 
-Por eso `/aulas/<classroom_id>/avance` se construye en tiempo de consulta:
+Por eso `/aulas/<ref>/avance` se construye en tiempo de consulta (`<ref>` es un
+token firmado —tipo + `classroom_id` + `id` de la docente— con caducidad de 24 h;
+el `classroom_id` no viaja en texto plano y el token no sirve en la sesión de
+otra docente ni en una ruta de otro tipo):
 
 1. MAXCIM obtiene de la API institucional la matrícula vigente del aula.
 2. Obtiene las interacciones cuyos `fk_alumno` aparecen en esa matrícula.
 3. Limita esas interacciones a materiales cuyo `fk_user` sea la docente autenticada. Las conversaciones libres (`id_material` en `NULL`) no tienen material dueño, así que se atribuyen a la docente únicamente por la matrícula del paso 1.
 4. Calcula por alumno la secuencia de aciertos y errores y el total correcto/realizado.
 
-La misma restricción de matrícula y propiedad de materiales protege `/aulas/<classroom_id>/alumnos/<student_id>`. Como no existe un ID de aula histórico en `interaccion`, si un alumno pertenece a varias aulas de la misma docente no se puede atribuir una interacción a una de ellas con mayor precisión.
+La misma restricción de matrícula y propiedad de materiales protege `/aulas/alumno/<ref>`. Como no existe un ID de aula histórico en `interaccion`, si un alumno pertenece a varias aulas de la misma docente no se puede atribuir una interacción a una de ellas con mayor precisión.
 
 ## 5. Confirmaciones pendientes antes de producción
 

@@ -162,7 +162,7 @@ def test_get_cuento_material_round_trips_through_robot_api(
     (material_dir / "preguntas.json").write_text(
         json.dumps(questions, ensure_ascii=False), encoding="utf-8"
     )
-    monkeypatch.setattr(app, "static_folder", str(tmp_path))
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
 
     with app.app_context():
         material = seed_material(
@@ -178,6 +178,7 @@ def test_get_cuento_material_round_trips_through_robot_api(
 
     response = client.get(f"/api/materials/{material_id}")
     assert response.status_code == 200
+    base = f"http://localhost/api/materials/{material_id}"
     assert response.get_json() == {
         "id": material_id,
         "titulo": "El bosque que escucha",
@@ -185,11 +186,12 @@ def test_get_cuento_material_round_trips_through_robot_api(
         "fecha_subido": fecha_subido,
         "fk_user": TEST_TEACHER_ID,
         "docente": None,
-        "texto_completo_url": "http://localhost/static/material/texto.txt",
-        "texto_resumen_url": "http://localhost/static/material/resumen.txt",
-        "audio_completo_url": "http://localhost/static/material/audio.wav",
-        "audio_resumen_url": "http://localhost/static/material/audio_resumen.wav",
-        "preguntas_url": "http://localhost/static/material/preguntas.json",
+        # Los *_url apuntan al endpoint autenticado, no a /static/.
+        "texto_completo_url": f"{base}/texto",
+        "texto_resumen_url": f"{base}/resumen",
+        "audio_completo_url": f"{base}/audio",
+        "audio_resumen_url": f"{base}/audio-resumen",
+        "preguntas_url": f"{base}/preguntas",
         "preguntas": questions,
     }
 
@@ -233,7 +235,7 @@ def test_get_oracion_material_round_trips_through_robot_api(app, client):
 def test_get_oracion_material_serves_the_json_list_written_on_save(
     app, client, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(app, "static_folder", str(tmp_path))
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
     save = client.post(
         "/api/material/save",
         data={
@@ -247,7 +249,7 @@ def test_get_oracion_material_serves_the_json_list_written_on_save(
 
     body = client.get(f"/api/materials/{material_id}").get_json()
     assert body["oraciones"] == ["Hoy llueve.", "Mañana saldrá el sol."]
-    assert body["oraciones_url"].endswith("/oraciones.json")
+    assert body["oraciones_url"] == f"http://localhost/api/materials/{material_id}/oraciones"
 
 
 def test_material_save_requires_reviewed_expected_answers(client):

@@ -2,7 +2,9 @@ import io
 import hmac
 import json
 import mimetypes
+import ntpath
 import os
+import posixpath
 import re
 import secrets
 import shutil
@@ -15,6 +17,7 @@ from urllib.parse import quote_plus
 
 from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
+from itsdangerous import BadData, URLSafeTimedSerializer
 from flask import (
     Flask,
     Response,
@@ -23,6 +26,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     send_from_directory,
     session as browser_session,
     url_for,
@@ -219,9 +223,9 @@ QUESTION_CONFIGURATION = [
 
 # Recursos descargables de un `cuento` vía la API del robot. Cada entrada mapea
 # el segmento de la URL (/api/materials/<id>/<recurso>) a la columna de
-# `Material` con la ruta relativa bajo static/, el Content-Type de la descarga y
-# el nombre de archivo sugerido. Una `oracion` solo expone `oraciones` (ver
-# download_material_resource).
+# `Material` con la ruta del archivo (relativa a UPLOADS_ROOT, con el prefijo
+# histórico `uploads/`), el Content-Type de la descarga y el nombre de archivo
+# sugerido. Una `oracion` solo expone `oraciones` (ver download_material_resource).
 # El framework añade `; charset=utf-8` a los tipos text/* y application/json.
 MATERIAL_DOWNLOADS = {
     "texto": ("path_texto", "text/plain", "texto.txt"),
@@ -620,6 +624,13 @@ def create_app(test_config: dict | None = None):
         SQLALCHEMY_DATABASE_URI=SQLALCHEMY_DATABASE_URI,
         SQLALCHEMY_ENGINE_OPTIONS={"pool_pre_ping": True},
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        # Los archivos de los materiales (texto, audio, preguntas, oraciones) y
+        # los audios de respuesta de las interacciones viven FUERA de static/
+        # para que no se sirvan sin autenticación. La consola los entrega por
+        # /media/<token> (URL firmada y con caducidad) y el robot por
+        # /api/materials/<id>/<recurso> (secreto compartido).
+        UPLOADS_ROOT=os.environ.get("MAXCIM_UPLOADS_DIR")
+        or os.path.join(app.instance_path, "uploads"),
         MAXCIM_WEBHOOK_SECRET=os.environ.get("MAXCIM_WEBHOOK_SECRET", ""),
         SESSION_TOKEN_ENCRYPTION_KEY=os.environ.get("SESSION_TOKEN_ENCRYPTION_KEY", ""),
         INSTITUTIONAL_API_BASE_URL=os.environ.get("INSTITUTIONAL_API_BASE_URL", ""),
@@ -647,6 +658,8 @@ def create_app(test_config: dict | None = None):
     )
     if test_config:
         app.config.update(test_config)
+
+    os.makedirs(app.config["UPLOADS_ROOT"], exist_ok=True)
 
     if app.config.get("DEMO_MODE"):
         os.makedirs(app.instance_path, exist_ok=True)
@@ -822,6 +835,132 @@ def create_app(test_config: dict | None = None):
 
     app.jinja_env.globals["csrf_token"] = csrf_token
 
+    # --- Rutas de los archivos de materiales (fuera de static/) ---------------
+
+    def uploads_relpath(stored_path: str) -> str:
+        """Ruta de un archivo relativa a UPLOADS_ROOT.
+
+        En la BD las rutas se guardan como `uploads/<id>/texto.txt` (prefijo
+        histórico de cuando vivían bajo static/); aquí se le quita ese prefijo
+        y se normaliza para impedir escapar del directorio (`..`, rutas
+        absolutas, letra de unidad de Windows, UNC `\\\\host\\share`).
+        """
+        rel = str(stored_path or "").replace("\\", "/").strip().lstrip("/")
+        if rel.startswith("uploads/"):
+            rel = rel[len("uploads/"):]
+        # Normalización POSIX (barras `/`): send_from_directory usa rutas
+        # estilo POSIX incluso en Windows, así que no se debe introducir `\`.
+        rel = posixpath.normpath(rel)
+        if (
+            not rel
+            or rel in (".", "..")
+            or rel.startswith(("../", "/"))
+            or ":" in rel  # letra de unidad Windows (C:/...) o esquema
+            or ntpath.splitdrive(rel)[0]  # unidad o UNC
+        ):
+            raise ValueError("Ruta de material fuera del directorio permitido.")
+        return rel
+
+    def uploads_abspath(stored_path: str) -> str:
+        """Ruta absoluta del archivo, garantizada dentro de UPLOADS_ROOT.
+
+        Además de la validación léxica de `uploads_relpath`, resuelve enlaces
+        simbólicos y confirma con `commonpath` que el resultado real no se
+        salió de la raíz (defensa contra symlinks apuntando afuera)."""
+        root = os.path.realpath(app.config["UPLOADS_ROOT"])
+        candidate = os.path.realpath(
+            os.path.join(root, uploads_relpath(stored_path))
+        )
+        try:
+            if os.path.commonpath([root, candidate]) != root:
+                raise ValueError
+        except ValueError:
+            raise ValueError("Ruta de material fuera del directorio permitido.")
+        return candidate
+
+    # --- URLs firmadas para servir esos archivos a la consola ----------------
+
+    MEDIA_URL_MAX_AGE_SECONDS = 3600
+
+    def _media_serializer() -> URLSafeTimedSerializer:
+        return URLSafeTimedSerializer(app.config["SECRET_KEY"], salt="maxcim-media")
+
+    def media_url(stored_path: str | None) -> str:
+        """URL firmada hacia un archivo de material, válida 1 h y **atada a la
+        docente autenticada**: el token lleva su `id`, así que una URL copiada
+        (historial, captura, log) no sirve en la sesión de otra docente.
+        Reemplaza a `url_for('static', ...)` para que la ruta interna
+        (`uploads/<uuid>/...`) no quede en texto plano en el HTML ni en los
+        logs de acceso."""
+        if not stored_path:
+            return ""
+        teacher = current_teacher() or {}
+        token = _media_serializer().dumps(
+            {"p": uploads_relpath(stored_path), "t": str(teacher.get("id"))}
+        )
+        return url_for("teacher_media", token=token)
+
+    app.jinja_env.globals["media_url"] = media_url
+
+    # --- Identificadores de aula/alumno en las URLs de la consola -----------
+    # Token firmado (no cifrado): el ID institucional viaja dentro pero no en
+    # texto plano en la ruta, no se puede falsificar ni reutilizar en la
+    # sesión de otra docente, caduca, y rotar SECRET_KEY invalida todos.
+
+    REF_URL_MAX_AGE_SECONDS = 86_400  # 24 h; se regeneran en cada carga de página
+
+    def _ref_serializer() -> URLSafeTimedSerializer:
+        return URLSafeTimedSerializer(app.config["SECRET_KEY"], salt="maxcim-teacher-ref")
+
+    def classroom_ref(classroom_id) -> str:
+        teacher = current_teacher() or {}
+        return _ref_serializer().dumps(
+            {"k": "c", "t": str(teacher.get("id")), "c": str(classroom_id)}
+        )
+
+    def student_ref(classroom_id, student_id) -> str:
+        teacher = current_teacher() or {}
+        return _ref_serializer().dumps(
+            {
+                "k": "s",
+                "t": str(teacher.get("id")),
+                "c": str(classroom_id),
+                "s": str(student_id),
+            }
+        )
+
+    app.jinja_env.globals["classroom_ref"] = classroom_ref
+    app.jinja_env.globals["student_ref"] = student_ref
+
+    class _RefError(Exception):
+        """Un ref de aula/alumno inválido: firma mala, caducado, de otra
+        docente, o del tipo equivocado (aula vs alumno)."""
+
+    def _load_ref(token: str, expected_kind: str) -> dict:
+        teacher = current_teacher() or {}
+        try:
+            data = _ref_serializer().loads(
+                str(token), max_age=REF_URL_MAX_AGE_SECONDS
+            )
+        except BadData:
+            raise _RefError()
+        if (
+            not isinstance(data, dict)
+            or data.get("k") != expected_kind
+            or str(data.get("t")) != str(teacher.get("id"))
+        ):
+            raise _RefError()
+        return data
+
+    def resolve_classroom_ref(token: str) -> str:
+        return _load_ref(token, "c")["c"]
+
+    def resolve_student_ref(token: str) -> tuple[str, str]:
+        data = _load_ref(token, "s")
+        if "s" not in data:
+            raise _RefError()
+        return data["c"], data["s"]
+
     @app.context_processor
     def inject_environment():
         return {"demo_mode": bool(app.config.get("DEMO_MODE"))}
@@ -869,6 +1008,8 @@ def create_app(test_config: dict | None = None):
             request.path.startswith("/api/")
             or request.path.startswith("/auth/")
             or request.path.startswith("/login")
+            or request.path.startswith("/aulas")
+            or request.path.startswith("/media/")
             or request.path in {
             "/dashboard", "/material",
             }
@@ -1098,10 +1239,22 @@ def create_app(test_config: dict | None = None):
         )
         return classroom, students
 
-    @app.route("/aulas/<classroom_id>")
+    def _bad_ref_error(teacher):
+        return render_classroom_error(
+            teacher,
+            InstitutionalAPIError(
+                "El enlace no es válido o no corresponde a tu sesión.", 404
+            ),
+        )
+
+    @app.route("/aulas/<ref>")
     @login_required
-    def classroom_detail(classroom_id):
+    def classroom_detail(ref):
         teacher = current_teacher()
+        try:
+            classroom_id = resolve_classroom_ref(ref)
+        except _RefError:
+            return _bad_ref_error(teacher)
         try:
             classroom, students = classroom_context(teacher, classroom_id)
         except InstitutionalAPIError as exc:
@@ -1114,10 +1267,14 @@ def create_app(test_config: dict | None = None):
             students=students,
         )
 
-    @app.route("/aulas/<classroom_id>/avance")
+    @app.route("/aulas/<ref>/avance")
     @login_required
-    def classroom_progress(classroom_id):
+    def classroom_progress(ref):
         teacher = current_teacher()
+        try:
+            classroom_id = resolve_classroom_ref(ref)
+        except _RefError:
+            return _bad_ref_error(teacher)
         try:
             classroom, students = classroom_context(teacher, classroom_id)
         except InstitutionalAPIError as exc:
@@ -1165,10 +1322,14 @@ def create_app(test_config: dict | None = None):
             progress_rows=progress_rows,
         )
 
-    @app.route("/aulas/<classroom_id>/alumnos/<student_id>")
+    @app.route("/aulas/alumno/<ref>")
     @login_required
-    def student_detail(classroom_id, student_id):
+    def student_detail(ref):
         teacher = current_teacher()
+        try:
+            classroom_id, student_id = resolve_student_ref(ref)
+        except _RefError:
+            return _bad_ref_error(teacher)
         try:
             classroom, students = classroom_context(teacher, classroom_id)
         except InstitutionalAPIError as exc:
@@ -1211,6 +1372,31 @@ def create_app(test_config: dict | None = None):
             student=student,
             interactions=interactions,
         )
+
+    @app.route("/media/<token>")
+    @login_required
+    def teacher_media(token):
+        """Sirve un archivo de material a la consola a partir de una URL
+        firmada por `media_url()`. El token lleva la ruta interna y el `id` de
+        la docente y caduca a la hora; una URL válida en la sesión de otra
+        docente se rechaza."""
+        teacher = current_teacher() or {}
+        try:
+            data = _media_serializer().loads(token, max_age=MEDIA_URL_MAX_AGE_SECONDS)
+        except BadData:
+            return jsonify({"error": "El enlace del archivo no es válido o expiró."}), 404
+        if not isinstance(data, dict) or str(data.get("t")) != str(teacher.get("id")):
+            return jsonify({"error": "El enlace no corresponde a tu sesión."}), 403
+        try:
+            # Ruta absoluta ya resuelta y verificada dentro de UPLOADS_ROOT; se
+            # sirve esa misma (no una relativa que se vuelva a unir), para no
+            # validar un path y abrir otro.
+            abs_path = uploads_abspath(str(data.get("p") or ""))
+        except ValueError:
+            return jsonify({"error": "Ruta de archivo no permitida."}), 404
+        if not os.path.isfile(abs_path):
+            return jsonify({"error": "Archivo no encontrado."}), 404
+        return send_file(abs_path)
 
     @app.route("/material")
     @login_required
@@ -1464,7 +1650,7 @@ def create_app(test_config: dict | None = None):
                 return jsonify({"error": "Las oraciones exceden el límite permitido."}), 413
 
             material_dir_name = uuid.uuid4().hex
-            material_dir = os.path.join(app.static_folder, "uploads", material_dir_name)
+            material_dir = os.path.join(app.config["UPLOADS_ROOT"], material_dir_name)
             os.makedirs(material_dir, exist_ok=True)
             with open(os.path.join(material_dir, "oraciones.json"), "wb") as f:
                 f.write(json.dumps(sentences, ensure_ascii=False, indent=2).encode("utf-8"))
@@ -1519,7 +1705,7 @@ def create_app(test_config: dict | None = None):
             return jsonify({"error": "Falta generar el audio completo o el audio resumen."}), 400
 
         material_dir_name = uuid.uuid4().hex
-        material_dir = os.path.join(app.static_folder, "uploads", material_dir_name)
+        material_dir = os.path.join(app.config["UPLOADS_ROOT"], material_dir_name)
         os.makedirs(material_dir, exist_ok=True)
 
         text_files = {
@@ -1584,11 +1770,23 @@ def create_app(test_config: dict | None = None):
             if stored_as_material_path(material.path_preguntas or "")
             else None
         )
-        material_dir = (
-            os.path.dirname(os.path.join(app.static_folder, path_anchor))
-            if path_anchor
-            else None
-        )
+        material_dir = None
+        if path_anchor:
+            try:
+                candidate = os.path.dirname(uploads_abspath(path_anchor))
+            except ValueError:
+                candidate = None
+            # Solo se borra si es una subcarpeta directa de UPLOADS_ROOT con
+            # nombre de UUID (hex de 32): nunca la raíz ni una ruta calculada
+            # a partir de un `path_*` manipulado (p.ej. `uploads/texto.txt`
+            # daría dirname == UPLOADS_ROOT).
+            root = os.path.realpath(app.config["UPLOADS_ROOT"])
+            if (
+                candidate
+                and os.path.dirname(candidate) == root
+                and re.fullmatch(r"[0-9a-f]{32}", os.path.basename(candidate))
+            ):
+                material_dir = candidate
 
         db.session.delete(material)
         db.session.commit()
@@ -1607,12 +1805,23 @@ def create_app(test_config: dict | None = None):
         raw = material.path_preguntas or ""
         if stored_as_material_path(raw):
             try:
-                with open(os.path.join(app.static_folder, raw), "r", encoding="utf-8") as f:
+                with open(uploads_abspath(raw), "r", encoding="utf-8") as f:
                     data = json.load(f)
             except (OSError, json.JSONDecodeError):
                 return []
             return normalize_sentences(data if isinstance(data, list) else [])
         return split_text_into_sentences(raw)
+
+    def _material_resource_url(material, recurso):
+        # Los `*_url` apuntan al endpoint autenticado del robot, no a
+        # /static/: bajarlos exige el secreto compartido y el identificador de
+        # la docente (ver contrato §2.5). Ya no exponen la ruta interna.
+        return url_for(
+            "download_material_resource",
+            material_id=material.id,
+            recurso=recurso,
+            _external=True,
+        )
 
     def serialize_material(material):
         if material.es_oracion:
@@ -1626,9 +1835,7 @@ def create_app(test_config: dict | None = None):
                 "docente": material.fk_user_name,
                 "oraciones": material_sentences(material),
                 "oraciones_url": (
-                    url_for("static", filename=material.path_preguntas, _external=True)
-                    if is_path
-                    else None
+                    _material_resource_url(material, "oraciones") if is_path else None
                 ),
                 "texto_completo_url": None,
                 "texto_resumen_url": None,
@@ -1637,11 +1844,10 @@ def create_app(test_config: dict | None = None):
                 "preguntas_url": None,
                 "preguntas": [],
             }
-        preguntas_path = os.path.join(app.static_folder, material.path_preguntas)
         try:
-            with open(preguntas_path, "r", encoding="utf-8") as f:
+            with open(uploads_abspath(material.path_preguntas), "r", encoding="utf-8") as f:
                 preguntas = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             preguntas = []
         return {
             "id": material.id,
@@ -1650,11 +1856,11 @@ def create_app(test_config: dict | None = None):
             "fecha_subido": material.fecha_subido.isoformat() if material.fecha_subido else None,
             "fk_user": material.fk_user,
             "docente": material.fk_user_name,
-            "texto_completo_url": url_for("static", filename=material.path_texto, _external=True),
-            "texto_resumen_url": url_for("static", filename=material.path_texto_resumen, _external=True),
-            "audio_completo_url": url_for("static", filename=material.path_audio, _external=True),
-            "audio_resumen_url": url_for("static", filename=material.path_audio_resumen, _external=True),
-            "preguntas_url": url_for("static", filename=material.path_preguntas, _external=True),
+            "texto_completo_url": _material_resource_url(material, "texto") if material.path_texto else None,
+            "texto_resumen_url": _material_resource_url(material, "resumen") if material.path_texto_resumen else None,
+            "audio_completo_url": _material_resource_url(material, "audio") if material.path_audio else None,
+            "audio_resumen_url": _material_resource_url(material, "audio-resumen") if material.path_audio_resumen else None,
+            "preguntas_url": _material_resource_url(material, "preguntas") if material.path_preguntas else None,
             "preguntas": preguntas,
         }
 
@@ -1767,15 +1973,17 @@ def create_app(test_config: dict | None = None):
             }), 404
 
         attr, mimetype, download_name = MATERIAL_DOWNLOADS[recurso]
-        rel_path = getattr(material, attr) or ""
-        if not rel_path:
+        stored_path = getattr(material, attr) or ""
+        if not stored_path:
             return jsonify({"error": f"El material no tiene {recurso}."}), 404
-        abs_path = os.path.join(app.static_folder, rel_path)
+        try:
+            abs_path = uploads_abspath(stored_path)  # resuelto + contenido en UPLOADS_ROOT
+        except ValueError:
+            return jsonify({"error": f"No se encontró el archivo de {recurso}."}), 404
         if not os.path.isfile(abs_path):
             return jsonify({"error": f"No se encontró el archivo de {recurso}."}), 404
-        return send_from_directory(
-            app.static_folder,
-            rel_path,
+        return send_file(
+            abs_path,
             mimetype=mimetype,
             as_attachment=True,
             download_name=download_name,
@@ -1802,7 +2010,10 @@ def create_app(test_config: dict | None = None):
             "fecha_hora": interaccion.fecha_hora.isoformat() if interaccion.fecha_hora else None,
             "pregunta": interaccion.pregunta,
             "respuesta": interaccion.respuesta,
-            "path_audio_rpta": url_for("static", filename=interaccion.path_audio_rpta, _external=True),
+            # Ruta relativa tal como la reportó el robot (no una URL bajo
+            # /static/): el mecanismo de transferencia de este audio todavía
+            # está por definir (ver contrato §2.3).
+            "path_audio_rpta": interaccion.path_audio_rpta,
             "apreciacion_robot": interaccion.apreciacion_robot,
             "rpta_correcta": interaccion.rpta_correcta,
         }
@@ -1883,16 +2094,23 @@ def create_app(test_config: dict | None = None):
     def list_interacciones():
         if not webhook_authorized():
             return jsonify({"error": "Integración no autorizada."}), 401
-        query = Interaccion.query
         material_id = request.args.get("id_material")
+        fk_alumno = (request.args.get("fk_alumno") or "").strip()
+        # Exigir al menos un filtro: el robot siempre consulta por un material
+        # o por un alumno concreto; sin filtro, este endpoint volcaría el
+        # historial de todas las docentes y alumnos con un solo secreto.
+        if not material_id and not fk_alumno:
+            return jsonify({
+                "error": "Indica al menos id_material o fk_alumno."
+            }), 400
+        query = Interaccion.query
         if material_id:
             try:
                 query = query.filter_by(id_material=int(material_id))
             except ValueError:
                 return jsonify({"error": "id_material no es válido."}), 400
-        fk_alumno = request.args.get("fk_alumno")
         if fk_alumno:
-            query = query.filter_by(fk_alumno=fk_alumno.strip())
+            query = query.filter_by(fk_alumno=fk_alumno)
         interacciones = query.order_by(Interaccion.fecha_hora.desc()).limit(200).all()
         return jsonify([serialize_interaccion(item) for item in interacciones])
 

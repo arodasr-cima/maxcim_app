@@ -1,4 +1,4 @@
-const CACHE_NAME = "maxcim-static-v2";
+const CACHE_NAME = "maxcim-static-v3";
 const STATIC_ASSETS = [
   "/static/css/dashboard.css",
   "/static/js/dashboard.js",
@@ -29,7 +29,12 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || requestUrl.origin !== self.location.origin) return;
 
   // Institutional and student information must never be persisted by the PWA cache.
-  if (requestUrl.pathname.startsWith("/api/") || requestUrl.pathname.startsWith("/static/uploads/")) {
+  if (
+    requestUrl.pathname.startsWith("/api/") ||
+    requestUrl.pathname.startsWith("/media/") ||
+    requestUrl.pathname.startsWith("/aulas") ||
+    requestUrl.pathname.startsWith("/static/uploads/")
+  ) {
     return;
   }
 

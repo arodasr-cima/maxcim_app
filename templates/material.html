@@ -207,17 +207,17 @@
       {% else %}
       <div class="material-card__audio-row">
         <div class="material-card__audio-label">Audio completo</div>
-        <audio controls src="{{ url_for('static', filename=m.path_audio) }}"></audio>
+        <audio controls src="{{ media_url(m.path_audio) }}"></audio>
       </div>
       <div class="material-card__audio-row">
         <div class="material-card__audio-label">Audio resumen</div>
-        <audio controls src="{{ url_for('static', filename=m.path_audio_resumen) }}"></audio>
+        <audio controls src="{{ media_url(m.path_audio_resumen) }}"></audio>
       </div>
       <div class="material-card__actions">
         <div class="material-card__links">
-          <a href="{{ url_for('static', filename=m.path_texto) }}" download>📄 Descargar texto completo</a>
-          <a href="{{ url_for('static', filename=m.path_texto_resumen) }}" download>📄 Descargar texto resumido</a>
-          <a href="{{ url_for('static', filename=m.path_preguntas) }}" download>❓ Preguntas generadas</a>
+          <a href="{{ media_url(m.path_texto) }}" download>📄 Descargar texto completo</a>
+          <a href="{{ media_url(m.path_texto_resumen) }}" download>📄 Descargar texto resumido</a>
+          <a href="{{ media_url(m.path_preguntas) }}" download>❓ Preguntas generadas</a>
         </div>
         <button type="button" class="material-card__delete" data-material-id="{{ m.id }}" data-material-name="{{ m.nombre_material }}">🗑 Eliminar</button>
       </div>

@@ -9,7 +9,9 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . ./
-RUN mkdir -p /app/static/uploads /app/instance
+# Los archivos de materiales viven fuera de static/ para que no se sirvan sin
+# autenticación (ver UPLOADS_ROOT en app.py / MAXCIM_UPLOADS_DIR).
+RUN mkdir -p /app/instance/uploads
 
 EXPOSE 8080
 

@@ -1,5 +1,6 @@
 import io
 import json
+import tempfile
 import wave
 
 import pytest
@@ -22,6 +23,7 @@ def demo_app(monkeypatch):
         "MAXCIM_WEBHOOK_SECRET": "",
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "SQLALCHEMY_ENGINE_OPTIONS": {},
+        "UPLOADS_ROOT": tempfile.mkdtemp(prefix="maxcim-demo-uploads-"),
     })
     with application.app_context():
         db.create_all()
@@ -119,7 +121,7 @@ def test_demo_story_questions_and_audio_work_without_gemini(demo_client):
 def test_demo_sentence_material_is_identified_and_saved_as_a_list(
     demo_app, demo_client, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(demo_app, "static_folder", str(tmp_path))
+    monkeypatch.setitem(demo_app.config, "UPLOADS_ROOT", str(tmp_path))
     enter_demo(demo_client)
     document = (
         "El perro corre en el parque.\n"

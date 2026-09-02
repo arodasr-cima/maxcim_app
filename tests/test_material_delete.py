@@ -67,10 +67,11 @@ def test_delete_removes_a_material_owned_by_the_teacher(app, client):
 
 def test_delete_removes_the_cuento_upload_folder(app, client):
     # A diferencia de otros tests de este proyecto, este sí ejercita el
-    # borrado real de archivos: crea una carpeta bajo static/uploads/ con un
-    # nombre único de prueba y verifica que el endpoint la elimine.
-    folder_name = f"test-delete-{uuid.uuid4().hex}"
-    material_dir = os.path.join(app.static_folder, "uploads", folder_name)
+    # borrado real de archivos: crea una carpeta bajo UPLOADS_ROOT con un
+    # nombre de UUID (el mismo formato que usa save_material) y verifica que
+    # el endpoint la elimine.
+    folder_name = uuid.uuid4().hex
+    material_dir = os.path.join(app.config["UPLOADS_ROOT"], folder_name)
     os.makedirs(material_dir, exist_ok=True)
     for filename in ("texto.txt", "audio.wav"):
         with open(os.path.join(material_dir, filename), "w") as f:
@@ -93,6 +94,30 @@ def test_delete_removes_the_cuento_upload_folder(app, client):
         # Red de seguridad si la aserción fallara antes de limpiar.
         if os.path.isdir(material_dir):
             shutil.rmtree(material_dir, ignore_errors=True)
+
+
+def test_delete_never_removes_the_uploads_root_from_a_crafted_anchor(app, client):
+    # Un path_texto manipulado sin subcarpeta (dirname == UPLOADS_ROOT) no debe
+    # provocar el borrado recursivo de todo el árbol de materiales.
+    root = app.config["UPLOADS_ROOT"]
+    other = os.path.join(root, "otro-material", "texto.txt")
+    os.makedirs(os.path.dirname(other), exist_ok=True)
+    with open(other, "w") as f:
+        f.write("no me borres")
+    with app.app_context():
+        material_id = seed_material(
+            path_texto="uploads/texto.txt",
+            path_audio=None,
+            path_texto_resumen=None,
+            path_audio_resumen=None,
+            path_preguntas="uploads/preguntas.json",
+        ).id
+
+    response = client.delete(f"/api/material/{material_id}")
+
+    assert response.status_code == 200
+    assert os.path.isdir(root)
+    assert os.path.isfile(other)
 
 
 def test_delete_is_blocked_when_the_material_has_interactions(app, client):

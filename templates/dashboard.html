@@ -39,7 +39,7 @@
       </div>
       {% endif %}
       {% for aula in aulas %}
-      <a class="aula-card aula-card--link" href="{{ url_for('classroom_detail', classroom_id=aula.id) }}" aria-label="Abrir el aula {{ aula.name }}">
+      <a class="aula-card aula-card--link" href="{{ url_for('classroom_detail', ref=classroom_ref(aula.id)) }}" aria-label="Abrir el aula {{ aula.name }}">
         <div class="aula-card__header">
           <div class="aula-card__avatar" aria-hidden="true">{{ aula.initials }}</div>
           <div class="aula-card__meta">

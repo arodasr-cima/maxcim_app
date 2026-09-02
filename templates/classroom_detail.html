@@ -14,7 +14,7 @@
         {% if classroom.period %} · {{ classroom.period }}{% endif %}
       </p>
     </div>
-    <a class="btn btn--primary teacher-heading__action" href="{{ url_for('classroom_progress', classroom_id=classroom.institutional_id) }}">
+    <a class="btn btn--primary teacher-heading__action" href="{{ url_for('classroom_progress', ref=classroom_ref(classroom.institutional_id)) }}">
       Ver avance del aula <span aria-hidden="true">→</span>
     </a>
   </header>
@@ -43,7 +43,7 @@
           {% for student in students %}
           <tr class="table-row--clickable">
             <td>
-              <a class="table-row-link" href="{{ url_for('student_detail', classroom_id=classroom.institutional_id, student_id=student.institutional_id) }}" aria-label="Ver las respuestas de {{ student.full_name }}">
+              <a class="table-row-link" href="{{ url_for('student_detail', ref=student_ref(classroom.institutional_id, student.institutional_id)) }}" aria-label="Ver las respuestas de {{ student.full_name }}">
                 <strong>{{ student.apellidos }}</strong>
               </a>
             </td>

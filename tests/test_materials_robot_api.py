@@ -58,7 +58,8 @@ def make_cuento_on_disk(app, tmp_path, *, owner_id=TEACHER, nombre=DOCENTE, titl
 
 @pytest.fixture()
 def static_tmp(app, tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "static_folder", str(tmp_path))
+    # Los archivos de materiales viven bajo UPLOADS_ROOT (fuera de static/).
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
     return tmp_path
 
 

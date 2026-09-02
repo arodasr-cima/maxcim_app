@@ -1,3 +1,5 @@
+import tempfile
+
 import pytest
 from cryptography.fernet import Fernet
 
@@ -62,6 +64,7 @@ def app(monkeypatch):
         "MAXCIM_WEBHOOK_SECRET": "test-webhook-secret",
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "SQLALCHEMY_ENGINE_OPTIONS": {},
+        "UPLOADS_ROOT": tempfile.mkdtemp(prefix="maxcim-uploads-"),
     })
     with application.app_context():
         db.create_all()
@@ -74,3 +77,24 @@ def app(monkeypatch):
 @pytest.fixture()
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture()
+def urls(app):
+    """Construye las URLs de la consola con los identificadores opacos
+    (aula/alumno firmados) que ahora esperan las rutas."""
+    def _ref(name, *ids):
+        with app.test_request_context():
+            return app.jinja_env.globals[name](*ids)
+
+    class _URLs:
+        def classroom(self, classroom_id):
+            return f"/aulas/{_ref('classroom_ref', classroom_id)}"
+
+        def progress(self, classroom_id):
+            return f"/aulas/{_ref('classroom_ref', classroom_id)}/avance"
+
+        def student(self, classroom_id, student_id):
+            return f"/aulas/alumno/{_ref('student_ref', classroom_id, student_id)}"
+
+    return _URLs()

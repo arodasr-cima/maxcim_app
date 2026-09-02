@@ -10,11 +10,13 @@ La estudiante o el estudiante conversa oralmente con MAXCIM. La docente utiliza 
 
 1. La docente inicia sesión con sus credenciales institucionales o mediante el canje de Google. En producción, la identidad siempre se valida con la API institucional.
 2. `/dashboard` consulta y muestra las aulas asignadas a la docente.
-3. `/aulas/<classroom_id>` consulta la matrícula vigente y muestra sus alumnos en una tabla.
+3. `/aulas/<ref>` consulta la matrícula vigente y muestra sus alumnos en una tabla.
 4. `/material` permite crear y revisar el material que utilizará el robot.
 5. El robot consulta los materiales, identifica por su cuenta al alumno y registra cada interacción de pregunta y respuesta.
-6. `/aulas/<classroom_id>/avance` cruza la matrícula institucional con las interacciones de los materiales de la docente y muestra un acierto o error por interacción, además del total correcto/realizado.
-7. `/aulas/<classroom_id>/alumnos/<student_id>` muestra el historial completo del alumno: pregunta, respuesta, apreciación del robot y resultado.
+6. `/aulas/<ref>/avance` cruza la matrícula institucional con las interacciones de los materiales de la docente y muestra un acierto o error por interacción, además del total correcto/realizado.
+7. `/aulas/alumno/<ref>` muestra el historial completo del alumno: pregunta, respuesta, apreciación del robot y resultado.
+
+`<ref>` es un token firmado con `SECRET_KEY` que lleva dentro el tipo (`aula`/`alumno`), el ID institucional y el `id` de la docente. El ID no viaja en texto plano en la ruta, el token no se puede falsificar ni reutilizar en la sesión de otra docente, caduca a las 24 h y rotar `SECRET_KEY` invalida todos. Un `<ref>` alterado, caducado, de otra docente o del tipo equivocado responde `404`. Los archivos de los materiales y los audios de respuesta se sirven a la consola por `/media/<token>` (URL firmada, atada al `id` de la docente, caduca en 1 h), nunca desde `/static/`.
 
 MAXCIM no gestiona sesiones de interacción ni realiza reconocimiento facial. La antigua ruta `/sesiones` fue eliminada.
 
@@ -23,7 +25,7 @@ flowchart TD
     DOCENTE["Docente"] --> LOGIN["Inicio de sesión"]
     LOGIN --> INST["API institucional"]
     INST --> DASH["/dashboard · aulas"]
-    DASH --> AULA["/aulas/&lt;classroom_id&gt; · alumnos"]
+    DASH --> AULA["/aulas/&lt;ref&gt; · alumnos"]
     AULA --> INST
     DOCENTE --> MATERIAL["/material · creación de material"]
     MATERIAL --> AI["Gemini o respuestas locales"]
@@ -82,7 +84,7 @@ incluye un `Dockerfile` listo para desplegarse como servicio web en Railway:
 2. Mantener `DEMO_MODE=true`. Sin `DATABASE_URL` utilizará SQLite automáticamente.
 3. Para conservar los datos entre despliegues, agregar MySQL y definir `DATABASE_URL=${{MySQL.MYSQL_URL}}`.
 4. Generar el dominio público desde `Settings > Networking`.
-5. Para conservar audios entre despliegues, montar un volumen persistente en `/app/static/uploads`.
+5. Para conservar audios entre despliegues, montar un volumen persistente en `/app/instance/uploads` (o la ruta que indique `MAXCIM_UPLOADS_DIR`). Estos archivos ya no viven bajo `static/`: se sirven solo con autenticación, por `/media/<token>` (consola) o `/api/materials/<id>/<recurso>` (robot).
 
 El contenedor crea las tablas faltantes de una base nueva antes de iniciar Gunicorn y publica `GET /health` para comprobar el estado del servicio. Si la API institucional solo existe dentro de la red del colegio, será necesario exponerla de forma segura por HTTPS o conectar el alojamiento a esa red privada.
 
@@ -123,9 +125,10 @@ Las variables institucionales, Google OAuth y secretos del robot no son necesari
 | Método y ruta | Finalidad |
 |---|---|
 | `GET /dashboard` | Listar las aulas de la docente autenticada |
-| `GET /aulas/<classroom_id>` | Listar los alumnos del aula |
-| `GET /aulas/<classroom_id>/avance` | Mostrar aciertos, errores y total por alumno |
-| `GET /aulas/<classroom_id>/alumnos/<student_id>` | Mostrar todas las interacciones del alumno |
+| `GET /aulas/<ref>` | Listar los alumnos del aula (`<ref>` = token firmado, por tipo, atado a la docente, caduca 24 h) |
+| `GET /aulas/<ref>/avance` | Mostrar aciertos, errores y total por alumno |
+| `GET /aulas/alumno/<ref>` | Mostrar todas las interacciones del alumno |
+| `GET /media/<token>` | Servir un archivo de material a la consola (URL firmada, caduca en 1 h) |
 | `GET /material` | Consultar y crear material de tipo `cuento` u `oracion` |
 
 No existe `/sesiones`. Las vistas de avance e historial sí tienen backend: combinan la matrícula que devuelve la API institucional con `material` e `interaccion` en la base propia de MAXCIM.

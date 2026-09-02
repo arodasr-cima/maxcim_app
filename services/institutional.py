@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -229,6 +230,18 @@ class InstitutionalClient:
         except jwt.PyJWTError as exc:
             raise InstitutionalAPIError("El token institucional no se pudo decodificar.") from exc
 
+        # No verificamos la firma (ver docstring), pero sí rechazamos un token
+        # ya vencido: sin esto, `exp - iat` daría una duración positiva y se
+        # abriría una sesión nueva a partir de un JWT caducado.
+        try:
+            exp = int(claims["exp"])
+        except (KeyError, TypeError, ValueError):
+            exp = None
+        if exp is not None and exp <= int(time.time()):
+            raise InstitutionalAuthenticationError(
+                "El token institucional ya expiró; vuelve a iniciar sesión."
+            )
+
         teacher_id = self._required_text(claims, "idPersona")
         raw_name = self._required_text(claims, "nombres")
         grupo = self._required_text(claims, "grupoPersonal")
@@ -285,10 +298,15 @@ class InstitutionalClient:
     @staticmethod
     def _expires_in_from_claims(claims: dict[str, Any]) -> int:
         try:
-            expires_in = int(claims["exp"]) - int(claims["iat"])
+            exp = int(claims["exp"])
+            issued_lifetime = exp - int(claims["iat"])
         except (KeyError, TypeError, ValueError):
             return 3600
-        return max(300, expires_in)
+        # La sesión del navegador nunca debe durar más allá del `exp` absoluto
+        # del JWT: si el token ya está cerca de expirar, acota a lo que le
+        # queda en vez de a su duración original (`exp - iat`).
+        remaining = exp - int(time.time())
+        return max(1, min(issued_lifetime, remaining))
 
     def authenticate(self, institutional_id: str, credential: str) -> AuthenticatedTeacher:
         if not self.login_ready:
