@@ -20,6 +20,25 @@ TIPO_ORACION = "oracion"
 TIPOS_MATERIAL = (TIPO_CUENTO, TIPO_ORACION)
 
 
+class Periodo(db.Model):
+    """Bimestre académico definido para un año escolar.
+
+    Refleja exactamente `periodo` en bd_app.sql; ese archivo es la fuente de
+    verdad para columnas, tipos e índices.
+    """
+
+    __tablename__ = "periodo"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(50), nullable=False)
+    anio = db.Column(db.Integer, nullable=False)
+    fecha_inicio = db.Column(db.Date, nullable=False)
+    fecha_fin = db.Column(db.Date, nullable=False)
+
+    materiales = db.relationship("Material", back_populates="periodo")
+    interacciones = db.relationship("Interaccion", back_populates="periodo")
+
+
 class Material(db.Model):
     """Material prepared by a teacher for an activity with MAXCIM.
 
@@ -52,12 +71,20 @@ class Material(db.Model):
     # del robot pueda listar materiales por nombre (`?docente=`) y mostrarlo sin
     # volver a consultar a CIMA. Nulo en registros creados antes de la columna.
     fk_user_name = db.Column(db.String(255), nullable=True)
+    # Bimestre académico del material; nulo si queda fuera de todos los periodos definidos.
+    id_periodo = db.Column(
+        db.Integer,
+        db.ForeignKey("periodo.id"),
+        nullable=True,
+        index=True,
+    )
 
     interacciones = db.relationship(
         "Interaccion",
         back_populates="material",
         lazy="selectin",
     )
+    periodo = db.relationship("Periodo", back_populates="materiales")
 
     @property
     def es_oracion(self) -> bool:
@@ -96,5 +123,13 @@ class Interaccion(db.Model):
     path_audio_rpta = db.Column(db.String(500), nullable=False)
     apreciacion_robot = db.Column(db.Text, nullable=False)
     rpta_correcta = db.Column(db.Boolean, nullable=False)
+    # Bimestre académico de la interacción; nulo si queda fuera de todos los periodos definidos.
+    id_periodo = db.Column(
+        db.Integer,
+        db.ForeignKey("periodo.id"),
+        nullable=True,
+        index=True,
+    )
 
     material = db.relationship("Material", back_populates="interacciones")
+    periodo = db.relationship("Periodo", back_populates="interacciones")
