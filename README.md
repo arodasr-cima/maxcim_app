@@ -139,7 +139,8 @@ No existe `/sesiones`. Las vistas de avance e historial sí tienen backend: comb
 |---|---|
 | `GET /api/materials?teacher_id={id}` | Listar materiales de una docente |
 | `GET /api/materials/{id}` | Obtener un cuento con sus recursos y preguntas, o el texto de una oración |
-| `POST /api/interacciones` | Registrar un turno de pregunta/respuesta ya resuelto por el robot |
+| `POST /api/interacciones` | Registrar un turno de pregunta/respuesta ya resuelto por el robot (`multipart/form-data`: sube el audio de la respuesta como `audio_rpta`) |
+| `GET /api/interacciones/{id}/audio` | Descargar el audio de la respuesta subido al registrar la interacción |
 | `GET /api/interacciones?id_material={id}&fk_alumno={id}` | Consultar el historial de interacciones |
 
 Todas las rutas requieren el header `X-MAXCIM-Webhook-Secret` con el valor de `MAXCIM_WEBHOOK_SECRET`. La validación se omite mientras `DEMO_MODE=true`.

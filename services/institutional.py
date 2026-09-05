@@ -45,6 +45,11 @@ class AuthenticatedTeacher:
     # cuando CIMA no envía `rutaFoto` o el enlace no es interpretable; en ese
     # caso la UI muestra las iniciales.
     photo_url: str = ""
+    # Nombre exactamente como lo envía la API institucional (sin el
+    # `.capitalize()` de `_format_display_name`), para guardarlo tal cual en
+    # `material.fk_user_name`. Vacío cuando el cliente no distingue una forma
+    # cruda (demo, tests); en ese caso se usa `display_name` como respaldo.
+    raw_name: str = ""
 
     @property
     def initials(self) -> str:
@@ -244,10 +249,15 @@ class InstitutionalClient:
 
         teacher_id = self._required_text(claims, "idPersona")
         raw_name = self._required_text(claims, "nombres")
+        # No filtramos por categorías de personal específicas (docente,
+        # administrativo, etc.): hay distintas categorías/firmas
+        # institucionales con acceso legítimo a MAXCIM. Lo único que se
+        # bloquea es el alumnado, que comparte el mismo login institucional
+        # pero no debe entrar a la consola.
         grupo = self._required_text(claims, "grupoPersonal")
-        if "docente" not in grupo.lower():
+        if "alumno" in grupo.lower():
             raise InstitutionalAuthenticationError(
-                "La cuenta institucional no pertenece al personal docente."
+                "Las cuentas de alumnos no pueden acceder a esta consola."
             )
 
         return AuthenticatedTeacher(
@@ -257,6 +267,7 @@ class InstitutionalClient:
             access_token=token,
             expires_in_seconds=self._expires_in_from_claims(claims),
             photo_url=self._normalize_drive_photo_url(claims.get("rutaFoto")),
+            raw_name=raw_name,
         )
 
     @staticmethod

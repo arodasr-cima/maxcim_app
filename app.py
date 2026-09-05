@@ -715,6 +715,10 @@ def create_app(test_config: dict | None = None):
         browser_session.clear()
         browser_session["teacher_id"] = authenticated.institutional_id
         browser_session["teacher_name"] = authenticated.display_name
+        # Nombre sin formatear, tal como lo envía la API institucional: es el
+        # que se guarda en `material.fk_user_name` (ver save_material). Si el
+        # cliente no distingue una forma cruda (demo), cae en display_name.
+        browser_session["teacher_raw_name"] = authenticated.raw_name or authenticated.display_name
         browser_session["teacher_role"] = authenticated.role
         browser_session["teacher_photo"] = authenticated.photo_url
         browser_session["teacher_token"] = cipher.encrypt(
@@ -805,6 +809,7 @@ def create_app(test_config: dict | None = None):
         teacher = {
             "id": browser_session.get("teacher_id"),
             "name": browser_session.get("teacher_name"),
+            "raw_name": browser_session.get("teacher_raw_name") or browser_session.get("teacher_name"),
             "initials": "".join(part[0].upper() for part in name_parts[:2]) or "DC",
             "role": browser_session.get("teacher_role"),
             "photo_url": browser_session.get("teacher_photo") or "",
@@ -1664,7 +1669,9 @@ def create_app(test_config: dict | None = None):
                 path_audio=None,
                 path_audio_resumen=None,
                 fk_user=str(teacher["id"]),
-                fk_user_name=(str(teacher.get("name") or "").strip() or None),
+                # Tal como lo envía la API institucional, sin el formateo de
+                # `display_name` (ver AuthenticatedTeacher.raw_name).
+                fk_user_name=(str(teacher.get("raw_name") or teacher.get("name") or "").strip() or None),
             )
             db.session.add(material)
             db.session.commit()
@@ -1816,11 +1823,20 @@ def create_app(test_config: dict | None = None):
         # Los `*_url` apuntan al endpoint autenticado del robot, no a
         # /static/: bajarlos exige el secreto compartido y el identificador de
         # la docente (ver contrato §2.5). Ya no exponen la ruta interna.
+        #
+        # `_external=True` arma la URL con el esquema que ve este proceso, no
+        # el que ve el robot: detrás de un proxy/balanceador que termina TLS
+        # (el caso normal en producción), Flask no sabe que el cliente llegó
+        # por HTTPS y devuelve `http://`, con lo que el robot no puede
+        # descargar (mismo problema que ya resolvía `google_redirect_uri`
+        # para el callback de Google; aquí se aplica el mismo criterio).
+        scheme = "https" if app.config.get("SESSION_COOKIE_SECURE") else request.scheme
         return url_for(
             "download_material_resource",
             material_id=material.id,
             recurso=recurso,
             _external=True,
+            _scheme=scheme,
         )
 
     def serialize_material(material):
@@ -2002,6 +2018,18 @@ def create_app(test_config: dict | None = None):
                 return False
         raise ValueError("El valor booleano no es válido.")
 
+    def _interaccion_audio_url(interaccion):
+        # Mismo criterio que _material_resource_url: sin `_scheme` explícito,
+        # detrás de un proxy que termina TLS, `_external=True` devolvería
+        # `http://` (el proceso no ve el HTTPS del cliente).
+        scheme = "https" if app.config.get("SESSION_COOKIE_SECURE") else request.scheme
+        return url_for(
+            "download_interaccion_audio",
+            interaccion_id=interaccion.id,
+            _external=True,
+            _scheme=scheme,
+        )
+
     def serialize_interaccion(interaccion):
         return {
             "id": interaccion.id,
@@ -2010,10 +2038,9 @@ def create_app(test_config: dict | None = None):
             "fecha_hora": interaccion.fecha_hora.isoformat() if interaccion.fecha_hora else None,
             "pregunta": interaccion.pregunta,
             "respuesta": interaccion.respuesta,
-            # Ruta relativa tal como la reportó el robot (no una URL bajo
-            # /static/): el mecanismo de transferencia de este audio todavía
-            # está por definir (ver contrato §2.3).
-            "path_audio_rpta": interaccion.path_audio_rpta,
+            # URL autenticada al audio que MAXCIM ya almacenó (ver
+            # registrar_interaccion); ya no expone la ruta interna.
+            "audio_rpta_url": _interaccion_audio_url(interaccion),
             "apreciacion_robot": interaccion.apreciacion_robot,
             "rpta_correcta": interaccion.rpta_correcta,
         }
@@ -2021,22 +2048,24 @@ def create_app(test_config: dict | None = None):
     # Robot-side endpoint. MAXCIM ya no gestiona sesiones ni reconocimiento
     # facial: el robot resuelve por su cuenta qué alumno tiene enfrente y qué
     # material está usando, y reporta cada turno de pregunta/respuesta con
-    # una sola llamada.
+    # una sola llamada. `multipart/form-data` (no JSON) porque el robot sube
+    # aquí el archivo de audio de la respuesta; MAXCIM lo guarda en
+    # UPLOADS_ROOT igual que hace con el audio de un material (antes solo se
+    # guardaba la ruta de texto que reportaba el robot; ver contrato §2.3).
     @app.route("/api/interacciones", methods=["POST"])
     def registrar_interaccion():
         if not webhook_authorized():
             return jsonify({"error": "Integración no autorizada."}), 401
 
-        payload = request.get_json(silent=True) or {}
-        fk_alumno = str(payload.get("fk_alumno") or "").strip()
-        pregunta = str(payload.get("pregunta") or "").strip()
-        respuesta = str(payload.get("respuesta") or "").strip()
-        path_audio_rpta = str(payload.get("path_audio_rpta") or "").strip()
-        apreciacion_robot = str(payload.get("apreciacion_robot") or "").strip()
+        fk_alumno = str(request.form.get("fk_alumno") or "").strip()
+        pregunta = str(request.form.get("pregunta") or "").strip()
+        respuesta = str(request.form.get("respuesta") or "").strip()
+        apreciacion_robot = str(request.form.get("apreciacion_robot") or "").strip()
+        audio_rpta = request.files.get("audio_rpta")
 
         # `id_material` es opcional: si falta o llega vacío/null, el turno es
         # una conversación libre del alumno con MAXCIM (sin material asociado).
-        raw_material_id = payload.get("id_material")
+        raw_material_id = request.form.get("id_material")
         material_id = None
         if raw_material_id not in (None, ""):
             try:
@@ -2044,7 +2073,7 @@ def create_app(test_config: dict | None = None):
             except (TypeError, ValueError):
                 return jsonify({"error": "id_material no es válido."}), 400
         try:
-            rpta_correcta = parse_optional_bool(payload.get("rpta_correcta"))
+            rpta_correcta = parse_optional_bool(request.form.get("rpta_correcta"))
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
@@ -2054,19 +2083,18 @@ def create_app(test_config: dict | None = None):
                 ("fk_alumno", fk_alumno),
                 ("pregunta", pregunta),
                 ("respuesta", respuesta),
-                ("path_audio_rpta", path_audio_rpta),
                 ("apreciacion_robot", apreciacion_robot),
             )
             if not value
         ]
+        if not audio_rpta or not audio_rpta.filename:
+            missing.append("audio_rpta")
         if rpta_correcta is None:
             missing.append("rpta_correcta")
         if missing:
             return jsonify({"error": f"Faltan campos obligatorios: {', '.join(missing)}."}), 400
         if len(fk_alumno) > 50:
             return jsonify({"error": "fk_alumno excede el límite permitido."}), 413
-        if len(path_audio_rpta) > 500:
-            return jsonify({"error": "path_audio_rpta excede el límite permitido."}), 413
         if len(pregunta) > MAX_TRANSCRIPT_CHARS or len(respuesta) > MAX_TRANSCRIPT_CHARS:
             return jsonify({"error": "La pregunta o la respuesta exceden el límite permitido."}), 413
 
@@ -2076,18 +2104,54 @@ def create_app(test_config: dict | None = None):
             if not material:
                 return jsonify({"error": "Material no encontrado."}), 404
 
+        interaccion_dir_name = uuid.uuid4().hex
+        interaccion_dir = os.path.join(app.config["UPLOADS_ROOT"], interaccion_dir_name)
+        os.makedirs(interaccion_dir, exist_ok=True)
+        audio_path = os.path.join(interaccion_dir, "audio_rpta.wav")
+        audio_rpta.save(audio_path)
+        try:
+            _wav_duration_seconds(audio_path)
+        except (EOFError, OSError, wave.Error):
+            shutil.rmtree(interaccion_dir, ignore_errors=True)
+            return jsonify({"error": "El audio de la respuesta no es un WAV válido."}), 400
+
         interaccion = Interaccion(
             id_material=material.id if material else None,
             fk_alumno=fk_alumno,
             pregunta=pregunta,
             respuesta=respuesta,
-            path_audio_rpta=path_audio_rpta,
+            path_audio_rpta=f"uploads/{interaccion_dir_name}/audio_rpta.wav",
             apreciacion_robot=apreciacion_robot,
             rpta_correcta=rpta_correcta,
         )
         db.session.add(interaccion)
         db.session.commit()
         return jsonify(serialize_interaccion(interaccion)), 201
+
+    # Robot-side endpoint: descarga el audio de la respuesta que MAXCIM
+    # almacenó al registrar la interacción (ver registrar_interaccion). Sin
+    # verificación de dueño, igual que /api/interacciones (GET): el robot no
+    # identifica ninguna docente al consultar interacciones, solo alumno y/o
+    # material.
+    @app.route("/api/interacciones/<int:interaccion_id>/audio", methods=["GET"])
+    def download_interaccion_audio(interaccion_id):
+        if not webhook_authorized():
+            return jsonify({"error": "Integración no autorizada."}), 401
+        interaccion = db.session.get(Interaccion, interaccion_id)
+        if not interaccion:
+            return jsonify({"error": "Interacción no encontrada."}), 404
+        try:
+            abs_path = uploads_abspath(interaccion.path_audio_rpta)
+        except ValueError:
+            return jsonify({"error": "No se encontró el audio de la respuesta."}), 404
+        if not os.path.isfile(abs_path):
+            return jsonify({"error": "No se encontró el audio de la respuesta."}), 404
+        return send_file(
+            abs_path,
+            mimetype="audio/wav",
+            as_attachment=True,
+            download_name="respuesta.wav",
+        )
 
     # Robot-side endpoint: consulta el historial (por material y/o alumno).
     @app.route("/api/interacciones", methods=["GET"])

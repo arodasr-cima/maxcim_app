@@ -1,4 +1,6 @@
+import io
 import json
+import wave
 
 import app as app_module
 from extensions import db
@@ -6,6 +8,16 @@ from models import Interaccion, Material, TIPO_CUENTO, TIPO_ORACION
 
 
 TEST_TEACHER_ID = "DOC-TEST-1"
+
+
+def make_wav_bytes() -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b"\x00\x00" * 1600)  # 0.1s de silencio
+    return buffer.getvalue()
 
 
 def seed_material(**overrides):
@@ -26,18 +38,28 @@ def seed_material(**overrides):
     return material
 
 
-def register_interaction(client, material_id, **overrides):
-    payload = {
+def register_interaction(
+    client, material_id, include_audio=True, audio_bytes=None, **overrides
+):
+    data = {
         "id_material": material_id,
         "fk_alumno": "ALU-TEST-1",
         "pregunta": "¿Qué hizo Luna para ayudar?",
         "respuesta": "La escuchó y esperó a que terminara.",
-        "path_audio_rpta": "uploads/test/respuesta.wav",
         "apreciacion_robot": "Respuesta clara y completa.",
         "rpta_correcta": True,
     }
-    payload.update(overrides)
-    return client.post("/api/interacciones", json=payload)
+    data.update(overrides)
+    # Sin `id_material` (en vez de null: multipart no tiene ese concepto), el
+    # turno queda como conversación libre.
+    if data.get("id_material") is None:
+        data.pop("id_material", None)
+    else:
+        data["id_material"] = str(data["id_material"])
+    data["rpta_correcta"] = str(data["rpta_correcta"])
+    if include_audio:
+        data["audio_rpta"] = (io.BytesIO(audio_bytes or make_wav_bytes()), "respuesta.wav")
+    return client.post("/api/interacciones", data=data, content_type="multipart/form-data")
 
 
 def test_registrar_interaccion_creates_a_record(app, client):
@@ -95,6 +117,57 @@ def test_registrar_interaccion_rejects_unknown_material(client):
     assert response.status_code == 404
 
 
+def test_registrar_interaccion_requires_the_audio_file(app, client):
+    with app.app_context():
+        material_id = seed_material().id
+
+    response = register_interaction(client, material_id, include_audio=False)
+    assert response.status_code == 400
+    assert "audio_rpta" in response.get_json()["error"]
+
+    with app.app_context():
+        assert Interaccion.query.count() == 0
+
+
+def test_registrar_interaccion_rejects_a_non_wav_audio_file(app, client):
+    with app.app_context():
+        material_id = seed_material().id
+
+    response = register_interaction(
+        client, material_id, audio_bytes=b"esto no es un wav"
+    )
+    assert response.status_code == 400
+    assert "WAV" in response.get_json()["error"]
+
+    with app.app_context():
+        assert Interaccion.query.count() == 0
+
+
+def test_registrar_interaccion_stores_the_audio_and_exposes_a_download_url(
+    app, client, tmp_path, monkeypatch
+):
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
+    with app.app_context():
+        material_id = seed_material().id
+
+    response = register_interaction(client, material_id)
+    assert response.status_code == 201
+    body = response.get_json()
+    assert "path_audio_rpta" not in body
+    audio_url = body["audio_rpta_url"]
+    assert audio_url == f"http://localhost/api/interacciones/{body['id']}/audio"
+
+    with app.app_context():
+        interaccion = db.session.get(Interaccion, body["id"])
+        stored_path = interaccion.path_audio_rpta
+        assert stored_path.startswith("uploads/")
+        assert (tmp_path / stored_path.removeprefix("uploads/")).is_file()
+
+    download = client.get(audio_url.removeprefix("http://localhost"))
+    assert download.status_code == 200
+    assert download.mimetype == "audio/wav"
+
+
 def test_registrar_interaccion_requires_webhook_secret_in_production(monkeypatch):
     monkeypatch.setattr(app_module, "gemini_client", None)
     application = app_module.create_app({
@@ -109,19 +182,20 @@ def test_registrar_interaccion_requires_webhook_secret_in_production(monkeypatch
         material_id = seed_material().id
 
     test_client = application.test_client()
-    payload = {
-        "id_material": material_id,
+    data = {
+        "id_material": str(material_id),
         "fk_alumno": "ALU-TEST-1",
         "pregunta": "¿Qué aprendiste?",
         "respuesta": "A escuchar antes de responder.",
-        "path_audio_rpta": "uploads/test/respuesta.wav",
         "apreciacion_robot": "Bien hecho.",
-        "rpta_correcta": True,
+        "rpta_correcta": "true",
+        "audio_rpta": (io.BytesIO(make_wav_bytes()), "respuesta.wav"),
     }
-    assert test_client.post("/api/interacciones", json=payload).status_code == 401
+    assert test_client.post("/api/interacciones", data=data).status_code == 401
+    data["audio_rpta"] = (io.BytesIO(make_wav_bytes()), "respuesta.wav")
     accepted = test_client.post(
         "/api/interacciones",
-        json=payload,
+        data=data,
         headers={"X-MAXCIM-Webhook-Secret": "robot-secret"},
     )
     assert accepted.status_code == 201

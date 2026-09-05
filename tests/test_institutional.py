@@ -66,6 +66,10 @@ def test_authenticate_sends_the_cima_login_contract(monkeypatch):
     }
     assert teacher.institutional_id == "70385"
     assert teacher.display_name == "Rodas Rosales Oscar Alexis"
+    # `raw_name` conserva el valor tal como lo envía CIMA (sin el
+    # `.capitalize()` de `display_name`): es lo que se guarda en
+    # `material.fk_user_name`.
+    assert teacher.raw_name == "RODAS ROSALES OSCAR ALEXIS"
     assert teacher.role == "DOCENTE"
     assert teacher.access_token == fake_jwt
     assert teacher.expires_in_seconds == 3600
@@ -100,7 +104,21 @@ def test_authenticate_ignores_a_photo_route_that_is_not_http(monkeypatch):
     assert teacher.photo_url == ""
 
 
-def test_authenticate_rejects_accounts_outside_the_teaching_staff(monkeypatch):
+def test_authenticate_accepts_any_non_student_grupo_personal(monkeypatch):
+    # No filtramos por categoría de personal (docente, administrativo,
+    # etc.): solo se bloquea al alumnado.
+    client = make_client()
+    fake_jwt = make_cima_jwt(grupoPersonal="ADMINISTRATIVO")
+    monkeypatch.setattr(
+        client, "_request", lambda *a, **k: {"content": {"token": fake_jwt}}
+    )
+
+    teacher = client.authenticate("orodasr", "72737674")
+
+    assert teacher.role == "DOCENTE"
+
+
+def test_authenticate_rejects_student_accounts(monkeypatch):
     client = make_client()
     fake_jwt = make_cima_jwt(grupoPersonal="ALUMNO COLEGIO")
     monkeypatch.setattr(

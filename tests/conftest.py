@@ -11,6 +11,10 @@ from services.institutional import AuthenticatedTeacher, Classroom, ClassroomStu
 TEST_TEACHER = {
     "id": "DOC-TEST-1",
     "name": "Docente de pruebas",
+    # Forma cruda tal como la envía CIMA (sin formatear), distinta a "name"
+    # a propósito para poder distinguir en las pruebas cuál de las dos usa
+    # cada cosa (UI vs. `material.fk_user_name`).
+    "raw_name": "DOCENTE DE PRUEBAS",
     "initials": "DP",
     "role": "DOCENTE",
     "access_token": "test-access-token",
@@ -30,6 +34,7 @@ class FakeInstitutionalClient:
             role="DOCENTE",
             access_token="test-access-token",
             expires_in_seconds=3600,
+            raw_name=TEST_TEACHER["raw_name"],
         )
 
     def list_teacher_classrooms(self, access_token, teacher_id):

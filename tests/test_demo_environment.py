@@ -181,14 +181,22 @@ def test_demo_can_register_and_list_interactions(demo_app, demo_client):
         db.session.commit()
         material_id = material.id
 
-    created = demo_client.post("/api/interacciones", json={
-        "id_material": material_id,
+    audio_buffer = io.BytesIO()
+    with wave.open(audio_buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b"\x00\x00" * 1600)
+    audio_buffer.seek(0)
+
+    created = demo_client.post("/api/interacciones", data={
+        "id_material": str(material_id),
         "fk_alumno": "ALU-DEMO-1042",
         "pregunta": "¿Qué aprendiste hoy?",
         "respuesta": "Aprendí a escuchar antes de responder.",
-        "path_audio_rpta": "uploads/demo/respuesta.wav",
         "apreciacion_robot": "Excelente participación.",
-        "rpta_correcta": True,
+        "rpta_correcta": "true",
+        "audio_rpta": (audio_buffer, "respuesta.wav"),
     })
     assert created.status_code == 201
     assert created.get_json()["fk_alumno"] == "ALU-DEMO-1042"

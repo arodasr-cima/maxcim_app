@@ -129,27 +129,38 @@ Un ID inexistente devuelve `404`.
 
 ### 2.3 Registrar una interacción
 
-El robot ya debe haber identificado al alumno, elegido el material y evaluado la respuesta antes de llamar a MAXCIM.
+El robot ya debe haber identificado al alumno, elegido el material y evaluado la respuesta antes de llamar a MAXCIM. A diferencia del resto de la API del robot, esta llamada es `multipart/form-data` (no JSON) porque **sube el archivo de audio de la respuesta**; MAXCIM lo guarda y lo sirve después por un endpoint autenticado (ver 2.3.1).
 
 ```http
 POST /api/interacciones
 X-MAXCIM-Webhook-Secret: <secreto>
-Content-Type: application/json
+Content-Type: multipart/form-data
 ```
 
-```json
-{
-  "id_material": 12,
-  "fk_alumno": "<id_alumno_institucional>",
-  "pregunta": "¿Qué hizo Luna para ayudar?",
-  "respuesta": "Escuchó a sus amigos.",
-  "path_audio_rpta": "uploads/respuestas/respuesta.wav",
-  "apreciacion_robot": "Respuesta clara y completa.",
-  "rpta_correcta": true
-}
+| Campo (form field) | Obligatorio | Descripción |
+|---|---|---|
+| `id_material` | no | Si se omite o llega vacío, el turno se guarda como **conversación libre** (`id_material` queda `NULL`). Si se envía, debe identificar un registro existente (`404` si no) |
+| `fk_alumno` | sí | ID institucional del alumno. No se vuelve a validar contra la API institucional |
+| `pregunta` / `respuesta` | sí | Texto transcrito del turno |
+| `apreciacion_robot` | sí | Evaluación cualitativa del robot |
+| `rpta_correcta` | sí | Booleano; admite `true/false`, `1/0`, `yes/no`, `si/sí` |
+| `audio_rpta` | sí | **Archivo WAV** con el audio de la respuesta del alumno |
+
+Ejemplo con `curl`:
+
+```bash
+curl -X POST https://.../api/interacciones \
+  -H "X-MAXCIM-Webhook-Secret: <secreto>" \
+  -F "id_material=12" \
+  -F "fk_alumno=<id_alumno_institucional>" \
+  -F "pregunta=¿Qué hizo Luna para ayudar?" \
+  -F "respuesta=Escuchó a sus amigos." \
+  -F "apreciacion_robot=Respuesta clara y completa." \
+  -F "rpta_correcta=true" \
+  -F "audio_rpta=@respuesta.wav;type=audio/wav"
 ```
 
-`id_material` es **opcional**: si se envía, debe identificar un registro existente (un `404` si no); si se omite o llega como `null`/cadena vacía, el turno se guarda como una **conversación libre** del alumno con MAXCIM, sin material asociado (`id_material` queda en `NULL`). El resto de campos son obligatorios. `fk_alumno` se almacena como ID institucional, pero este endpoint no vuelve a validarlo con la API institucional. `rpta_correcta` admite un booleano y las representaciones textuales aceptadas por el adaptador (`true/false`, `1/0`, `yes/no`, `si/sí`).
+Un `audio_rpta` ausente o que no sea un WAV válido devuelve `400`. El archivo se guarda en `UPLOADS_ROOT` igual que el audio de un material (no bajo `/static/`).
 
 En las vistas de la docente, una interacción con `id_material` en `NULL` se rotula **"Conversación"** en lugar del nombre del material.
 
@@ -163,13 +174,22 @@ La respuesta `201` contiene el registro creado:
   "fecha_hora": "2026-08-27T17:30:00",
   "pregunta": "¿Qué hizo Luna para ayudar?",
   "respuesta": "Escuchó a sus amigos.",
-  "path_audio_rpta": "uploads/respuestas/respuesta.wav",
+  "audio_rpta_url": "https://.../api/interacciones/41/audio",
   "apreciacion_robot": "Respuesta clara y completa.",
   "rpta_correcta": true
 }
 ```
 
-`path_audio_rpta` se guarda y se devuelve **tal cual lo mandó el robot** (una ruta relativa, no una URL). Esta llamada no sube el archivo y MAXCIM no lo publica en ningún lado. Antes de integrar el robot real se debe acordar cómo llegará ese audio al servidor y desde qué URL autenticada se servirá.
+`audio_rpta_url` es un endpoint autenticado (mismo secreto compartido), no una ruta interna ni una URL bajo `/static/`.
+
+#### 2.3.1 Descargar el audio de una respuesta
+
+```http
+GET /api/interacciones/{id}/audio
+X-MAXCIM-Webhook-Secret: <secreto>
+```
+
+Devuelve el archivo WAV subido en 2.3 (`audio/wav`). `404` si la interacción no existe o si el archivo no está disponible.
 
 ### 2.4 Consultar interacciones
 
@@ -294,7 +314,7 @@ la docente. Mapeo de campos:
 |---|---|---|
 | `institutional_id` | `idPersona` | Identificador único y estable de la persona |
 | `display_name` | `nombres` | Apellidos y nombres juntos, en MAYÚSCULAS (ej. `RODAS ROSALES OSCAR ALEXIS`); MAXCIM solo normaliza la capitalización, no los separa |
-| `role` | `grupoPersonal` | Se acepta el login solo si el texto contiene `DOCENTE` (insensible a mayúsculas); de lo contrario se rechaza como si la credencial fuera inválida |
+| `role` | (constante `"DOCENTE"`) | No se filtra por categoría de personal (docente, administrativo, etc.); se acepta el login salvo que `grupoPersonal` contenga `ALUMNO` (insensible a mayúsculas), caso en el que se rechaza como si la credencial fuera inválida |
 | `expires_in_seconds` | `exp` − `iat` | Si faltan o no son válidos, usa 3600 segundos por defecto |
 | `access_token` | el JWT completo (sin el prefijo `Bearer`) | Se cifra dentro de la cookie firmada de Flask; no existe una tabla local de sesiones |
 | `photo_url` | `rutaFoto` | Opcional. Enlace de Google Drive; si se puede extraer el id del archivo se reescribe a `https://drive.google.com/thumbnail?id=<id>&sz=w160` para incrustarlo en el avatar del docente. Cualquier otra URL http(s) se deja igual; si falta o no es http(s) se usa el avatar con iniciales. Se guarda en claro en la cookie firmada de Flask |
@@ -458,7 +478,6 @@ La misma restricción de matrícula y propiedad de materiales protege `/aulas/al
 - Confirmar si conviene separar grado, sección, sede y turno de `description` en la respuesta de aulas, y con qué formato son estables esas piezas.
 - Confirmar si el endpoint de Google (sección 3.2) responde con el mismo sobre `{"content": {"token": "<jwt>"}}` que el login con usuario y contraseña.
 - Confirmar si conviene usar `photoRoute` (foto del alumno) en alguna pantalla; hoy se ignora.
-- Definir cómo se transfiere al servidor el archivo indicado por `path_audio_rpta`.
 - Usar HTTPS y secretos distintos por ambiente, con rotación periódica.
 - Definir la política institucional de retención de audios y transcripciones de menores.
 - Aplicar `bd_app.sql` y las migraciones pendientes sobre MySQL, y configurar auditoría y respaldo.

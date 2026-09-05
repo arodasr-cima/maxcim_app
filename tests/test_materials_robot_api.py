@@ -210,7 +210,10 @@ def test_cuento_does_not_expose_oraciones(app, client, static_tmp):
 
 
 def test_save_material_stamps_the_logged_in_teacher_name(app, client, static_tmp):
-    # La sesión de pruebas es TEST_TEACHER: id DOC-TEST-1, nombre "Docente de pruebas".
+    # La sesión de pruebas es TEST_TEACHER: id DOC-TEST-1, nombre formateado
+    # "Docente de pruebas" para la UI, pero `fk_user_name` debe guardar la
+    # forma cruda que envía la API institucional ("raw_name"), no la
+    # formateada.
     save = client.post(
         "/api/material/save",
         data={
@@ -223,7 +226,7 @@ def test_save_material_stamps_the_logged_in_teacher_name(app, client, static_tmp
     material_id = save.get_json()["material_id"]
 
     body = client.get(f"/api/materials/{material_id}?teacher_id=DOC-TEST-1").get_json()
-    assert body["docente"] == "Docente de pruebas"
+    assert body["docente"] == "DOCENTE DE PRUEBAS"
 
     with app.app_context():
-        assert db.session.get(Material, material_id).fk_user_name == "Docente de pruebas"
+        assert db.session.get(Material, material_id).fk_user_name == "DOCENTE DE PRUEBAS"
