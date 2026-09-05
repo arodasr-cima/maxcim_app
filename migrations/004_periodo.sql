@@ -1,6 +1,6 @@
 -- `periodo`: bimestres académicos usados para clasificar materiales e
 -- interacciones por sus fechas. Aplicar una sola vez después de
--- 006_material_docente_nombre.sql sobre MySQL 8. Las columnas foráneas son
+-- 003_material_docente_nombre.sql sobre MySQL 8. Las columnas foráneas son
 -- NULL para conservar filas históricas y fechas fuera de los periodos.
 
 CREATE TABLE `periodo` (

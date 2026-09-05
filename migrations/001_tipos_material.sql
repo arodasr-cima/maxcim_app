@@ -1,5 +1,5 @@
 -- Compatibilidad de `material` con cuentos y oraciones.
--- Aplicar una sola vez después de 003_duracion_audio.sql sobre MySQL 8.
+-- Aplicar una sola vez después de bd_app.sql sobre la misma base MySQL 8.
 -- El cambio es seguro para las filas existentes: solo relaja restricciones
 -- de nulabilidad y amplía `path_preguntas` de VARCHAR(500) a TEXT.
 

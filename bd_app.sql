@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS `material` (
   `path_preguntas` text NOT NULL,
   `fecha_subido` date NOT NULL,
   `fk_user` varchar(50) NOT NULL,
-  `fk_user_name` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `fk_user_name` varchar(255) DEFAULT NULL,
   `id_periodo` int DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `ix_material_docente` (`fk_user`),
