@@ -5,3 +5,7 @@ __pycache__/
 .env
 instance/
 static/uploads/
+
+# Informes de auditoría: documentan vulnerabilidades reales sin parchear,
+# nunca deben quedar versionados.
+SECURITY_AUDIT*.md
