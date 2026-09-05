@@ -1711,6 +1711,11 @@ def create_app(test_config: dict | None = None):
                 material_periodo_id = int(raw_periodo_id)
             except (TypeError, ValueError):
                 return jsonify({"error": "El periodo indicado no es válido."}), 400
+            # Limite de un INT firmado: fuera de rango, `db.session.get` puede
+            # lanzar un error de la base de datos en vez de simplemente no
+            # encontrar la fila (p.ej. overflow al enlazar el parámetro).
+            if not (1 <= material_periodo_id <= 2_147_483_647):
+                return jsonify({"error": "El periodo indicado no es válido."}), 400
             if db.session.get(Periodo, material_periodo_id) is None:
                 return jsonify({"error": "El periodo indicado no es válido."}), 400
         else:
