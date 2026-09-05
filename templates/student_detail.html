@@ -74,7 +74,8 @@
           <tr>
             <td class="interaction-date">
               {% if interaction.fecha_hora %}
-              <time datetime="{{ interaction.fecha_hora.isoformat() }}">{{ interaction.fecha_hora.strftime('%d/%m/%Y') }}<span>{{ interaction.fecha_hora.strftime('%H:%M') }}</span></time>
+              {% set local_fecha_hora = interaction.fecha_hora | local_dt %}
+              <time datetime="{{ interaction.fecha_hora.isoformat() }}Z">{{ local_fecha_hora.strftime('%d/%m/%Y') }}<span>{{ local_fecha_hora.strftime('%H:%M') }}</span></time>
               {% else %}
               <span aria-label="Fecha no registrada">—</span>
               {% endif %}

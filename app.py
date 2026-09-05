@@ -14,6 +14,7 @@ import wave
 from datetime import UTC, date, datetime, timedelta
 from functools import wraps
 from urllib.parse import quote_plus
+from zoneinfo import ZoneInfo
 
 from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
@@ -78,6 +79,21 @@ DEFAULT_DEMO_MODE = env_bool("DEMO_MODE", True)
 def utc_now() -> datetime:
     """UTC stored without tzinfo for compatibility with MySQL DATETIME."""
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+# `fecha_hora` se guarda en UTC (ver utc_now / models._utc_now) para que la
+# base no dependa de en qué huso corre el proceso. Perú no tiene horario de
+# verano, así que la conversión es un offset fijo (UTC-5) sin ambigüedad.
+LOCAL_TZ = ZoneInfo("America/Lima")
+
+
+def to_local_time(value: datetime | None) -> datetime | None:
+    """Convierte un `datetime` naive guardado en UTC a la hora de Perú, solo
+    para mostrarlo en la consola de la docente. Los datos siguen viajando en
+    UTC hacia el robot y hacia la base; esto es puramente de presentación."""
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC).astimezone(LOCAL_TZ)
 
 
 MYSQL_HOST = os.environ.get("MYSQL_HOST") or os.environ.get("MYSQLHOST", "localhost")
@@ -907,6 +923,7 @@ def create_app(test_config: dict | None = None):
         return url_for("teacher_media", token=token)
 
     app.jinja_env.globals["media_url"] = media_url
+    app.jinja_env.filters["local_dt"] = to_local_time
 
     # --- Identificadores de aula/alumno en las URLs de la consola -----------
     # Token firmado (no cifrado): el ID institucional viaja dentro pero no en

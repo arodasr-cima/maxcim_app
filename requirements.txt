@@ -8,3 +8,6 @@ PyMySQL>=1.1.0
 cryptography>=42.0.0
 requests>=2.32.0
 PyJWT>=2.9.0
+# zoneinfo (stdlib) necesita esto en Windows, y en imágenes Docker mínimas
+# (python:3.12-slim) que no traen la base de husos horarios del sistema.
+tzdata>=2024.1

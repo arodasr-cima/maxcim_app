@@ -220,6 +220,38 @@ def test_student_detail_shows_question_answer_and_robot_appraisal(app, client, u
     assert "El bosque que escucha" in html
 
 
+def test_student_detail_shows_local_time_not_utc(app, client, urls):
+    # `fecha_hora` se guarda en UTC (ver utc_now en app.py); la consola debe
+    # mostrarla en hora de Perú (UTC-5), no el valor crudo almacenado. Se
+    # elige una hora que cruza medianoche en UTC para que una conversión
+    # ausente o incorrecta también se note en la fecha, no solo en la hora.
+    from datetime import datetime
+
+    with app.app_context():
+        material = add_material("DOC-TEST-1", "Cuento de prueba")
+        interaction = add_interaction(
+            material,
+            "ALU-TEST-1",
+            correct=True,
+            question="¿Pregunta?",
+            answer="Respuesta.",
+            appraisal="Apreciación.",
+        )
+        interaction.fecha_hora = datetime(2026, 8, 20, 3, 0, 0)  # 20/08 03:00 UTC
+        db.session.commit()
+
+    html = client.get(urls.student("AULA-REAL-1", "ALU-TEST-1")).get_data(as_text=True)
+
+    # 20/08 03:00 UTC == 19/08 22:00 hora de Perú (UTC-5). El texto visible
+    # debe mostrar la hora local; el atributo datetime del <time>, la UTC
+    # cruda (marcada explícitamente con "Z"), no confundir una con la otra.
+    assert "19/08/2026" in html
+    assert "<span>22:00</span>" in html
+    assert "20/08/2026" not in html
+    assert "<span>03:00</span>" not in html
+    assert '2026-08-20T03:00:00Z' in html
+
+
 def _stored_upload(app, stored_path):
     """Ruta en disco de un archivo de material (path guardado con prefijo
     histórico `uploads/`, ahora relativo a UPLOADS_ROOT)."""
