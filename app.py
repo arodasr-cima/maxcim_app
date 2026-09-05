@@ -36,7 +36,7 @@ from google.genai import types
 from sqlalchemy.orm import contains_eager
 
 from extensions import db
-from models import Interaccion, Material, TIPO_CUENTO, TIPO_ORACION, TIPOS_MATERIAL
+from models import Interaccion, Material, Periodo, TIPO_CUENTO, TIPO_ORACION, TIPOS_MATERIAL
 from services.demo import (
     DemoInstitutionalClient,
     create_demo_questions,
@@ -51,6 +51,7 @@ from services.institutional import (
     InstitutionalClient,
     InstitutionalConfigurationError,
 )
+from services.periodos import current_periodo, periodo_for_date
 
 load_dotenv()
 
@@ -1285,13 +1286,25 @@ def create_app(test_config: dict | None = None):
         except InstitutionalAPIError as exc:
             return render_classroom_error(teacher, exc)
 
+        available_periodos = Periodo.query.order_by(Periodo.fecha_inicio).all()
+        selected_periodo_id = None
+        raw_periodo_id = request.args.get("periodo")
+        if raw_periodo_id not in (None, ""):
+            try:
+                candidate_periodo_id = int(raw_periodo_id)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if any(periodo.id == candidate_periodo_id for periodo in available_periodos):
+                    selected_periodo_id = candidate_periodo_id
+
         student_ids = [str(student.institutional_id) for student in students]
         interactions = []
         if student_ids:
             # outerjoin + el OR con id_material NULL: una conversación libre no
             # tiene material dueño, así que se atribuye a la docente por la
             # matrícula vigente del aula (igual criterio que docs/… sección 4).
-            interactions = (
+            interactions_query = (
                 Interaccion.query.outerjoin(Material)
                 .options(contains_eager(Interaccion.material))
                 .filter(
@@ -1301,9 +1314,14 @@ def create_app(test_config: dict | None = None):
                         Interaccion.id_material.is_(None),
                     ),
                 )
-                .order_by(Interaccion.fecha_hora.asc(), Interaccion.id.asc())
-                .all()
             )
+            if selected_periodo_id is not None:
+                interactions_query = interactions_query.filter(
+                    Interaccion.id_periodo == selected_periodo_id
+                )
+            interactions = interactions_query.order_by(
+                Interaccion.fecha_hora.asc(), Interaccion.id.asc()
+            ).all()
 
         interactions_by_student = {student_id: [] for student_id in student_ids}
         for interaction in interactions:
@@ -1325,6 +1343,8 @@ def create_app(test_config: dict | None = None):
             user=teacher,
             classroom=classroom,
             progress_rows=progress_rows,
+            periodos=available_periodos,
+            selected_periodo_id=selected_periodo_id,
         )
 
     @app.route("/aulas/alumno/<ref>")
@@ -1356,7 +1376,19 @@ def create_app(test_config: dict | None = None):
                 ),
             )
 
-        interactions = (
+        available_periodos = Periodo.query.order_by(Periodo.fecha_inicio).all()
+        selected_periodo_id = None
+        raw_periodo_id = request.args.get("periodo")
+        if raw_periodo_id not in (None, ""):
+            try:
+                candidate_periodo_id = int(raw_periodo_id)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if any(periodo.id == candidate_periodo_id for periodo in available_periodos):
+                    selected_periodo_id = candidate_periodo_id
+
+        interactions_query = (
             Interaccion.query.outerjoin(Material)
             .options(contains_eager(Interaccion.material))
             .filter(
@@ -1366,9 +1398,43 @@ def create_app(test_config: dict | None = None):
                     Interaccion.id_material.is_(None),
                 ),
             )
-            .order_by(Interaccion.fecha_hora.desc(), Interaccion.id.desc())
-            .all()
         )
+        all_interactions = interactions_query.order_by(
+            Interaccion.fecha_hora.desc(), Interaccion.id.desc()
+        ).all()
+        interactions = all_interactions
+        if selected_periodo_id is not None:
+            interactions = interactions_query.filter(
+                Interaccion.id_periodo == selected_periodo_id
+            ).order_by(Interaccion.fecha_hora.desc(), Interaccion.id.desc()).all()
+
+        breakdown_counts = {}
+        for interaction in all_interactions:
+            counts = breakdown_counts.setdefault(
+                interaction.id_periodo,
+                {"correct": 0, "total": 0},
+            )
+            counts["total"] += 1
+            if interaction.rpta_correcta:
+                counts["correct"] += 1
+
+        periodo_breakdown = []
+        for periodo in available_periodos:
+            counts = breakdown_counts.get(periodo.id)
+            if counts:
+                periodo_breakdown.append({
+                    "periodo": periodo,
+                    "correct": counts["correct"],
+                    "total": counts["total"],
+                })
+        without_periodo_counts = breakdown_counts.get(None)
+        if without_periodo_counts:
+            periodo_breakdown.append({
+                "periodo": None,
+                "correct": without_periodo_counts["correct"],
+                "total": without_periodo_counts["total"],
+            })
+
         return render_template(
             "student_detail.html",
             active_nav="tablon",
@@ -1376,6 +1442,9 @@ def create_app(test_config: dict | None = None):
             classroom=classroom,
             student=student,
             interactions=interactions,
+            periodos=available_periodos,
+            selected_periodo_id=selected_periodo_id,
+            periodo_breakdown=periodo_breakdown,
         )
 
     @app.route("/media/<token>")
@@ -1407,6 +1476,8 @@ def create_app(test_config: dict | None = None):
     @login_required
     def material():
         teacher = current_teacher()
+        available_periodos = Periodo.query.order_by(Periodo.fecha_inicio).all()
+        active_periodo = current_periodo()
         materials = (
             Material.query.filter_by(fk_user=str(teacher["id"]))
             .order_by(Material.fecha_subido.desc(), Material.id.desc())
@@ -1423,6 +1494,8 @@ def create_app(test_config: dict | None = None):
             sentences_by_material=sentences_by_material,
             skills=MATERIAL_SKILLS,
             question_configuration=QUESTION_CONFIGURATION,
+            periodos=available_periodos,
+            current_periodo_id=active_periodo.id if active_periodo else None,
         )
 
     @app.route("/api/material/process", methods=["POST"])
@@ -1632,6 +1705,17 @@ def create_app(test_config: dict | None = None):
         material_type = (request.form.get("tipo_material") or TIPO_CUENTO).strip()
         if material_type not in TIPOS_MATERIAL:
             return jsonify({"error": "El tipo de material no es válido."}), 400
+        raw_periodo_id = request.form.get("id_periodo")
+        if raw_periodo_id is not None and str(raw_periodo_id).strip():
+            try:
+                material_periodo_id = int(raw_periodo_id)
+            except (TypeError, ValueError):
+                return jsonify({"error": "El periodo indicado no es válido."}), 400
+            if db.session.get(Periodo, material_periodo_id) is None:
+                return jsonify({"error": "El periodo indicado no es válido."}), 400
+        else:
+            active_periodo = current_periodo()
+            material_periodo_id = active_periodo.id if active_periodo else None
         if len(title) > 255:
             return jsonify({"error": "El título excede el límite permitido."}), 413
 
@@ -1669,6 +1753,7 @@ def create_app(test_config: dict | None = None):
                 path_audio=None,
                 path_audio_resumen=None,
                 fk_user=str(teacher["id"]),
+                id_periodo=material_periodo_id,
                 # Tal como lo envía la API institucional, sin el formateo de
                 # `display_name` (ver AuthenticatedTeacher.raw_name).
                 fk_user_name=(str(teacher.get("raw_name") or teacher.get("name") or "").strip() or None),
@@ -1744,6 +1829,7 @@ def create_app(test_config: dict | None = None):
             path_audio_resumen=f"uploads/{material_dir_name}/audio_resumen.wav",
             fk_user=str(teacher["id"]),
             fk_user_name=(str(teacher.get("name") or "").strip() or None),
+            id_periodo=material_periodo_id,
         )
         db.session.add(material)
         db.session.commit()
@@ -2043,6 +2129,11 @@ def create_app(test_config: dict | None = None):
             "audio_rpta_url": _interaccion_audio_url(interaccion),
             "apreciacion_robot": interaccion.apreciacion_robot,
             "rpta_correcta": interaccion.rpta_correcta,
+            "periodo": (
+                {"id": interaccion.periodo.id, "nombre": interaccion.periodo.nombre}
+                if interaccion.periodo
+                else None
+            ),
         }
 
     # Robot-side endpoint. MAXCIM ya no gestiona sesiones ni reconocimiento
@@ -2103,6 +2194,11 @@ def create_app(test_config: dict | None = None):
             material = db.session.get(Material, material_id)
             if not material:
                 return jsonify({"error": "Material no encontrado."}), 404
+        if material is not None:
+            interaction_periodo_id = material.id_periodo
+        else:
+            interaction_periodo = periodo_for_date(utc_now().date())
+            interaction_periodo_id = interaction_periodo.id if interaction_periodo else None
 
         interaccion_dir_name = uuid.uuid4().hex
         interaccion_dir = os.path.join(app.config["UPLOADS_ROOT"], interaccion_dir_name)
@@ -2123,6 +2219,7 @@ def create_app(test_config: dict | None = None):
             path_audio_rpta=f"uploads/{interaccion_dir_name}/audio_rpta.wav",
             apreciacion_robot=apreciacion_robot,
             rpta_correcta=rpta_correcta,
+            id_periodo=interaction_periodo_id,
         )
         db.session.add(interaccion)
         db.session.commit()

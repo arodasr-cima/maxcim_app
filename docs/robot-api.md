@@ -51,7 +51,13 @@ material asociado). `audio_rpta` debe ser un WAV válido; si falta o no lo es,
 `400`.
 
 Respuesta `201` con el registro creado, incluyendo `audio_rpta_url` (URL
-autenticada al archivo que MAXCIM acaba de guardar).
+autenticada al archivo que MAXCIM acaba de guardar) y `periodo` (`{"id": 2,
+"nombre": "II BIMESTRE"}` o `null`).
+
+El robot no debe enviar ningún campo nuevo: MAXCIM deriva el periodo en el
+servidor desde el material, cuando se proporciona uno, o desde la fecha UTC de
+`fecha_hora` en una charla libre. No hay una llamada adicional a la API
+institucional de CIMA.
 
 ## Notas
 

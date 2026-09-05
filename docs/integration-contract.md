@@ -4,7 +4,7 @@ Este documento describe el contrato vigente entre tres participantes:
 
 1. La consola docente de MAXCIM, que consume identidad y matrícula desde la API institucional.
 2. El robot, que consulta materiales y registra o consulta interacciones mediante la API de MAXCIM.
-3. La base propia de MAXCIM, que contiene únicamente `material` e `interaccion` (ver [bd_app.sql](../bd_app.sql)).
+3. La base propia de MAXCIM, que contiene `periodo`, `material` e `interaccion` (ver [bd_app.sql](../bd_app.sql)).
 
 MAXCIM no realiza reconocimiento facial ni gestiona sesiones de interacción. Docentes, aulas y alumnos nunca se persisten localmente.
 
@@ -146,6 +146,11 @@ Content-Type: multipart/form-data
 | `rpta_correcta` | sí | Booleano; admite `true/false`, `1/0`, `yes/no`, `si/sí` |
 | `audio_rpta` | sí | **Archivo WAV** con el audio de la respuesta del alumno |
 
+El robot **no envía ningún campo de periodo**. MAXCIM lo deriva en el servidor:
+si hay material, copia el periodo de ese material; si no, usa la fecha UTC de
+`fecha_hora`. Esto no requiere ninguna llamada adicional a la API institucional
+de CIMA.
+
 Ejemplo con `curl`:
 
 ```bash
@@ -176,11 +181,19 @@ La respuesta `201` contiene el registro creado:
   "respuesta": "Escuchó a sus amigos.",
   "audio_rpta_url": "https://.../api/interacciones/41/audio",
   "apreciacion_robot": "Respuesta clara y completa.",
-  "rpta_correcta": true
+  "rpta_correcta": true,
+  "periodo": {
+    "id": 2,
+    "nombre": "II BIMESTRE"
+  }
 }
 ```
 
 `audio_rpta_url` es un endpoint autenticado (mismo secreto compartido), no una ruta interna ni una URL bajo `/static/`.
+
+`periodo` es aditivo y contiene solo `id` y `nombre`; vale `null` si el material
+no tiene periodo o si la fecha de una conversación libre no pertenece a ningún
+periodo definido.
 
 #### 2.3.1 Descargar el audio de una respuesta
 
