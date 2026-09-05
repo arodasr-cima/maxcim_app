@@ -22,6 +22,16 @@
       <span class="panel-count">{{ progress_rows|length }} estudiante{{ '' if progress_rows|length == 1 else 's' }}</span>
     </div>
 
+    <nav class="period-filter" aria-label="Filtrar avance por periodo académico">
+      <span class="period-filter__label">Periodo</span>
+      <div class="period-filter__options">
+        <a class="period-filter__link{{ ' is-active' if selected_periodo_id is none }}" href="{{ url_for('classroom_progress', ref=classroom_ref(classroom.institutional_id)) }}"{% if selected_periodo_id is none %} aria-current="page"{% endif %}>Todos los periodos</a>
+        {% for p in periodos %}
+        <a class="period-filter__link{{ ' is-active' if selected_periodo_id == p.id }}" href="{{ url_for('classroom_progress', ref=classroom_ref(classroom.institutional_id), periodo=p.id) }}"{% if selected_periodo_id == p.id %} aria-current="page"{% endif %}>{{ p.nombre }}</a>
+        {% endfor %}
+      </div>
+    </nav>
+
     {% if progress_rows %}
     <div class="sessions-table-wrap" tabindex="0" role="region" aria-label="Avance del aula; desplázate horizontalmente para ver todas las columnas">
       <table class="sessions-table classroom-table progress-table">

@@ -621,8 +621,20 @@ body {
   font-size: 11.5px;
   font-weight: 700;
   padding: 5px 12px;
+  border: 1px solid #cbd8f7;
   border-radius: 20px;
+  color: #2f5bcf;
+  background: #eef3ff;
   flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.material-card__tag--conversation {
+  border-color: #dce2eb;
+  color: #7b8495;
+  background: #f8fafc;
+  font-style: italic;
+  font-weight: 600;
 }
 
 .material-card__chevron {
@@ -966,6 +978,36 @@ body {
   font-size: 13.5px;
   outline: none;
   color: #374151;
+}
+
+.upload-modal__field {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.upload-modal__label {
+  color: #4b5563;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.upload-modal__select {
+  width: 100%;
+  border: 1px solid #dde2ea;
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: #374151;
+  background: #fff;
+  font: inherit;
+  font-size: 13.5px;
+  outline: none;
+}
+
+.upload-modal__select:focus {
+  border-color: #2f5bcf;
+  box-shadow: 0 0 0 3px rgba(47, 91, 207, 0.12);
 }
 
 .upload-modal__actions {
@@ -3092,6 +3134,126 @@ body {
   margin-bottom: 7px;
 }
 
+.period-filter {
+  padding: 15px 28px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid #e7ecf3;
+  background: #fafbfd;
+}
+
+.period-filter__label {
+  flex: 0 0 auto;
+  color: #526077;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.period-filter__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.period-filter__link {
+  padding: 6px 10px;
+  border: 1px solid #d8e0ec;
+  border-radius: 999px;
+  color: #526077;
+  background: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-decoration: none;
+  transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
+}
+
+.period-filter__link:hover {
+  border-color: #aebed5;
+  color: #294fae;
+  background: #f2f6fd;
+}
+
+.period-filter__link.is-active {
+  border-color: #2f5bcf;
+  color: #fff;
+  background: #2f5bcf;
+}
+
+.period-filter__link:focus-visible {
+  outline: 3px solid rgba(47, 91, 207, 0.22);
+  outline-offset: 2px;
+}
+
+.period-breakdown {
+  padding: 18px 28px 20px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  border-bottom: 1px solid #e7ecf3;
+  background: #fff;
+}
+
+.period-breakdown__heading {
+  flex: 0 0 auto;
+}
+
+.period-breakdown__heading .page-heading__eyebrow {
+  margin: 0 0 5px;
+}
+
+.period-breakdown__heading h3 {
+  margin: 0;
+  color: #172844;
+  font-size: 0.92rem;
+}
+
+.period-breakdown__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.period-breakdown__stat {
+  min-width: 112px;
+  padding: 8px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #dce4ef;
+  border-radius: 10px;
+  background: #f8faff;
+}
+
+.period-breakdown__name {
+  color: #45536a;
+  font-size: 0.69rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.period-breakdown__name--conversation {
+  color: #7d899b;
+  font-style: italic;
+  font-weight: 600;
+}
+
+.period-breakdown__stat strong {
+  color: #183875;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.period-breakdown__empty {
+  color: #7d899b;
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
 .teacher-panel .sessions-table-wrap {
   width: 100%;
   max-width: 100%;
@@ -3440,6 +3602,18 @@ body {
     padding: 20px 18px 17px;
   }
 
+  .period-filter,
+  .period-breakdown {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .period-breakdown {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 13px;
+  }
+
   .teacher-panel .sessions-table th,
   .teacher-panel .sessions-table td {
     padding-right: 18px;
@@ -3460,6 +3634,12 @@ body {
   .teacher-panel .sessions-history__header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .period-filter {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
   }
 }
 

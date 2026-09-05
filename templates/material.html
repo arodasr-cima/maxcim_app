@@ -80,6 +80,16 @@
       <input type="text" class="upload-modal__input" id="uploadTitleInput" placeholder="Título del cuento">
     </div>
 
+    <label class="upload-modal__field" for="uploadPeriodoSelect">
+      <span class="upload-modal__label">Periodo académico</span>
+      <select class="upload-modal__select" id="uploadPeriodoSelect" name="id_periodo">
+        <option value=""{% if current_periodo_id is none %} selected{% endif %}>Sin periodo asignado</option>
+        {% for p in periodos %}
+        <option value="{{ p.id }}"{% if current_periodo_id == p.id %} selected{% endif %}>{{ p.nombre }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
     <div class="upload-modal__actions">
       <button type="button" class="btn btn--ghost" id="uploadCancelBtn">Cancelar</button>
       <button type="button" class="btn btn--primary" id="uploadStartBtn" disabled>Subir</button>
@@ -190,6 +200,11 @@
           {% if m.duracion_audio_segundos %} · Audio {{ '%.1f'|format((m.duracion_audio_segundos|float) / 60) }} min{% endif %}
         </div>
       </div>
+      {% if m.periodo %}
+      <span class="material-card__tag">{{ m.periodo.nombre }}</span>
+      {% else %}
+      <span class="material-card__tag material-card__tag--conversation">Sin periodo</span>
+      {% endif %}
       <span class="material-card__chevron">▼</span>
     </button>
     <div class="material-card__detail">
