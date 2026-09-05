@@ -1,0 +1,44 @@
+# Self-hosted: app + MySQL persistente en un solo `docker compose up --build`.
+# Alternativa a desplegar en Railway (ver README, sección "Despliegue del
+# entorno de pruebas"), para correr todo localmente o en un servidor propio.
+#
+# Variables leídas de `.env` (copiar desde `.env.example`): DEMO_MODE,
+# SECRET_KEY, SESSION_TOKEN_ENCRYPTION_KEY, MAXCIM_WEBHOOK_SECRET, etc. se
+# pasan tal cual al contenedor `app`. `MYSQL_ROOT_PASSWORD` y `MYSQL_DATABASE`
+# además los usa Compose para configurar el contenedor `db`.
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      # Siempre apunta al servicio `db` de este compose, sin importar lo que
+      # diga .env (pensado por defecto para Railway u otro host externo).
+      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-changeme}@db:3306/${MYSQL_DATABASE:-maxcim_app}?charset=utf8mb4
+      MAXCIM_UPLOADS_DIR: /app/instance/uploads
+    volumes:
+      - uploads_data:/app/instance/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-maxcim_app}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  uploads_data:

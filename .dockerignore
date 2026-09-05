@@ -6,4 +6,18 @@ venv
 __pycache__
 *.pyc
 .pytest_cache
+.ruff_cache
+.coverage
 static/uploads
+instance
+*.db
+
+# Paquete sin uso: nada lo importa (ver models/routes/services propios en la
+# raíz). Se excluye de la imagen para no llevar código muerto; no se borra
+# del repositorio aquí porque es una decisión aparte de empaquetar Docker.
+maxcim
+
+# Solo hacen falta para desarrollo/pruebas, no para correr la imagen.
+tests
+requirements-dev.txt
+.claude

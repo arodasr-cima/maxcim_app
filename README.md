@@ -90,6 +90,31 @@ El contenedor crea las tablas faltantes de una base nueva antes de iniciar Gunic
 
 La fecha de carga de cada material se asigna desde la aplicación para mantener compatibilidad con las versiones administradas de MySQL usadas en producción.
 
+### Docker Compose (local o self-hosted)
+
+Alternativa a Railway para correr todo en una sola máquina, con MySQL
+persistente incluido:
+
+```bash
+cp .env.example .env
+# Completar al menos MYSQL_ROOT_PASSWORD (la usa el contenedor de MySQL).
+docker compose up --build
+```
+
+Esto levanta dos servicios:
+
+- `app`: construye la imagen de este `Dockerfile` y sirve en `http://localhost:8080`. `DATABASE_URL` la arma el propio `docker-compose.yml` apuntando al servicio `db`; no hace falta completarla a mano en `.env`.
+- `db`: MySQL 8.4 con los datos en el volumen `mysql_data` (sobrevive a `docker compose down`; usar `docker compose down -v` para borrarlos también).
+
+Los audios y archivos de materiales quedan en el volumen `uploads_data`
+(`/app/instance/uploads` dentro del contenedor), igual que el volumen
+persistente que pide el paso 5 de Railway más arriba.
+
+El resto de variables de `.env` (`DEMO_MODE`, `SECRET_KEY`,
+`MAXCIM_WEBHOOK_SECRET`, credenciales institucionales/Google, etc.) se pasan
+tal cual al contenedor `app`; `DEMO_MODE=true` sigue siendo el valor esperado
+en este repositorio.
+
 ## Variables del entorno de pruebas
 
 | Variable | Uso |
