@@ -156,7 +156,9 @@ def test_demo_sentence_material_is_identified_and_saved_as_a_list(
     assert saved.status_code == 200
     material_id = saved.get_json()["material_id"]
 
-    robot_view = demo_client.get(f"/api/materials/{material_id}")
+    robot_view = demo_client.get(
+        f"/api/materials/{material_id}?teacher_id=DOC-DEMO-01"
+    )
     assert robot_view.get_json()["oraciones"] == sentences
 
     page = demo_client.get("/material").get_data(as_text=True)
@@ -201,7 +203,9 @@ def test_demo_can_register_and_list_interactions(demo_app, demo_client):
     assert created.status_code == 201
     assert created.get_json()["fk_alumno"] == "ALU-DEMO-1042"
 
-    listed = demo_client.get(f"/api/interacciones?id_material={material_id}")
+    listed = demo_client.get(
+        f"/api/interacciones?teacher_id=DOC-DEMO-01&id_material={material_id}"
+    )
     assert listed.status_code == 200
     assert len(listed.get_json()) == 1
     assert listed.get_json()[0]["rpta_correcta"] is True

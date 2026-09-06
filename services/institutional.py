@@ -302,7 +302,7 @@ class InstitutionalClient:
     @staticmethod
     def _format_display_name(raw_name: str) -> str:
         # CIMA envía apellidos y nombres juntos y en mayúsculas, p.ej.
-        # "RODAS ROSALES OSCAR ALEXIS", sin separar unos de otros. Solo
+        # "DOCENTE DEMO UNO", sin separar unos de otros. Solo
         # normalizamos la capitalización para mostrarlo.
         return " ".join(part.capitalize() for part in raw_name.split())
 

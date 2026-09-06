@@ -6,8 +6,8 @@ from extensions import db
 from models import Material, TIPO_CUENTO, TIPO_ORACION
 
 
-TEACHER = "70385"        # material.fk_user (idPersona de CIMA)
-DOCENTE = "Rodas Rosales Oscar Alexis"
+TEACHER = "1000001"        # material.fk_user (idPersona de CIMA)
+DOCENTE = "Docente Demo Uno"
 OTHER_TEACHER = "99999"
 
 
@@ -130,15 +130,15 @@ def test_list_materials_rejects_an_unknown_tipo(client):
     assert client.get(f"/api/materials?teacher_id={TEACHER}&tipo=poema").status_code == 400
 
 
-def test_get_material_scopes_by_teacher_id_when_given(app, client, static_tmp):
+def test_get_material_requires_a_matching_teacher(app, client, static_tmp):
     material_id = make_cuento_on_disk(app, static_tmp)
 
     assert client.get(f"/api/materials/{material_id}?teacher_id={TEACHER}").status_code == 200
     assert client.get(
         f"/api/materials/{material_id}?teacher_id={OTHER_TEACHER}"
     ).status_code == 403
-    # Sin identificador sigue funcionando por compatibilidad.
-    assert client.get(f"/api/materials/{material_id}").status_code == 200
+    # Sin identificador ya no se puede recorrer los IDs (hallazgo A-03).
+    assert client.get(f"/api/materials/{material_id}").status_code == 400
 
 
 @pytest.mark.parametrize(

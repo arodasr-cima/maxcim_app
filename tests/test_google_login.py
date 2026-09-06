@@ -251,8 +251,8 @@ def test_institutional_api_maps_google_token_to_an_active_teacher(monkeypatch):
     # para probar el parseo de claims.
     fake_jwt = jwt.encode(
         {
-            "idPersona": "70385",
-            "nombres": "RODAS ROSALES OSCAR ALEXIS",
+            "idPersona": "1000001",
+            "nombres": "DOCENTE DEMO UNO",
             "grupoPersonal": "DOCENTE COLEGIO",
             "iat": now,
             "exp": now + 3600,
@@ -273,7 +273,7 @@ def test_institutional_api_maps_google_token_to_an_active_teacher(monkeypatch):
         "token": None,
         "payload": {"id_token": "verified-id-token"},
     }
-    assert teacher.institutional_id == "70385"
-    assert teacher.display_name == "Rodas Rosales Oscar Alexis"
+    assert teacher.institutional_id == "1000001"
+    assert teacher.display_name == "Docente Demo Uno"
     assert teacher.role == "DOCENTE"
     assert teacher.access_token == fake_jwt

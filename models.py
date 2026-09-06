@@ -62,11 +62,11 @@ class Material(db.Model):
     # as DEFAULT CURRENT_DATE for MySQL, which some managed MySQL versions
     # reject during schema creation.
     fecha_subido = db.Column(db.Date, nullable=False, default=date.today)
-    # ID institucional de la docente (`idPersona` de CIMA, p.ej. "70385"). No es
+    # ID institucional de la docente (`idPersona` de CIMA, p.ej. "1000001"). No es
     # una FK real: la tabla `docente` vive en la API institucional, no en esta
     # base (ver bd_app.sql).
     fk_user = db.Column(db.String(50), nullable=False, index=True)
-    # Nombre de la docente (ya normalizado, p.ej. "Rodas Rosales Oscar Alexis")
+    # Nombre de la docente (ya normalizado, p.ej. "Docente Demo Uno")
     # tal como estaba en su sesión al crear el material. Copia para que la API
     # del robot pueda listar materiales por nombre (`?docente=`) y mostrarlo sin
     # volver a consultar a CIMA. Nulo en registros creados antes de la columna.

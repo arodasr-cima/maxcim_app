@@ -71,9 +71,44 @@ def env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Valores de ejemplo que `.env.example` publica. Si el `.env` efectivo los copia
+# tal cual, el secreto es de conocimiento público y no protege nada (hallazgo
+# C-02 de la auditoría). La comparación se hace en minúsculas.
+PUBLISHED_PLACEHOLDER_SECRETS = frozenset({
+    "cambia-este-secreto-compartido",
+    "maxcim-demo-isolated-webhook",
+    "changeme",
+})
+
+
+def _require_strong_secret(config: dict, key: str, *, min_len: int = 32) -> None:
+    """Falla el arranque si un secreto de producción está vacío, es un marcador
+    de ejemplo publicado o es demasiado corto. Se aplica solo con
+    DEMO_MODE=false y fuera de las pruebas."""
+    value = str(config.get(key) or "").strip()
+    if not value:
+        raise RuntimeError(
+            f"{key} es obligatorio con DEMO_MODE=false. Genera uno con: "
+            'python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    if value.lower() in PUBLISHED_PLACEHOLDER_SECRETS:
+        raise RuntimeError(
+            f"{key} tiene un valor de ejemplo público; es de conocimiento "
+            "público y no protege nada. Genera uno nuevo aleatorio."
+        )
+    if len(value) < min_len:
+        raise RuntimeError(
+            f"{key} es demasiado corto ({len(value)} caracteres); usa al menos "
+            f"{min_len} caracteres aleatorios (256 bits)."
+        )
+
+
 # This repository is intentionally the isolated test environment. The real
 # repository keeps DEMO_MODE disabled and never imports this adapter.
-DEFAULT_DEMO_MODE = env_bool("DEMO_MODE", True)
+# Fail-closed: si la variable falta, se asume producción. Demo es un bypass de
+# autenticación (acepta cualquier credencial, omite CSRF, autoriza toda llamada
+# robot); olvidar la variable no puede dejarlo encendido.
+DEFAULT_DEMO_MODE = env_bool("DEMO_MODE", False)
 
 
 def utc_now() -> datetime:
@@ -679,6 +714,17 @@ def create_app(test_config: dict | None = None):
     os.makedirs(app.config["UPLOADS_ROOT"], exist_ok=True)
 
     if app.config.get("DEMO_MODE"):
+        # Demo solo puede correr sobre su SQLite aislada. Demo + base remota =
+        # el bypass de autenticación encendido sobre datos reales (hallazgo
+        # A-02); mejor no arrancar.
+        if not app.config.get("TESTING") and not str(
+            app.config.get("SQLALCHEMY_DATABASE_URI", "")
+        ).startswith("sqlite:"):
+            raise RuntimeError(
+                "DEMO_MODE=true solo puede usar SQLite aislada, pero hay una "
+                "base remota configurada. Demo acepta cualquier credencial: no "
+                "puede tocar datos reales. Pon DEMO_MODE=false o quita DATABASE_URL."
+            )
         os.makedirs(app.instance_path, exist_ok=True)
         if not app.config.get("SECRET_KEY"):
             app.config["SECRET_KEY"] = secrets.token_hex(32)
@@ -686,6 +732,26 @@ def create_app(test_config: dict | None = None):
             app.config["SESSION_TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode("ascii")
         if not app.config.get("MAXCIM_WEBHOOK_SECRET"):
             app.config["MAXCIM_WEBHOOK_SECRET"] = "maxcim-demo-isolated-webhook"
+    elif not app.config.get("TESTING"):
+        # Producción: los secretos compartidos no pueden quedar vacíos, ser un
+        # marcador de `.env.example` ni ser triviales. El helper se reutiliza
+        # para otros secretos en hallazgos posteriores.
+        _require_strong_secret(app.config, "MAXCIM_WEBHOOK_SECRET")
+        # La sesión de la docente vive entera en la cookie firmada (incluye el
+        # JWT de CIMA cifrado). Fuera de demo se exige HTTPS sí o sí: el valor
+        # del `.env` se ignora para que no pueda quedar mal configurado.
+        if not app.config.get("SESSION_COOKIE_SECURE"):
+            app.logger.warning(
+                "SESSION_COOKIE_SECURE llegó en false; se fuerza a true (DEMO_MODE=false)."
+            )
+        app.config["SESSION_COOKIE_SECURE"] = True
+        app.config["PREFERRED_URL_SCHEME"] = "https"
+        # Detrás de un terminador TLS, Gunicorn recibe HTTP en el salto interno.
+        # ProxyFix hace que Flask lea el esquema/host reales de X-Forwarded-*,
+        # necesario para emitir la cookie Secure y armar URLs https://.
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     db.init_app(app)
 
     institutional_client = app.config.get("INSTITUTIONAL_CLIENT")
@@ -785,7 +851,7 @@ def create_app(test_config: dict | None = None):
         configured = str(app.config.get("GOOGLE_OAUTH_REDIRECT_URI") or "").strip()
         if configured:
             return configured
-        scheme = "https" if app.config.get("SESSION_COOKIE_SECURE") else request.scheme
+        scheme = "https" if app.config.get("PREFERRED_URL_SCHEME") == "https" else request.scheme
         return url_for("google_callback", _external=True, _scheme=scheme)
 
     def google_error_redirect(message: str):
@@ -1027,6 +1093,10 @@ def create_app(test_config: dict | None = None):
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        if not app.config.get("DEMO_MODE"):
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=63072000; includeSubDomains"
+            )
         if (
             request.path.startswith("/api/")
             or request.path.startswith("/auth/")
@@ -1938,7 +2008,7 @@ def create_app(test_config: dict | None = None):
         # por HTTPS y devuelve `http://`, con lo que el robot no puede
         # descargar (mismo problema que ya resolvía `google_redirect_uri`
         # para el callback de Google; aquí se aplica el mismo criterio).
-        scheme = "https" if app.config.get("SESSION_COOKIE_SECURE") else request.scheme
+        scheme = "https" if app.config.get("PREFERRED_URL_SCHEME") == "https" else request.scheme
         return url_for(
             "download_material_resource",
             material_id=material.id,
@@ -2060,10 +2130,11 @@ def create_app(test_config: dict | None = None):
     def get_material(material_id):
         if not webhook_authorized():
             return jsonify({"error": "Integración no autorizada."}), 401
-        # El identificador (`docente` o `teacher_id`) es opcional aquí por
-        # compatibilidad; si se envía, se valida la propiedad. Las descargas por
-        # archivo sí lo exigen.
-        material, error = robot_material_or_error(material_id, require_identifier=False)
+        # El identificador de la docente (`docente` o `teacher_id`) es
+        # obligatorio y debe coincidir con el dueño del material (hallazgo
+        # A-03): sin esto, con solo el secreto se recorren los IDs enteros y se
+        # descubre a qué docente pertenece cada material.
+        material, error = robot_material_or_error(material_id, require_identifier=True)
         if error:
             return error
         return jsonify(serialize_material(material))
@@ -2130,7 +2201,7 @@ def create_app(test_config: dict | None = None):
         # Mismo criterio que _material_resource_url: sin `_scheme` explícito,
         # detrás de un proxy que termina TLS, `_external=True` devolvería
         # `http://` (el proceso no ve el HTTPS del cliente).
-        scheme = "https" if app.config.get("SESSION_COOKIE_SECURE") else request.scheme
+        scheme = "https" if app.config.get("PREFERRED_URL_SCHEME") == "https" else request.scheme
         return url_for(
             "download_interaccion_audio",
             interaccion_id=interaccion.id,
@@ -2248,17 +2319,29 @@ def create_app(test_config: dict | None = None):
         return jsonify(serialize_interaccion(interaccion)), 201
 
     # Robot-side endpoint: descarga el audio de la respuesta que MAXCIM
-    # almacenó al registrar la interacción (ver registrar_interaccion). Sin
-    # verificación de dueño, igual que /api/interacciones (GET): el robot no
-    # identifica ninguna docente al consultar interacciones, solo alumno y/o
-    # material.
+    # almacenó al registrar la interacción (ver registrar_interaccion). Exige
+    # identificar a la docente y que el material de la interacción le
+    # pertenezca (hallazgo A-03).
     @app.route("/api/interacciones/<int:interaccion_id>/audio", methods=["GET"])
     def download_interaccion_audio(interaccion_id):
         if not webhook_authorized():
             return jsonify({"error": "Integración no autorizada."}), 401
+        teacher_id, docente = robot_teacher_query()
+        if not teacher_id and not docente:
+            return jsonify({
+                "error": "Falta identificar a la docente (docente o teacher_id)."
+            }), 400
         interaccion = db.session.get(Interaccion, interaccion_id)
         if not interaccion:
             return jsonify({"error": "Interacción no encontrada."}), 404
+        material = (
+            db.session.get(Material, interaccion.id_material)
+            if interaccion.id_material
+            else None
+        )
+        if material is None or not robot_material_belongs(material, teacher_id, docente):
+            # Conversación libre (sin material) o material de otra docente.
+            return jsonify({"error": "La interacción no pertenece a esa docente."}), 403
         try:
             abs_path = uploads_abspath(interaccion.path_audio_rpta)
         except ValueError:
@@ -2277,23 +2360,34 @@ def create_app(test_config: dict | None = None):
     def list_interacciones():
         if not webhook_authorized():
             return jsonify({"error": "Integración no autorizada."}), 401
+        teacher_id, docente = robot_teacher_query()
+        if not teacher_id and not docente:
+            return jsonify({
+                "error": "Falta identificar a la docente (docente o teacher_id)."
+            }), 400
         material_id = request.args.get("id_material")
         fk_alumno = (request.args.get("fk_alumno") or "").strip()
-        # Exigir al menos un filtro: el robot siempre consulta por un material
-        # o por un alumno concreto; sin filtro, este endpoint volcaría el
-        # historial de todas las docentes y alumnos con un solo secreto.
+        # Exigir al menos un filtro además de la docente: el robot siempre
+        # consulta por un material o por un alumno concreto.
         if not material_id and not fk_alumno:
             return jsonify({
                 "error": "Indica al menos id_material o fk_alumno."
             }), 400
-        query = Interaccion.query
+        # Solo interacciones de materiales de esta docente (hallazgo A-03). Las
+        # conversaciones libres (id_material NULL) no tienen dueña y quedan
+        # fuera de la API del robot hasta el hallazgo A-05.
+        query = (
+            Interaccion.query
+            .join(Material, Interaccion.id_material == Material.id)
+            .filter(robot_owner_filter(teacher_id, docente))
+        )
         if material_id:
             try:
-                query = query.filter_by(id_material=int(material_id))
+                query = query.filter(Interaccion.id_material == int(material_id))
             except ValueError:
                 return jsonify({"error": "id_material no es válido."}), 400
         if fk_alumno:
-            query = query.filter_by(fk_alumno=fk_alumno)
+            query = query.filter(Interaccion.fk_alumno == fk_alumno)
         interacciones = query.order_by(Interaccion.fecha_hora.desc()).limit(200).all()
         return jsonify([serialize_interaccion(item) for item in interacciones])
 

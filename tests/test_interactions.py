@@ -2,6 +2,8 @@ import io
 import json
 import wave
 
+import pytest
+
 import app as app_module
 from extensions import db
 from models import Interaccion, Material, TIPO_CUENTO, TIPO_ORACION
@@ -163,9 +165,59 @@ def test_registrar_interaccion_stores_the_audio_and_exposes_a_download_url(
         assert stored_path.startswith("uploads/")
         assert (tmp_path / stored_path.removeprefix("uploads/")).is_file()
 
-    download = client.get(audio_url.removeprefix("http://localhost"))
+    audio_path = audio_url.removeprefix("http://localhost")
+    # Sin identificar a la docente, 400 (hallazgo A-03).
+    assert client.get(audio_path).status_code == 400
+    download = client.get(f"{audio_path}?teacher_id={TEST_TEACHER_ID}")
     assert download.status_code == 200
     assert download.mimetype == "audio/wav"
+
+
+@pytest.mark.parametrize(
+    "bad_secret",
+    ["", "cambia-este-secreto-compartido", "CAMBIA-ESTE-SECRETO-COMPARTIDO", "corto"],
+)
+def test_create_app_rejects_weak_webhook_secret_in_production(monkeypatch, bad_secret):
+    monkeypatch.setattr(app_module, "gemini_client", None)
+    with pytest.raises(RuntimeError):
+        app_module.create_app({
+            "TESTING": False,
+            "DEMO_MODE": False,
+            "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+            "SQLALCHEMY_ENGINE_OPTIONS": {},
+            "MAXCIM_WEBHOOK_SECRET": bad_secret,
+        })
+
+
+def test_create_app_refuses_demo_mode_on_a_remote_database(monkeypatch):
+    monkeypatch.setattr(app_module, "gemini_client", None)
+    with pytest.raises(RuntimeError):
+        app_module.create_app({
+            "TESTING": False,
+            "DEMO_MODE": True,
+            "SQLALCHEMY_DATABASE_URI": "mysql+pymysql://root:x@db:3306/maxcim_app",
+            "SQLALCHEMY_ENGINE_OPTIONS": {},
+        })
+
+
+def test_create_app_forces_https_session_in_production(monkeypatch):
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
+    monkeypatch.setattr(app_module, "gemini_client", None)
+    application = app_module.create_app({
+        "TESTING": False,
+        "DEMO_MODE": False,
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "SQLALCHEMY_ENGINE_OPTIONS": {},
+        "MAXCIM_WEBHOOK_SECRET": "robot-secret-0123456789abcdef0123456789abcdef",
+        "SECRET_KEY": "x" * 40,
+        "SESSION_TOKEN_ENCRYPTION_KEY": "x" * 40,
+        # Aunque el .env diga false, no-demo lo fuerza a true.
+        "SESSION_COOKIE_SECURE": False,
+    })
+    assert application.config["SESSION_COOKIE_SECURE"] is True
+    assert application.config["PREFERRED_URL_SCHEME"] == "https"
+    assert isinstance(application.wsgi_app, ProxyFix)
 
 
 def test_registrar_interaccion_requires_webhook_secret_in_production(monkeypatch):
@@ -175,7 +227,7 @@ def test_registrar_interaccion_requires_webhook_secret_in_production(monkeypatch
         "DEMO_MODE": False,
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "SQLALCHEMY_ENGINE_OPTIONS": {},
-        "MAXCIM_WEBHOOK_SECRET": "robot-secret",
+        "MAXCIM_WEBHOOK_SECRET": "robot-secret-0123456789abcdef0123456789abcdef",
     })
     with application.app_context():
         db.create_all()
@@ -196,7 +248,7 @@ def test_registrar_interaccion_requires_webhook_secret_in_production(monkeypatch
     accepted = test_client.post(
         "/api/interacciones",
         data=data,
-        headers={"X-MAXCIM-Webhook-Secret": "robot-secret"},
+        headers={"X-MAXCIM-Webhook-Secret": "robot-secret-0123456789abcdef0123456789abcdef"},
     )
     assert accepted.status_code == 201
 
@@ -214,17 +266,26 @@ def test_list_interacciones_filters_by_material_and_alumno(app, client):
     register_interaction(client, material_id, fk_alumno="ALU-B")
     register_interaction(client, other_material_id, fk_alumno="ALU-A")
 
-    by_material = client.get(f"/api/interacciones?id_material={material_id}")
+    tid = f"teacher_id={TEST_TEACHER_ID}"
+
+    by_material = client.get(f"/api/interacciones?{tid}&id_material={material_id}")
     assert by_material.status_code == 200
     assert len(by_material.get_json()) == 2
 
-    by_alumno = client.get("/api/interacciones?fk_alumno=ALU-A")
+    by_alumno = client.get(f"/api/interacciones?{tid}&fk_alumno=ALU-A")
     assert by_alumno.status_code == 200
     assert len(by_alumno.get_json()) == 2
 
-    both = client.get(f"/api/interacciones?id_material={material_id}&fk_alumno=ALU-A")
+    both = client.get(
+        f"/api/interacciones?{tid}&id_material={material_id}&fk_alumno=ALU-A"
+    )
     assert both.status_code == 200
     assert len(both.get_json()) == 1
+
+    # Sin identificar a la docente, 400 (hallazgo A-03).
+    assert client.get(
+        f"/api/interacciones?id_material={material_id}"
+    ).status_code == 400
 
 
 def test_get_cuento_material_round_trips_through_robot_api(
@@ -250,7 +311,7 @@ def test_get_cuento_material_round_trips_through_robot_api(
         material_id = material.id
         fecha_subido = material.fecha_subido.isoformat()
 
-    response = client.get(f"/api/materials/{material_id}")
+    response = client.get(f"/api/materials/{material_id}?teacher_id={TEST_TEACHER_ID}")
     assert response.status_code == 200
     base = f"http://localhost/api/materials/{material_id}"
     assert response.get_json() == {
@@ -286,7 +347,7 @@ def test_get_oracion_material_round_trips_through_robot_api(app, client):
         material_id = material.id
         fecha_subido = material.fecha_subido.isoformat()
 
-    response = client.get(f"/api/materials/{material_id}")
+    response = client.get(f"/api/materials/{material_id}?teacher_id={TEST_TEACHER_ID}")
     assert response.status_code == 200
     assert response.get_json() == {
         "id": material_id,
@@ -321,7 +382,9 @@ def test_get_oracion_material_serves_the_json_list_written_on_save(
     assert save.status_code == 200
     material_id = save.get_json()["material_id"]
 
-    body = client.get(f"/api/materials/{material_id}").get_json()
+    body = client.get(
+        f"/api/materials/{material_id}?teacher_id={TEST_TEACHER_ID}"
+    ).get_json()
     assert body["oraciones"] == ["Hoy llueve.", "Mañana saldrá el sol."]
     assert body["oraciones_url"] == f"http://localhost/api/materials/{material_id}/oraciones"
 

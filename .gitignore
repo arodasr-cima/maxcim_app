@@ -5,6 +5,7 @@ __pycache__/
 .env
 instance/
 static/uploads/
+.db_backups/
 
 # Informes de auditoría: documentan vulnerabilidades reales sin parchear,
 # nunca deben quedar versionados.

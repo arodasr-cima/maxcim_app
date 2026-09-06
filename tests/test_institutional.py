@@ -25,11 +25,16 @@ def make_client(**overrides):
     return InstitutionalClient(**settings)
 
 
+# Todos los datos de identidad de estas pruebas son ficticios a propósito
+# (idPersona 1000001, "DOCENTE DEMO UNO", usuario docente.demo, idLogueo
+# 500001). Antes existían credenciales y nombres reales versionados aquí; se
+# sustituyeron en la remediación de C-01 (ver docs/security-remediation.md).
+# Nunca commitear usuario/contraseña ni idPersona/nombres reales de CIMA.
 def make_cima_jwt(**claim_overrides):
     now = int(time.time())
     claims = {
-        "idPersona": "70385",
-        "nombres": "RODAS ROSALES OSCAR ALEXIS",
+        "idPersona": "1000001",
+        "nombres": "DOCENTE DEMO UNO",
         "grupoPersonal": "DOCENTE COLEGIO",
         "iat": now,
         "exp": now + 3600,
@@ -51,25 +56,25 @@ def test_authenticate_sends_the_cima_login_contract(monkeypatch):
         return {"content": {"token": f"Bearer {fake_jwt}"}}
 
     monkeypatch.setattr(client, "_request", fake_request)
-    teacher = client.authenticate("orodasr", "72737674")
+    teacher = client.authenticate("docente.demo", "clave-demo-no-real")
 
     assert captured == {
         "method": "POST",
         "path": "/v1/auth/login",
         "token": None,
         "payload": {
-            "username": "orodasr",
-            "password": "72737674",
+            "username": "docente.demo",
+            "password": "clave-demo-no-real",
             "idSystem": 21,
             "identifier": "Sin IP",
         },
     }
-    assert teacher.institutional_id == "70385"
-    assert teacher.display_name == "Rodas Rosales Oscar Alexis"
+    assert teacher.institutional_id == "1000001"
+    assert teacher.display_name == "Docente Demo Uno"
     # `raw_name` conserva el valor tal como lo envía CIMA (sin el
     # `.capitalize()` de `display_name`): es lo que se guarda en
     # `material.fk_user_name`.
-    assert teacher.raw_name == "RODAS ROSALES OSCAR ALEXIS"
+    assert teacher.raw_name == "DOCENTE DEMO UNO"
     assert teacher.role == "DOCENTE"
     assert teacher.access_token == fake_jwt
     assert teacher.expires_in_seconds == 3600
@@ -85,7 +90,7 @@ def test_authenticate_rewrites_the_drive_photo_into_an_embeddable_url(monkeypatc
         client, "_request", lambda *a, **k: {"content": {"token": f"Bearer {fake_jwt}"}}
     )
 
-    teacher = client.authenticate("orodasr", "72737674")
+    teacher = client.authenticate("docente.demo", "clave-demo-no-real")
 
     assert teacher.photo_url == (
         "https://drive.google.com/thumbnail?id=ABC123xyz&sz=w160"
@@ -99,7 +104,7 @@ def test_authenticate_ignores_a_photo_route_that_is_not_http(monkeypatch):
         client, "_request", lambda *a, **k: {"content": {"token": f"Bearer {fake_jwt}"}}
     )
 
-    teacher = client.authenticate("orodasr", "72737674")
+    teacher = client.authenticate("docente.demo", "clave-demo-no-real")
 
     assert teacher.photo_url == ""
 
@@ -113,7 +118,7 @@ def test_authenticate_accepts_any_non_student_grupo_personal(monkeypatch):
         client, "_request", lambda *a, **k: {"content": {"token": fake_jwt}}
     )
 
-    teacher = client.authenticate("orodasr", "72737674")
+    teacher = client.authenticate("docente.demo", "clave-demo-no-real")
 
     assert teacher.role == "DOCENTE"
 
@@ -134,7 +139,7 @@ def test_authenticate_treats_a_missing_token_as_invalid_credentials(monkeypatch)
     monkeypatch.setattr(client, "_request", lambda *a, **k: {"content": {}})
 
     with pytest.raises(InstitutionalAuthenticationError):
-        client.authenticate("orodasr", "credencial-incorrecta")
+        client.authenticate("docente.demo", "credencial-incorrecta")
 
 
 def test_authenticate_rejects_an_already_expired_jwt(monkeypatch):
@@ -146,7 +151,7 @@ def test_authenticate_rejects_an_already_expired_jwt(monkeypatch):
     )
 
     with pytest.raises(InstitutionalAuthenticationError):
-        client.authenticate("orodasr", "credencial")
+        client.authenticate("docente.demo", "credencial")
 
 
 def test_session_lifetime_never_exceeds_the_jwt_absolute_expiry(monkeypatch):
@@ -158,13 +163,13 @@ def test_session_lifetime_never_exceeds_the_jwt_absolute_expiry(monkeypatch):
         client, "_request", lambda *a, **k: {"content": {"token": fake_jwt}}
     )
 
-    teacher = client.authenticate("orodasr", "credencial")
+    teacher = client.authenticate("docente.demo", "credencial")
     assert teacher.expires_in_seconds <= 60
 
 
 def test_list_teacher_classrooms_uses_idlogueo_from_the_token_not_teacher_id(monkeypatch):
     client = make_client()
-    fake_token = make_cima_jwt(idLogueo="9716")
+    fake_token = make_cima_jwt(idLogueo="500001")
     captured = {}
 
     def fake_request(method, path, *, token=None, payload=None):
@@ -175,13 +180,13 @@ def test_list_teacher_classrooms_uses_idlogueo_from_the_token_not_teacher_id(mon
         ]
 
     monkeypatch.setattr(client, "_request", fake_request)
-    # El teacher_id pasado aquí (idPersona, "70385") es deliberadamente
+    # El teacher_id pasado aquí (idPersona, "1000001") es deliberadamente
     # distinto del idLogueo del token, para probar que se ignora.
-    classrooms = client.list_teacher_classrooms(fake_token, "70385")
+    classrooms = client.list_teacher_classrooms(fake_token, "1000001")
 
     assert captured == {
         "method": "GET",
-        "path": "/v1/teachers/9716/classrooms",
+        "path": "/v1/teachers/500001/classrooms",
         "token": fake_token,
         "payload": None,
     }
@@ -196,11 +201,11 @@ def test_list_teacher_classrooms_uses_idlogueo_from_the_token_not_teacher_id(mon
 
 def test_list_teacher_classrooms_rejects_a_non_list_payload(monkeypatch):
     client = make_client()
-    fake_token = make_cima_jwt(idLogueo="9716")
+    fake_token = make_cima_jwt(idLogueo="500001")
     monkeypatch.setattr(client, "_request", lambda *a, **k: {"classrooms": []})
 
     with pytest.raises(InstitutionalAPIError):
-        client.list_teacher_classrooms(fake_token, "70385")
+        client.list_teacher_classrooms(fake_token, "1000001")
 
 
 def test_list_classroom_students_sends_the_cima_students_path(monkeypatch):

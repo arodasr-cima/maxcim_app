@@ -29,8 +29,8 @@ enviar una basta):
 
 | Parámetro | Se compara con | Notas |
 |---|---|---|
-| `docente` | `material.fk_user_name` | Nombre de la docente tal como MAXCIM lo guarda al crear el material (`nombres` de CIMA normalizado, p.ej. `Rodas Rosales Oscar Alexis`). Comparación **sin distinguir mayúsculas** (y sin acentos en MySQL). El nombre **no es único**: si dos docentes se llaman igual, la consulta devuelve los materiales de ambas. Vacío en materiales creados antes de esta columna. |
-| `teacher_id` (alias `dni`) | `material.fk_user` | `idPersona` de CIMA (p.ej. `70385`), el mismo valor que va en `fk_user` del cuerpo de respuesta. |
+| `docente` | `material.fk_user_name` | Nombre de la docente tal como MAXCIM lo guarda al crear el material (`nombres` de CIMA normalizado, p.ej. `Docente Demo Uno`). Comparación **sin distinguir mayúsculas** (y sin acentos en MySQL). El nombre **no es único**: si dos docentes se llaman igual, la consulta devuelve los materiales de ambas. Vacío en materiales creados antes de esta columna. |
+| `teacher_id` (alias `dni`) | `material.fk_user` | `idPersona` de CIMA (p.ej. `1000001`), el mismo valor que va en `fk_user` del cuerpo de respuesta. |
 
 MAXCIM **no tiene tabla de docentes** y no conoce el DNI real (el JWT de login
 —sección 3.1— no lo trae). El nombre y el `idPersona` se copian en cada material
@@ -60,11 +60,10 @@ X-MAXCIM-Webhook-Secret: <secreto>
 Accept: application/json
 ```
 
-El identificador (`docente` o `teacher_id`) es **opcional** en este endpoint por
-compatibilidad; si se envía y no coincide con el dueño del material, la
-respuesta es `403`. Las descargas por archivo de la sección 2.5 sí lo exigen. La
-respuesta incluye `"docente"` (el `fk_user_name` del material, o `null` en los
-materiales anteriores a esa columna).
+El identificador (`docente` o `teacher_id`) es **obligatorio**: si faltan ambos
+devuelve `400` y si no coincide con el dueño del material devuelve `403`. Un `id`
+inexistente devuelve `404`. La respuesta incluye `"docente"` (el `fk_user_name`
+del material, o `null` en los materiales anteriores a esa columna).
 
 Un `cuento` devuelve `200` con esta forma:
 
@@ -198,21 +197,32 @@ periodo definido.
 #### 2.3.1 Descargar el audio de una respuesta
 
 ```http
-GET /api/interacciones/{id}/audio
+GET /api/interacciones/{id}/audio?docente=<nombre>
 X-MAXCIM-Webhook-Secret: <secreto>
 ```
 
-Devuelve el archivo WAV subido en 2.3 (`audio/wav`). `404` si la interacción no existe o si el archivo no está disponible.
+El identificador de la docente (`docente` o `teacher_id`) es **obligatorio**
+(`400` si falta). Devuelve el archivo WAV subido en 2.3 (`audio/wav`). `403` si
+el material de esa interacción no pertenece a la docente (o si es una
+conversación libre, que aún no tiene dueña). `404` si la interacción no existe o
+si el archivo no está disponible.
 
 ### 2.4 Consultar interacciones
 
 ```http
-GET /api/interacciones?id_material=<id_material>&fk_alumno=<id_alumno_institucional>
+GET /api/interacciones?docente=<nombre>&id_material=<id_material>&fk_alumno=<id_alumno_institucional>
 X-MAXCIM-Webhook-Secret: <secreto>
 Accept: application/json
 ```
 
-Hay que enviar **al menos uno** de los dos filtros (`id_material` o `fk_alumno`); se pueden combinar. Sin ninguno, `400` (este endpoint no vuelca el historial completo). La respuesta `200` es una lista de hasta 200 registros con la misma forma de la respuesta del `POST`, ordenados desde el más reciente. Un `id_material` no numérico devuelve `400`.
+El identificador de la docente (`docente` o `teacher_id`) es **obligatorio**
+(`400` si falta). Además hay que enviar **al menos uno** de los dos filtros
+(`id_material` o `fk_alumno`); se pueden combinar. Sin ninguno, `400`. La
+respuesta solo incluye interacciones de materiales de esa docente; las
+conversaciones libres (`id_material` nulo) todavía no se devuelven por esta API.
+La respuesta `200` es una lista de hasta 200 registros con la misma forma de la
+respuesta del `POST`, ordenados desde el más reciente. Un `id_material` no
+numérico devuelve `400`.
 
 ### 2.5 Descargar un archivo de un material
 
@@ -303,14 +313,14 @@ decodificado de ejemplo:
 
 ```json
 {
-  "idPersona": "70385",
-  "sub": "orodasr",
-  "nombres": "RODAS ROSALES OSCAR ALEXIS",
+  "idPersona": "1000001",
+  "sub": "docente.demo",
+  "nombres": "DOCENTE DEMO UNO",
   "grupoPersonal": "DOCENTE COLEGIO",
   "idGrupoPersonal": "5",
-  "correoInstitucional": "oscar.rodas@colegiocima.edu.pe",
+  "correoInstitucional": "docente.demo@colegiocima.edu.pe",
   "rutaFoto": "https://drive.google.com/...",
-  "idLogueo": "9716",
+  "idLogueo": "500001",
   "idSistema": "21",
   "aula": "",
   "iat": 1788103877,
@@ -326,7 +336,7 @@ la docente. Mapeo de campos:
 | Campo MAXCIM | Claim del JWT | Notas |
 |---|---|---|
 | `institutional_id` | `idPersona` | Identificador único y estable de la persona |
-| `display_name` | `nombres` | Apellidos y nombres juntos, en MAYÚSCULAS (ej. `RODAS ROSALES OSCAR ALEXIS`); MAXCIM solo normaliza la capitalización, no los separa |
+| `display_name` | `nombres` | Apellidos y nombres juntos, en MAYÚSCULAS (ej. `DOCENTE DEMO UNO`); MAXCIM solo normaliza la capitalización, no los separa |
 | `role` | (constante `"DOCENTE"`) | No se filtra por categoría de personal (docente, administrativo, etc.); se acepta el login salvo que `grupoPersonal` contenga `ALUMNO` (insensible a mayúsculas), caso en el que se rechaza como si la credencial fuera inválida |
 | `expires_in_seconds` | `exp` − `iat` | Si faltan o no son válidos, usa 3600 segundos por defecto |
 | `access_token` | el JWT completo (sin el prefijo `Bearer`) | Se cifra dentro de la cookie firmada de Flask; no existe una tabla local de sesiones |
