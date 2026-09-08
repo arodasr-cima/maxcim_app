@@ -37,6 +37,65 @@ class Periodo(db.Model):
 
     materiales = db.relationship("Material", back_populates="periodo")
     interacciones = db.relationship("Interaccion", back_populates="periodo")
+    temas = db.relationship("Tema", back_populates="periodo")
+
+
+class Tema(db.Model):
+    """Unidad temática que una docente usa para organizar su propio material
+    dentro de un periodo (p.ej. "Animales", "La familia"). No se comparte
+    entre docentes ni entre periodos: cada tema pertenece a una docente y a
+    un bimestre concretos. Refleja exactamente `tema` en bd_app.sql; ese
+    archivo es la fuente de verdad para columnas, tipos e índices.
+    """
+
+    __tablename__ = "tema"
+    __table_args__ = (
+        # Declarada también aquí (y no solo en la migración) para que SQLite
+        # la aplique igual en las pruebas: sin esto, create_tema() nunca
+        # vería el IntegrityError que espera para devolver 409.
+        #
+        # Colación: en MySQL (migrations/005_tema.sql) la tabla usa
+        # utf8mb4_0900_ai_ci, insensible a mayúsculas/acentos, así que
+        # "Animales" y "animales" chocan como duplicados. SQLite compara en
+        # binario sin importar aquí una colación equivalente, así que en
+        # pruebas y en DEMO_MODE (que también corre sobre SQLite) esas dos
+        # variantes SÍ se guardan como temas distintos — divergencia conocida
+        # y aceptada, no un intento fallido de replicar el comportamiento de
+        # MySQL. Si esto importa alguna vez, hay que registrar una colación
+        # SQLite equivalente vía sqlalchemy.event en vez de asumir que este
+        # UniqueConstraint por sí solo cubre el caso acento/mayúscula.
+        db.UniqueConstraint(
+            "fk_user", "id_periodo", "nombre", name="uq_tema_docente_periodo_nombre"
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(120), nullable=False)
+    # ID institucional de la docente, igual que `material.fk_user`: no es una
+    # FK real, la tabla `docente` vive en la API institucional.
+    fk_user = db.Column(db.String(50), nullable=False, index=True)
+    id_periodo = db.Column(
+        db.Integer,
+        db.ForeignKey("periodo.id"),
+        nullable=False,
+        index=True,
+    )
+
+    periodo = db.relationship("Periodo", back_populates="temas")
+    # `passive_deletes=True` es obligatorio para que el borrado bloqueado de
+    # DELETE /api/temas/<id> funcione de verdad: sin esto, SQLAlchemy pone en
+    # NULL el `id_tema` de cada material referenciado ANTES del DELETE del
+    # tema (comportamiento por defecto de la relación, no algo que la FK
+    # pueda impedir), así que un borrado que se cuela pasado el chequeo de
+    # `material_count` (p.ej. por una lectura obsoleta en una carrera)
+    # desasignaría el tema en silencio en vez de fallar — justo lo que se
+    # decidió NO hacer. Con esto, el DELETE se emite tal cual y es la FK de
+    # material.id_tema (ON DELETE por defecto = RESTRICT, ver
+    # migrations/005_tema.sql) la que lo rechaza con IntegrityError si algo
+    # todavía apunta al tema.
+    materiales = db.relationship(
+        "Material", back_populates="tema", passive_deletes=True
+    )
 
 
 class Material(db.Model):
@@ -78,6 +137,15 @@ class Material(db.Model):
         nullable=True,
         index=True,
     )
+    # Tema al que la docente asignó este material; nulo si no le puso uno.
+    # Debe pertenecer al mismo periodo que `id_periodo` — la app lo valida al
+    # guardar (ver save_material en app.py), no hay trigger en la base.
+    id_tema = db.Column(
+        db.Integer,
+        db.ForeignKey("tema.id"),
+        nullable=True,
+        index=True,
+    )
 
     interacciones = db.relationship(
         "Interaccion",
@@ -85,6 +153,7 @@ class Material(db.Model):
         lazy="selectin",
     )
     periodo = db.relationship("Periodo", back_populates="materiales")
+    tema = db.relationship("Tema", back_populates="materiales")
 
     @property
     def es_oracion(self) -> bool:

@@ -92,6 +92,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const uploadCancelBtn = document.getElementById("uploadCancelBtn");
   const uploadStartBtn = document.getElementById("uploadStartBtn");
   const uploadTitleInput = document.getElementById("uploadTitleInput");
+  const uploadPeriodoYearSelect = document.getElementById("uploadPeriodoYearSelect");
+  const uploadPeriodoSelect = document.getElementById("uploadPeriodoSelect");
+  const uploadTemaSelect = document.getElementById("uploadTemaSelect");
   const uploadFileInput = document.getElementById("uploadFileInput");
   const dropzone = document.getElementById("dropzone");
   const dropzoneText = document.getElementById("dropzoneText");
@@ -133,6 +136,27 @@ document.addEventListener("DOMContentLoaded", () => {
   let audioFullDurationSeconds = null;
   let audioSummaryDurationSeconds = null;
 
+  const uploadTemaOptions = Array.from(uploadTemaSelect.options).filter((option) => option.value);
+
+  function filterUploadTemas(resetSelection = true) {
+    if (resetSelection) {
+      uploadTemaSelect.value = "";
+    }
+
+    const selectedPeriodo = uploadPeriodoSelect.value;
+    uploadTemaOptions.forEach((option) => {
+      const isVisible = Boolean(selectedPeriodo) && option.dataset.periodo === selectedPeriodo;
+      option.hidden = !isVisible;
+      option.disabled = !isVisible;
+    });
+  }
+
+  filterUploadTemas();
+  uploadPeriodoSelect.addEventListener("change", () => filterUploadTemas());
+  // period_filter.js restablece Periodo al cambiar Año. Este segundo
+  // listener se ejecuta después y mantiene Tema sincronizado con ese reset.
+  uploadPeriodoYearSelect.addEventListener("change", () => filterUploadTemas());
+
   function setUploadType(type) {
     currentUploadType = type;
     const isOracion = type === "oracion";
@@ -166,6 +190,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function resetUploadForm() {
     selectedFile = null;
     uploadTitleInput.value = "";
+    filterUploadTemas();
     uploadFileInput.value = "";
     dropzoneText.textContent = "Arrastra el archivo aquí o haz clic para seleccionar";
     setUploadType("cuento");
@@ -230,6 +255,8 @@ document.addEventListener("DOMContentLoaded", () => {
     formData.append("tipo_material", "oracion");
     formData.append("title", currentMaterialTitle);
     formData.append("sentences_json", JSON.stringify(sentences));
+    formData.append("id_periodo", uploadPeriodoSelect.value);
+    formData.append("id_tema", uploadTemaSelect.value);
 
     const response = await authorizedFetch("/api/material/save", {
       method: "POST",
@@ -409,6 +436,8 @@ document.addEventListener("DOMContentLoaded", () => {
       formData.append("questions_json", JSON.stringify(questionsData));
       formData.append("audio_full", audioFullBlob, "audio.wav");
       formData.append("audio_summary", audioSummaryBlob, "audio_resumen.wav");
+      formData.append("id_periodo", uploadPeriodoSelect.value);
+      formData.append("id_tema", uploadTemaSelect.value);
       if (currentTargetDurationMinutes !== null) {
         formData.append("target_duration_minutes", String(currentTargetDurationMinutes));
       }

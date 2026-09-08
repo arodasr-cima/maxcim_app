@@ -34,10 +34,11 @@ from flask import (
 )
 from google import genai
 from google.genai import types
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import contains_eager
 
 from extensions import db
-from models import Interaccion, Material, Periodo, TIPO_CUENTO, TIPO_ORACION, TIPOS_MATERIAL
+from models import Interaccion, Material, Periodo, Tema, TIPO_CUENTO, TIPO_ORACION, TIPOS_MATERIAL
 from services.demo import (
     DemoInstitutionalClient,
     create_demo_questions,
@@ -1565,6 +1566,14 @@ def create_app(test_config: dict | None = None):
         teacher = current_teacher()
         available_periodos = Periodo.query.order_by(Periodo.fecha_inicio).all()
         active_periodo = current_periodo()
+        # Solo los temas de esta docente (no se comparten entre docentes) y
+        # solo para elegirlos al subir material — el mismo criterio de
+        # aislamiento por fk_user que ya usa el listado de materiales.
+        available_temas = (
+            Tema.query.filter_by(fk_user=str(teacher["id"]))
+            .order_by(Tema.nombre)
+            .all()
+        )
         materials = (
             Material.query.filter_by(fk_user=str(teacher["id"]))
             .order_by(Material.fecha_subido.desc(), Material.id.desc())
@@ -1582,8 +1591,167 @@ def create_app(test_config: dict | None = None):
             skills=MATERIAL_SKILLS,
             question_configuration=QUESTION_CONFIGURATION,
             periodos=available_periodos,
+            temas=available_temas,
             current_periodo_id=active_periodo.id if active_periodo else None,
+            # Si hoy no cae dentro de ningún periodo (entre años escolares, por
+            # ejemplo), el desplegable de Año del modal de subida igual
+            # necesita un valor por defecto razonable: el año más reciente
+            # registrado, para no dejarlo en el primero (probablemente el más
+            # antiguo) de la lista.
+            current_periodo_anio=(
+                active_periodo.anio if active_periodo
+                else max((p.anio for p in available_periodos), default=None)
+            ),
         )
+
+    @app.route("/temas")
+    @login_required
+    def temas():
+        teacher = current_teacher()
+        available_periodos = Periodo.query.order_by(Periodo.fecha_inicio).all()
+        active_periodo = current_periodo()
+
+        # A diferencia del filtro de "Interacciones"/"Avance" (que por
+        # defecto muestra todos los periodos), acá se parte del periodo
+        # vigente hoy: es el caso de uso más común al entrar a esta vista.
+        # "?periodo=" ausente => periodo de hoy; "?periodo=" presente (aunque
+        # sea vacío o inválido) => respeta la elección explícita, incluyendo
+        # "Todos los periodos".
+        raw_periodo_id = request.args.get("periodo")
+        if raw_periodo_id is None:
+            selected_periodo_id = active_periodo.id if active_periodo else None
+        else:
+            selected_periodo_id = None
+            if raw_periodo_id.strip():
+                try:
+                    candidate_periodo_id = int(raw_periodo_id)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    if any(p.id == candidate_periodo_id for p in available_periodos):
+                        selected_periodo_id = candidate_periodo_id
+
+        temas_query = Tema.query.filter_by(fk_user=str(teacher["id"]))
+        if selected_periodo_id is not None:
+            temas_query = temas_query.filter_by(id_periodo=selected_periodo_id)
+        available_temas = temas_query.order_by(Tema.id_periodo, Tema.nombre).all()
+
+        # Cuántos materiales usa cada tema, para poder explicar en la UI por
+        # qué un borrado quedó bloqueado sin que la docente tenga que
+        # adivinarlo (mismo criterio que delete_material con interacciones).
+        material_counts: dict[int, int] = {}
+        materiales_con_tema = (
+            Material.query.filter_by(fk_user=str(teacher["id"]))
+            .filter(Material.id_tema.isnot(None))
+            .all()
+        )
+        for m in materiales_con_tema:
+            material_counts[m.id_tema] = material_counts.get(m.id_tema, 0) + 1
+
+        return render_template(
+            "temas.html",
+            active_nav="temas",
+            user=teacher,
+            periodos=available_periodos,
+            temas=available_temas,
+            selected_periodo_id=selected_periodo_id,
+            material_counts=material_counts,
+            current_periodo_id=active_periodo.id if active_periodo else None,
+            current_periodo_anio=(
+                active_periodo.anio if active_periodo
+                else max((p.anio for p in available_periodos), default=None)
+            ),
+        )
+
+    @app.route("/api/temas", methods=["POST"])
+    @login_required
+    def create_tema():
+        teacher = current_teacher()
+        nombre = (request.form.get("nombre") or "").strip()
+        if not nombre:
+            return jsonify({"error": "El nombre del tema es obligatorio."}), 400
+        if len(nombre) > 120:
+            return jsonify({"error": "El nombre del tema excede el límite permitido."}), 413
+
+        raw_periodo_id = (request.form.get("id_periodo") or "").strip()
+        if not raw_periodo_id:
+            return jsonify({"error": "Elige el periodo del tema."}), 400
+        try:
+            periodo_id = int(raw_periodo_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "El periodo indicado no es válido."}), 400
+        if not (1 <= periodo_id <= 2_147_483_647):
+            return jsonify({"error": "El periodo indicado no es válido."}), 400
+        if db.session.get(Periodo, periodo_id) is None:
+            return jsonify({"error": "El periodo indicado no es válido."}), 400
+
+        tema = Tema(nombre=nombre, fk_user=str(teacher["id"]), id_periodo=periodo_id)
+        db.session.add(tema)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return jsonify({"error": "Ya tienes un tema con ese nombre en ese periodo."}), 409
+
+        return jsonify({"id": tema.id, "nombre": tema.nombre, "id_periodo": tema.id_periodo})
+
+    @app.route("/api/temas/<int:tema_id>", methods=["PATCH"])
+    @login_required
+    def rename_tema(tema_id):
+        teacher = current_teacher()
+        tema = db.session.get(Tema, tema_id)
+        # Aislamiento por docente: un tema de otra docente es "no encontrado"
+        # para esta sesión, no un 403 que confirmaría que el id existe.
+        if tema is None or tema.fk_user != str(teacher["id"]):
+            return jsonify({"error": "Tema no encontrado."}), 404
+
+        nombre = (request.form.get("nombre") or "").strip()
+        if not nombre:
+            return jsonify({"error": "El nombre del tema es obligatorio."}), 400
+        if len(nombre) > 120:
+            return jsonify({"error": "El nombre del tema excede el límite permitido."}), 413
+
+        tema.nombre = nombre
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return jsonify({"error": "Ya tienes un tema con ese nombre en ese periodo."}), 409
+
+        return jsonify({"id": tema.id, "nombre": tema.nombre, "id_periodo": tema.id_periodo})
+
+    @app.route("/api/temas/<int:tema_id>", methods=["DELETE"])
+    @login_required
+    def delete_tema(tema_id):
+        teacher = current_teacher()
+        tema = db.session.get(Tema, tema_id)
+        if tema is None or tema.fk_user != str(teacher["id"]):
+            return jsonify({"error": "Tema no encontrado."}), 404
+
+        material_count = Material.query.filter_by(id_tema=tema.id).count()
+        if material_count:
+            return jsonify({
+                "error": (
+                    f"Este tema tiene {material_count} material"
+                    f"{'es' if material_count != 1 else ''} asignado"
+                    f"{'s' if material_count != 1 else ''} y no se puede eliminar."
+                )
+            }), 409
+
+        db.session.delete(tema)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            # El `material_count` de arriba puede haber quedado desactualizado
+            # (otra pestaña/petición asignó un material a este tema justo
+            # después de esa lectura); la FK de material.id_tema lo detecta
+            # aquí. Con FK enforcement activo en SQLite (ver extensions.py)
+            # esto también se puede disparar en pruebas, no solo en MySQL.
+            db.session.rollback()
+            return jsonify({
+                "error": "Este tema tiene material asignado y no se puede eliminar."
+            }), 409
+        return jsonify({"deleted": True})
 
     @app.route("/api/material/process", methods=["POST"])
     @login_required
@@ -1792,8 +1960,18 @@ def create_app(test_config: dict | None = None):
         material_type = (request.form.get("tipo_material") or TIPO_CUENTO).strip()
         if material_type not in TIPOS_MATERIAL:
             return jsonify({"error": "El tipo de material no es válido."}), 400
+        # El campo puede llegar en tres estados distintos y cada uno significa
+        # algo distinto: ausente (cliente antiguo o llamada externa sin este
+        # campo) usa el periodo vigente hoy por defecto; presente pero vacío
+        # es la docente eligiendo explícitamente "Sin periodo asignado" en el
+        # modal (no debe caer al periodo de hoy); con un id, ese periodo.
         raw_periodo_id = request.form.get("id_periodo")
-        if raw_periodo_id is not None and str(raw_periodo_id).strip():
+        if raw_periodo_id is None:
+            active_periodo = current_periodo()
+            material_periodo_id = active_periodo.id if active_periodo else None
+        elif not raw_periodo_id.strip():
+            material_periodo_id = None
+        else:
             try:
                 material_periodo_id = int(raw_periodo_id)
             except (TypeError, ValueError):
@@ -1805,9 +1983,38 @@ def create_app(test_config: dict | None = None):
                 return jsonify({"error": "El periodo indicado no es válido."}), 400
             if db.session.get(Periodo, material_periodo_id) is None:
                 return jsonify({"error": "El periodo indicado no es válido."}), 400
+
+        # Mismo criterio de tres estados que `id_periodo` arriba (ausente vs.
+        # vacío a propósito vs. un id), pero sin fallback a nada por
+        # defecto: un tema es opcional, así que "ausente" y "vacío" son lo
+        # mismo (sin tema asignado).
+        raw_tema_id = request.form.get("id_tema")
+        if raw_tema_id is None or not raw_tema_id.strip():
+            material_tema_id = None
         else:
-            active_periodo = current_periodo()
-            material_periodo_id = active_periodo.id if active_periodo else None
+            try:
+                material_tema_id = int(raw_tema_id)
+            except (TypeError, ValueError):
+                return jsonify({"error": "El tema indicado no es válido."}), 400
+            if not (1 <= material_tema_id <= 2_147_483_647):
+                return jsonify({"error": "El tema indicado no es válido."}), 400
+            tema = db.session.get(Tema, material_tema_id)
+            # Aislamiento por docente: un tema de otra docente no es "no
+            # encontrado" desde su punto de vista, es simplemente inválido
+            # para ella — mismo mensaje genérico que un id inexistente, para
+            # no filtrar si el id pertenece a alguien más.
+            if tema is None or tema.fk_user != str(teacher["id"]):
+                return jsonify({"error": "El tema indicado no es válido."}), 400
+            # Un tema pertenece a un periodo concreto: si el material queda
+            # en un periodo distinto (o sin periodo), asignarle ese tema no
+            # tendría sentido y rompería el filtro año/periodo/tema del
+            # modal, así que se rechaza explícitamente en vez de guardarlo
+            # inconsistente.
+            if tema.id_periodo != material_periodo_id:
+                return jsonify({
+                    "error": "El tema indicado no pertenece al periodo seleccionado."
+                }), 400
+
         if len(title) > 255:
             return jsonify({"error": "El título excede el límite permitido."}), 413
 
@@ -1846,12 +2053,22 @@ def create_app(test_config: dict | None = None):
                 path_audio_resumen=None,
                 fk_user=str(teacher["id"]),
                 id_periodo=material_periodo_id,
+                id_tema=material_tema_id,
                 # Tal como lo envía la API institucional, sin el formateo de
                 # `display_name` (ver AuthenticatedTeacher.raw_name).
                 fk_user_name=(str(teacher.get("raw_name") or teacher.get("name") or "").strip() or None),
             )
             db.session.add(material)
-            db.session.commit()
+            try:
+                db.session.commit()
+            except IntegrityError:
+                # El periodo o el tema validados arriba pueden haber sido
+                # borrados por otra petición justo antes de este commit; la
+                # FK lo detecta en vez de dejar una fila huérfana.
+                db.session.rollback()
+                return jsonify({
+                    "error": "El periodo o el tema indicado ya no está disponible. Vuelve a intentarlo."
+                }), 409
             return jsonify({"material_id": material.id})
 
         transcribed_text = (request.form.get("transcribed_text") or "").strip()
@@ -1922,9 +2139,16 @@ def create_app(test_config: dict | None = None):
             fk_user=str(teacher["id"]),
             fk_user_name=(str(teacher.get("name") or "").strip() or None),
             id_periodo=material_periodo_id,
+            id_tema=material_tema_id,
         )
         db.session.add(material)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return jsonify({
+                "error": "El periodo o el tema indicado ya no está disponible. Vuelve a intentarlo."
+            }), 409
 
         return jsonify({"material_id": material.id})
 

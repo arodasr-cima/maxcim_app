@@ -1,8 +1,9 @@
 import json
 import os
+from datetime import date, timedelta
 
 from extensions import db
-from models import Interaccion, Material, TIPO_CUENTO
+from models import Interaccion, Material, Periodo, TIPO_CUENTO
 
 
 def add_material(owner, name):
@@ -283,6 +284,106 @@ def test_saving_sentence_material_writes_a_json_list(app, client, tmp_path, monk
 
         with open(_stored_upload(app, material.path_preguntas), "r", encoding="utf-8") as f:
             assert json.load(f) == ["La luna brilla.", "El río canta."]
+
+
+def test_saving_material_without_id_periodo_falls_back_to_active_periodo(app, client, tmp_path, monkeypatch):
+    """Cliente antiguo (o llamada externa) que no manda el campo: se usa el
+    periodo vigente hoy por fecha, igual que antes de que el modal empezara
+    a mandarlo explícitamente."""
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
+    with app.app_context():
+        active = Periodo(
+            nombre="Bimestre activo",
+            anio=date.today().year,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=1),
+        )
+        db.session.add(active)
+        db.session.commit()
+        active_id = active.id
+
+    response = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion",
+            "title": "Sin campo id_periodo",
+            "sentences_json": json.dumps(["La luna brilla."]),
+        },
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        material = db.session.get(Material, response.get_json()["material_id"])
+        assert material.id_periodo == active_id
+
+
+def test_saving_material_with_explicit_empty_id_periodo_leaves_it_unassigned(app, client, tmp_path, monkeypatch):
+    """El modal manda "" cuando la docente elige a propósito "Sin periodo
+    asignado": a diferencia del campo ausente, esto NO debe caer al periodo
+    vigente de hoy (hallazgo detectado al conectar el desplegable del modal,
+    que hasta ahora nunca enviaba este campo)."""
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
+    with app.app_context():
+        active = Periodo(
+            nombre="Bimestre activo",
+            anio=date.today().year,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=1),
+        )
+        db.session.add(active)
+        db.session.commit()
+
+    response = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion",
+            "title": "Sin periodo a propósito",
+            "sentences_json": json.dumps(["La luna brilla."]),
+            "id_periodo": "",
+        },
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        material = db.session.get(Material, response.get_json()["material_id"])
+        assert material.id_periodo is None
+
+
+def test_saving_material_with_explicit_id_periodo_uses_it_even_if_not_active(app, client, tmp_path, monkeypatch):
+    """Preparar material para un periodo futuro (o pasado) con anticipación:
+    el id explícito manda por sobre el periodo vigente por fecha."""
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
+    with app.app_context():
+        active = Periodo(
+            nombre="Bimestre activo",
+            anio=date.today().year,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=1),
+        )
+        future = Periodo(
+            nombre="Bimestre futuro",
+            anio=date.today().year + 1,
+            fecha_inicio=date.today() + timedelta(days=200),
+            fecha_fin=date.today() + timedelta(days=260),
+        )
+        db.session.add_all([active, future])
+        db.session.commit()
+        future_id = future.id
+
+    response = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion",
+            "title": "Preparado con anticipación",
+            "sentences_json": json.dumps(["La luna brilla."]),
+            "id_periodo": str(future_id),
+        },
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        material = db.session.get(Material, response.get_json()["material_id"])
+        assert material.id_periodo == future_id
 
 
 def test_saving_sentence_material_still_accepts_raw_text(app, client, tmp_path, monkeypatch):

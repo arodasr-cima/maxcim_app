@@ -22,15 +22,30 @@
       <span class="panel-count">{{ progress_rows|length }} estudiante{{ '' if progress_rows|length == 1 else 's' }}</span>
     </div>
 
-    <nav class="period-filter" aria-label="Filtrar avance por periodo académico">
-      <span class="period-filter__label">Periodo</span>
-      <div class="period-filter__options">
-        <a class="period-filter__link{{ ' is-active' if selected_periodo_id is none }}" href="{{ url_for('classroom_progress', ref=classroom_ref(classroom.institutional_id)) }}"{% if selected_periodo_id is none %} aria-current="page"{% endif %}>Todos los periodos</a>
-        {% for p in periodos %}
-        <a class="period-filter__link{{ ' is-active' if selected_periodo_id == p.id }}" href="{{ url_for('classroom_progress', ref=classroom_ref(classroom.institutional_id), periodo=p.id) }}"{% if selected_periodo_id == p.id %} aria-current="page"{% endif %}>{{ p.nombre }}</a>
-        {% endfor %}
-      </div>
-    </nav>
+    {% set selected_period = namespace(anio=none) %}
+    {% for p in periodos %}
+      {% if selected_periodo_id == p.id %}{% set selected_period.anio = p.anio %}{% endif %}
+    {% endfor %}
+    <div class="period-filter" data-period-filter role="group" aria-label="Filtrar avance por periodo académico">
+      <label class="period-filter__field" for="periodYearSelect">
+        <span class="period-filter__label">Año</span>
+        <select class="period-filter__select" id="periodYearSelect" data-period-year>
+          <option value="">Todos los años</option>
+          {% for anio in periodos | map(attribute='anio') | unique | sort %}
+          <option value="{{ anio }}"{% if selected_period.anio == anio %} selected{% endif %}>{{ anio }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="period-filter__field period-filter__field--period" for="periodSelect">
+        <span class="period-filter__label">Periodo</span>
+        <select class="period-filter__select" id="periodSelect" data-period-select>
+          <option value="">Todos los periodos</option>
+          {% for p in periodos %}
+          <option value="{{ p.id }}" data-anio="{{ p.anio }}"{% if selected_periodo_id == p.id %} selected{% endif %}>{{ p.nombre }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
 
     {% if progress_rows %}
     <div class="sessions-table-wrap" tabindex="0" role="region" aria-label="Avance del aula; desplázate horizontalmente para ver todas las columnas">
@@ -86,4 +101,8 @@
     {% endif %}
   </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/period_filter.js') }}"></script>
 {% endblock %}
