@@ -187,6 +187,39 @@ def create_demo_questions(text: str, counts: dict[str, int]) -> dict[str, list[d
     return result
 
 
+def create_demo_sentences(topic: str, grade_level: str, count: int) -> list[str]:
+    """Deterministic sentence-shaped fixture for DEMO_MODE."""
+    topic = re.sub(r"\s+", " ", topic).strip() or "el tema de clase"
+    grade_level = re.sub(r"\s+", " ", grade_level).strip() or "el aula"
+    templates = [
+        f"Hoy aprendemos sobre {topic} con mucha atención.",
+        f"Los estudiantes de {grade_level} conversan sobre {topic}.",
+        f"Escribo una idea clara acerca de {topic} en mi cuaderno.",
+        f"Comparto con mi compañero lo que sé de {topic}.",
+        f"Leo en voz alta esta oración sobre {topic}.",
+        f"Pienso una pregunta interesante relacionada con {topic}.",
+    ]
+    return [templates[index % len(templates)] for index in range(max(1, count))]
+
+
+def create_demo_image_sentences(topic: str, grade_level: str, count: int) -> list[dict]:
+    """Deterministic {texto, sustantivos:[a, b]} fixture for DEMO_MODE."""
+    topic = re.sub(r"\s+", " ", topic).strip() or "la clase"
+    templates = [
+        (f"El niño observa el gato mientras habla de {topic}.", ["niño", "gato"]),
+        (f"La maestra guarda el libro en la mesa al terminar {topic}.", ["libro", "mesa"]),
+        ("Un perro corre detrás de la pelota en el patio.", ["perro", "pelota"]),
+        ("La niña dibuja una casa junto a un árbol.", ["casa", "árbol"]),
+        ("El agricultor lleva la fruta en una canasta.", ["fruta", "canasta"]),
+        ("El pez nada cerca de la roca del río.", ["pez", "roca"]),
+    ]
+    return [
+        {"texto": templates[index % len(templates)][0],
+         "sustantivos": list(templates[index % len(templates)][1])}
+        for index in range(max(1, count))
+    ]
+
+
 def extract_demo_sentences(file_storage) -> list[str]:
     """Deterministic sentence segmentation for DEMO_MODE: reuses the demo
     document text and splits it by line breaks and sentence-final punctuation."""

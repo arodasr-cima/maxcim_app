@@ -209,17 +209,20 @@ def test_cuento_does_not_expose_oraciones(app, client, static_tmp):
     ).status_code == 404
 
 
-def test_save_material_stamps_the_logged_in_teacher_name(app, client, static_tmp):
+def test_save_material_stamps_the_logged_in_teacher_name(app, client, static_tmp, periodo_tema):
     # La sesión de pruebas es TEST_TEACHER: id DOC-TEST-1, nombre formateado
     # "Docente de pruebas" para la UI, pero `fk_user_name` debe guardar la
     # forma cruda que envía la API institucional ("raw_name"), no la
     # formateada.
+    periodo_id, tema_id = periodo_tema(teacher_id="DOC-TEST-1")
     save = client.post(
         "/api/material/save",
         data={
             "tipo_material": "oracion",
             "title": "Oraciones nuevas",
             "sentences_json": json.dumps(["Hoy llueve.", "Mañana saldrá el sol."]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
         },
     )
     assert save.status_code == 200

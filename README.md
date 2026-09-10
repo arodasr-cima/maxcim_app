@@ -174,10 +174,12 @@ El contrato completo de solicitudes, respuestas y variantes provisionales de la 
 
 ## Base de datos
 
-La base aislada guarda solamente dos tablas — ver [bd_app.sql](bd_app.sql) para el DDL completo:
+La base aislada guarda cuatro tablas — ver [bd_app_mysql.sql](bd_app_mysql.sql) para el DDL completo (import único, ya incluye las migraciones `migrations/001..005`):
 
-- **`material`**: material de tipo `cuento` u `oracion` y el ID institucional de la docente dueña (`fk_user`).
-- **`interaccion`**: un registro por cada turno entre un alumno y MAXCIM (`id_material`, `fk_alumno`, pregunta, respuesta, audio de la respuesta, apreciación del robot y si fue correcta).
+- **`periodo`**: bimestres académicos del año escolar; clasifica materiales e interacciones por fecha.
+- **`tema`**: unidad temática de una docente dentro de un periodo; no se comparte entre docentes ni periodos.
+- **`material`**: material de tipo `cuento` u `oracion`, el ID institucional de la docente dueña (`fk_user`) y su `id_periodo`/`id_tema` opcionales.
+- **`interaccion`**: un registro por cada turno entre un alumno y MAXCIM (`id_material`, `fk_alumno`, pregunta, respuesta, audio de la respuesta, apreciación del robot, si fue correcta e `id_periodo`).
 
 Docentes, aulas y alumnos siempre provienen de la API institucional y nunca se persisten localmente. Tampoco se guardan sesiones, evaluaciones agregadas ni eventos de reconocimiento facial.
 

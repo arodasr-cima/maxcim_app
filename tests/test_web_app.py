@@ -40,6 +40,56 @@ def test_story_validation_runs_before_gemini(client):
     assert "GOOGLE_API_KEY" in configured_story.get_json()["error"]
 
 
+def test_sentences_generate_validation_runs_before_gemini(client):
+    missing_topic = client.post("/api/sentences/generate", json={"count": 5})
+    assert missing_topic.status_code == 400
+    assert "tema" in missing_topic.get_json()["error"]
+
+    bad_count = client.post("/api/sentences/generate", json={
+        "topic": "los animales",
+        "count": 99,
+    })
+    assert bad_count.status_code == 400
+    assert "entre 1 y 40" in bad_count.get_json()["error"]
+
+    configured = client.post("/api/sentences/generate", json={
+        "topic": "los animales",
+        "grade_level": "tercero de primaria",
+        "count": 10,
+    })
+    assert configured.status_code == 503
+    assert "GOOGLE_API_KEY" in configured.get_json()["error"]
+
+    # "Generar 5 más" dentro de la revisión: sin tema pero con oraciones previas.
+    with_existing = client.post("/api/sentences/generate", json={
+        "count": 5,
+        "existing": ["El perro corre en el parque."],
+    })
+    assert with_existing.status_code == 503
+    assert "GOOGLE_API_KEY" in with_existing.get_json()["error"]
+
+
+def test_image_sentences_generate_validation_runs_before_gemini(client):
+    missing_topic = client.post("/api/sentences/generate-images", json={"count": 5})
+    assert missing_topic.status_code == 400
+    assert "tema" in missing_topic.get_json()["error"]
+
+    bad_count = client.post("/api/sentences/generate-images", json={
+        "topic": "las profesiones",
+        "count": 99,
+    })
+    assert bad_count.status_code == 400
+    assert "entre 1 y 20" in bad_count.get_json()["error"]
+
+    configured = client.post("/api/sentences/generate-images", json={
+        "topic": "las profesiones",
+        "grade_level": "segundo de primaria",
+        "count": 8,
+    })
+    assert configured.status_code == 503
+    assert "GOOGLE_API_KEY" in configured.get_json()["error"]
+
+
 def test_story_and_tts_duration_validation_run_before_gemini(client):
     invalid_story = client.post("/api/story/generate", json={
         "character": "Luna",

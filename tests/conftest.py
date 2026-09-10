@@ -1,10 +1,12 @@
 import tempfile
+from datetime import date, timedelta
 
 import pytest
 from cryptography.fernet import Fernet
 
 import app as app_module
 from extensions import db
+from models import Periodo, Tema
 from services.institutional import AuthenticatedTeacher, Classroom, ClassroomStudent
 
 
@@ -82,6 +84,28 @@ def app(monkeypatch):
 @pytest.fixture()
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture()
+def periodo_tema(app):
+    """Factory: crea un periodo y un tema suyo, devuelve (periodo_id, tema_id).
+    Todo material guardado vía /api/material/save necesita ambos."""
+    def _make(nombre="I BIMESTRE", *, teacher_id=TEST_TEACHER["id"], anio=None,
+              start_offset=-1, end_offset=1):
+        with app.app_context():
+            periodo = Periodo(
+                nombre=nombre,
+                anio=anio or date.today().year,
+                fecha_inicio=date.today() + timedelta(days=start_offset),
+                fecha_fin=date.today() + timedelta(days=end_offset),
+            )
+            db.session.add(periodo)
+            db.session.commit()
+            tema = Tema(nombre=f"Tema {nombre}", fk_user=teacher_id, id_periodo=periodo.id)
+            db.session.add(tema)
+            db.session.commit()
+            return periodo.id, tema.id
+    return _make
 
 
 @pytest.fixture()

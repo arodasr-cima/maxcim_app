@@ -17,6 +17,10 @@ def _utc_now() -> datetime:
 # usa todas las rutas; una oración solo guarda su texto en `path_preguntas`.
 TIPO_CUENTO = "cuento"
 TIPO_ORACION = "oracion"
+# ponytail: "oraciones con imágenes" por ahora solo existe en la UI (filtro y
+# pestañas del modal). Cuando se implemente el backend, añadir a TIPOS_MATERIAL
+# y a las rutas process_material / save_material.
+TIPO_ORACION_IMAGEN = "oracion_imagen"
 TIPOS_MATERIAL = (TIPO_CUENTO, TIPO_ORACION)
 
 
@@ -130,16 +134,19 @@ class Material(db.Model):
     # del robot pueda listar materiales por nombre (`?docente=`) y mostrarlo sin
     # volver a consultar a CIMA. Nulo en registros creados antes de la columna.
     fk_user_name = db.Column(db.String(255), nullable=True)
-    # Bimestre académico del material; nulo si queda fuera de todos los periodos definidos.
+    # Bimestre académico del material. Obligatorio en producción: la app lo exige
+    # al guardar (save_material) y en MySQL la columna es NOT NULL
+    # (migrations/006, bd_app_mysql.sql). Se deja nullable a nivel ORM porque el
+    # create_all() de SQLite en las pruebas siembra materiales directamente.
     id_periodo = db.Column(
         db.Integer,
         db.ForeignKey("periodo.id"),
         nullable=True,
         index=True,
     )
-    # Tema al que la docente asignó este material; nulo si no le puso uno.
-    # Debe pertenecer al mismo periodo que `id_periodo` — la app lo valida al
-    # guardar (ver save_material en app.py), no hay trigger en la base.
+    # Tema al que la docente asignó este material. Obligatorio en producción
+    # (misma nota que id_periodo) y debe pertenecer al mismo periodo que
+    # `id_periodo` — la app lo valida al guardar, no hay trigger en la base.
     id_tema = db.Column(
         db.Integer,
         db.ForeignKey("tema.id"),
@@ -158,6 +165,10 @@ class Material(db.Model):
     @property
     def es_oracion(self) -> bool:
         return self.tipo_material == TIPO_ORACION
+
+    @property
+    def es_oracion_imagen(self) -> bool:
+        return self.tipo_material == TIPO_ORACION_IMAGEN
 
     @property
     def es_cuento(self) -> bool:

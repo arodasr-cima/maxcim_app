@@ -15,7 +15,6 @@ from datetime import UTC, date, datetime, timedelta
 from functools import wraps
 from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
-
 from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
 from itsdangerous import BadData, URLSafeTimedSerializer
@@ -41,7 +40,9 @@ from extensions import db
 from models import Interaccion, Material, Periodo, Tema, TIPO_CUENTO, TIPO_ORACION, TIPOS_MATERIAL
 from services.demo import (
     DemoInstitutionalClient,
+    create_demo_image_sentences,
     create_demo_questions,
+    create_demo_sentences,
     create_demo_story,
     create_demo_wav,
     extract_demo_sentences,
@@ -169,6 +170,32 @@ SENTENCES_PROMPT = (
     'con un JSON de la forma {"oraciones": ["primera oración", "segunda oración"]}, '
     "en el mismo orden del documento y sin texto fuera del JSON."
 )
+SENTENCES_GENERATE_PROMPT = (
+    "Genera oraciones originales en español para que estudiantes de {nivel} las "
+    "practiquen en lectura oral. Tema: {tema}. Objetivo o detalles: {detalles}. "
+    "Escribe exactamente {cantidad} oraciones, cada una completa, clara, "
+    "apropiada para la edad y con una sola idea. No las numeres ni añadas "
+    'títulos. Responde únicamente con un JSON de la forma {{"oraciones": '
+    '["primera oración", "segunda oración"]}} y sin texto fuera del JSON.'
+)
+MAX_SENTENCES_PER_REQUEST = 40
+
+# "Oraciones con imágenes": cada oración lleva exactamente dos sustantivos
+# concretos que más adelante se reemplazan por imágenes. Por ahora solo se
+# generan y se muestran para que la docente las revise (sin generar imágenes).
+IMAGE_SENTENCES_GENERATE_PROMPT = (
+    "Genera oraciones originales en español para que estudiantes de {nivel} las "
+    "practiquen en lectura. Tema: {tema}. Objetivo o detalles: {detalles}. "
+    "Escribe exactamente {cantidad} oraciones. Cada oración DEBE contener "
+    "exactamente dos sustantivos comunes, concretos y fáciles de dibujar "
+    "(objetos, animales, personas, alimentos o lugares); esos dos sustantivos se "
+    "reemplazarán después por imágenes, así que evita sustantivos abstractos y "
+    "nombres propios. Cada oración: completa, clara, con una sola idea, apropiada "
+    "para la edad, sin numeración ni títulos. Responde únicamente con un JSON de "
+    'la forma {{"oraciones": [{{"texto": "La niña dibuja una casa.", '
+    '"sustantivos": ["niña", "casa"]}}]}} y sin texto fuera del JSON.'
+)
+MAX_IMAGE_SENTENCES_PER_REQUEST = 20
 
 QUESTION_TYPES = ["literales", "inferenciales", "criticas"]
 QUESTION_TYPE_DESCRIPTIONS = {
@@ -435,6 +462,82 @@ def generate_questions(text: str, counts: dict[str, int]) -> dict[str, list[dict
         normalized[qtype] = questions
 
     return normalized
+
+
+def generate_sentences(
+    topic: str, grade_level: str, count: int, extra_details: str,
+    existing: list[str] | None = None,
+) -> list[str]:
+    """Asks Gemini for a draft list of reading-practice sentences on a topic.
+    When `existing` is given, the topic may be blank (inferred from them) and
+    Gemini is told not to repeat any of them."""
+    existing = existing or []
+    prompt = SENTENCES_GENERATE_PROMPT.format(
+        nivel=grade_level or "primaria",
+        tema=topic or "el mismo tema de las oraciones de referencia",
+        detalles=extra_details or "Sin detalles adicionales.",
+        cantidad=count,
+    )
+    if existing:
+        listado = "\n".join(f"- {sentence}" for sentence in existing[:MAX_SENTENCES_PER_REQUEST])
+        prompt += (
+            "\n\nNo repitas ni parafrasees estas oraciones que ya existen; genera "
+            f"oraciones distintas y complementarias:\n{listado}"
+        )
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    data = json.loads(response.text)
+    raw_sentences = data.get("oraciones") if isinstance(data, dict) else data
+    return normalize_sentences(raw_sentences if isinstance(raw_sentences, list) else [])
+
+
+def normalize_image_sentences(raw_items) -> list[dict[str, object]]:
+    """Keeps only well-formed {texto, sustantivos:[a, b]} entries: text non-empty
+    and exactly two non-empty nouns. De-dupes by text, caps the count."""
+    seen: set[str] = set()
+    items: list[dict[str, object]] = []
+    for raw in raw_items or []:
+        if not isinstance(raw, dict):
+            continue
+        texto = " ".join(str(raw.get("texto") or "").split()).strip()[:MAX_SENTENCE_CHARS]
+        nouns = [
+            " ".join(str(n or "").split()).strip()
+            for n in (raw.get("sustantivos") or [])
+        ]
+        nouns = [n for n in nouns if n]
+        if not texto or len(nouns) != 2:
+            continue
+        key = texto.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({"texto": texto, "sustantivos": nouns})
+        if len(items) >= MAX_IMAGE_SENTENCES_PER_REQUEST:
+            break
+    return items
+
+
+def generate_image_sentences(
+    topic: str, grade_level: str, count: int, extra_details: str,
+) -> list[dict[str, object]]:
+    """Asks Gemini for reading sentences that each carry exactly two concrete
+    nouns (later swapped for images). Returns [{texto, sustantivos:[a, b]}]."""
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=IMAGE_SENTENCES_GENERATE_PROMPT.format(
+            nivel=grade_level or "primaria",
+            tema=topic,
+            detalles=extra_details or "Sin detalles adicionales.",
+            cantidad=count,
+        ),
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    data = json.loads(response.text)
+    raw_items = data.get("oraciones") if isinstance(data, dict) else data
+    return normalize_image_sentences(raw_items if isinstance(raw_items, list) else [])
 
 
 def generate_story(
@@ -1952,6 +2055,99 @@ def create_app(test_config: dict | None = None):
 
         return jsonify(story)
 
+    @app.route("/api/sentences/generate", methods=["POST"])
+    @login_required
+    def sentences_generate():
+        payload = request.get_json(silent=True) or {}
+        topic = str(payload.get("topic") or "").strip()
+        grade_level = str(payload.get("grade_level") or "").strip()
+        extra_details = str(payload.get("extra_details") or "").strip()
+        raw_existing = payload.get("existing")
+        existing = normalize_sentences(raw_existing if isinstance(raw_existing, list) else [])
+
+        # El tema es obligatorio salvo que ya haya oraciones de referencia
+        # (botón "generar 5 más" dentro de la revisión): en ese caso la IA
+        # infiere el tema a partir de ellas.
+        if not topic and not existing:
+            return jsonify({"error": "Falta indicar: tema."}), 400
+        try:
+            count = int(payload.get("count"))
+        except (TypeError, ValueError):
+            count = 0
+        if not 1 <= count <= MAX_SENTENCES_PER_REQUEST:
+            return jsonify({
+                "error": f"La cantidad debe estar entre 1 y {MAX_SENTENCES_PER_REQUEST} oraciones."
+            }), 400
+        field_limits = {"tema": (topic, 160), "nivel del aula": (grade_level, 100),
+                        "detalles adicionales": (extra_details, 1_000)}
+        too_long = [label for label, (value, limit) in field_limits.items() if len(value) > limit]
+        if too_long:
+            return jsonify({"error": f"Excede el límite permitido: {', '.join(too_long)}."}), 413
+
+        title = f"Oraciones: {topic}"[:120] if topic else "Oraciones generadas con IA"
+        if not gemini_client and app.config.get("DEMO_MODE"):
+            sentences = create_demo_sentences(topic or "las oraciones de práctica", grade_level, count)
+        elif not gemini_client:
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+        else:
+            try:
+                sentences = generate_sentences(topic, grade_level, count, extra_details, existing)
+            except Exception:
+                app.logger.exception("No se pudieron generar las oraciones con Gemini")
+                return jsonify({"error": "No se pudieron generar las oraciones con Gemini."}), 502
+
+        seen = {sentence.casefold() for sentence in existing}
+        sentences = [s for s in sentences if s.casefold() not in seen]
+        if not sentences:
+            return jsonify({"error": "La IA no devolvió oraciones nuevas."}), 502
+
+        return jsonify({"title": title, "sentences": sentences})
+
+    @app.route("/api/sentences/generate-images", methods=["POST"])
+    @login_required
+    def image_sentences_generate():
+        """Borrador de oraciones para "oraciones con imágenes": cada oración con
+        dos sustantivos concretos. Solo genera y devuelve las oraciones para que
+        la docente las revise; la generación de imágenes es un paso posterior
+        que todavía no existe."""
+        payload = request.get_json(silent=True) or {}
+        topic = str(payload.get("topic") or "").strip()
+        grade_level = str(payload.get("grade_level") or "").strip()
+        extra_details = str(payload.get("extra_details") or "").strip()
+
+        if not topic:
+            return jsonify({"error": "Falta indicar: tema."}), 400
+        try:
+            count = int(payload.get("count"))
+        except (TypeError, ValueError):
+            count = 0
+        if not 1 <= count <= MAX_IMAGE_SENTENCES_PER_REQUEST:
+            return jsonify({
+                "error": f"La cantidad debe estar entre 1 y {MAX_IMAGE_SENTENCES_PER_REQUEST} oraciones."
+            }), 400
+        field_limits = {"tema": (topic, 160), "nivel del aula": (grade_level, 100),
+                        "detalles adicionales": (extra_details, 1_000)}
+        too_long = [label for label, (value, limit) in field_limits.items() if len(value) > limit]
+        if too_long:
+            return jsonify({"error": f"Excede el límite permitido: {', '.join(too_long)}."}), 413
+
+        title = f"Oraciones con imágenes: {topic}"[:120]
+        if not gemini_client and app.config.get("DEMO_MODE"):
+            items = create_demo_image_sentences(topic, grade_level, count)
+        elif not gemini_client:
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+        else:
+            try:
+                items = generate_image_sentences(topic, grade_level, count, extra_details)
+            except Exception:
+                app.logger.exception("No se pudieron generar las oraciones con Gemini")
+                return jsonify({"error": "No se pudieron generar las oraciones con Gemini."}), 502
+
+        if not items:
+            return jsonify({"error": "La IA no devolvió oraciones con dos sustantivos."}), 502
+
+        return jsonify({"title": title, "items": items})
+
     @app.route("/api/material/save", methods=["POST"])
     @login_required
     def save_material():
@@ -1960,17 +2156,20 @@ def create_app(test_config: dict | None = None):
         material_type = (request.form.get("tipo_material") or TIPO_CUENTO).strip()
         if material_type not in TIPOS_MATERIAL:
             return jsonify({"error": "El tipo de material no es válido."}), 400
-        # El campo puede llegar en tres estados distintos y cada uno significa
-        # algo distinto: ausente (cliente antiguo o llamada externa sin este
-        # campo) usa el periodo vigente hoy por defecto; presente pero vacío
-        # es la docente eligiendo explícitamente "Sin periodo asignado" en el
-        # modal (no debe caer al periodo de hoy); con un id, ese periodo.
+        # Todo material se clasifica en un periodo. El campo puede llegar
+        # ausente (cliente antiguo o llamada externa) y entonces se usa el
+        # periodo vigente hoy; vacío o sin periodo vigente es un error, no se
+        # permite guardar material sin periodo.
         raw_periodo_id = request.form.get("id_periodo")
         if raw_periodo_id is None:
             active_periodo = current_periodo()
-            material_periodo_id = active_periodo.id if active_periodo else None
+            if active_periodo is None:
+                return jsonify({
+                    "error": "No hay un periodo vigente; indica el periodo del material."
+                }), 400
+            material_periodo_id = active_periodo.id
         elif not raw_periodo_id.strip():
-            material_periodo_id = None
+            return jsonify({"error": "Debes indicar el periodo del material."}), 400
         else:
             try:
                 material_periodo_id = int(raw_periodo_id)
@@ -1984,13 +2183,11 @@ def create_app(test_config: dict | None = None):
             if db.session.get(Periodo, material_periodo_id) is None:
                 return jsonify({"error": "El periodo indicado no es válido."}), 400
 
-        # Mismo criterio de tres estados que `id_periodo` arriba (ausente vs.
-        # vacío a propósito vs. un id), pero sin fallback a nada por
-        # defecto: un tema es opcional, así que "ausente" y "vacío" son lo
-        # mismo (sin tema asignado).
+        # Todo material debe pertenecer a un tema (de su mismo periodo). No se
+        # permite guardar material sin tema.
         raw_tema_id = request.form.get("id_tema")
         if raw_tema_id is None or not raw_tema_id.strip():
-            material_tema_id = None
+            return jsonify({"error": "Debes asignar un tema al material."}), 400
         else:
             try:
                 material_tema_id = int(raw_tema_id)

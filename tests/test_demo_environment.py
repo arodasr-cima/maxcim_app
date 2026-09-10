@@ -2,12 +2,13 @@ import io
 import json
 import tempfile
 import wave
+from datetime import date, timedelta
 
 import pytest
 
 import app as app_module
 from extensions import db
-from models import Material
+from models import Material, Periodo, Tema
 from services.demo import DEMO_CLASSROOMS, DemoInstitutionalClient
 
 
@@ -118,6 +119,48 @@ def test_demo_story_questions_and_audio_work_without_gemini(demo_client):
         assert wav_file.getnframes() / wav_file.getframerate() == 60
 
 
+def test_demo_ai_sentence_draft_generates_without_gemini(demo_client):
+    enter_demo(demo_client)
+    draft = demo_client.post("/api/sentences/generate", json={
+        "topic": "los animales de la granja",
+        "grade_level": "tercero de primaria",
+        "count": 6,
+    })
+    assert draft.status_code == 200
+    data = draft.get_json()
+    assert data["title"] == "Oraciones: los animales de la granja"
+    assert len(data["sentences"]) == 6
+    assert all(isinstance(sentence, str) and sentence for sentence in data["sentences"])
+
+    # "Generar 5 con IA" desde la revisión: sin tema, con oraciones previas que
+    # no deben repetirse en la respuesta.
+    more = demo_client.post("/api/sentences/generate", json={
+        "count": 5,
+        "existing": data["sentences"],
+    })
+    assert more.status_code == 200
+    added = more.get_json()["sentences"]
+    assert added
+    assert not (set(s.casefold() for s in added) & set(s.casefold() for s in data["sentences"]))
+
+
+def test_demo_image_sentence_draft_has_two_nouns_each(demo_client):
+    enter_demo(demo_client)
+    draft = demo_client.post("/api/sentences/generate-images", json={
+        "topic": "las profesiones",
+        "grade_level": "segundo de primaria",
+        "count": 6,
+    })
+    assert draft.status_code == 200
+    data = draft.get_json()
+    assert data["title"] == "Oraciones con imágenes: las profesiones"
+    assert len(data["items"]) == 6
+    for item in data["items"]:
+        assert item["texto"].strip()
+        assert len(item["sustantivos"]) == 2
+        assert all(noun.strip() for noun in item["sustantivos"])
+
+
 def test_demo_sentence_material_is_identified_and_saved_as_a_list(
     demo_app, demo_client, tmp_path, monkeypatch
 ):
@@ -145,12 +188,27 @@ def test_demo_sentence_material_is_identified_and_saved_as_a_list(
         "Los niños escuchan con atención.",
     ]
 
+    with demo_app.app_context():
+        periodo = Periodo(
+            nombre="I BIMESTRE", anio=date.today().year,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=1),
+        )
+        db.session.add(periodo)
+        db.session.commit()
+        tema = Tema(nombre="Animales", fk_user="DOC-DEMO-01", id_periodo=periodo.id)
+        db.session.add(tema)
+        db.session.commit()
+        periodo_id, tema_id = periodo.id, tema.id
+
     saved = demo_client.post(
         "/api/material/save",
         data={
             "tipo_material": "oracion",
             "title": "Oraciones de práctica",
             "sentences_json": json.dumps(sentences),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
         },
     )
     assert saved.status_code == 200

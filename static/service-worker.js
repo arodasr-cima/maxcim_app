@@ -1,4 +1,4 @@
-const CACHE_NAME = "maxcim-static-v3";
+const CACHE_NAME = "maxcim-static-v4";
 const STATIC_ASSETS = [
   "/static/css/dashboard.css",
   "/static/js/dashboard.js",
@@ -44,8 +44,17 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (requestUrl.pathname.startsWith("/static/")) {
+    // Network-first: online siempre sirve el CSS/JS fresco y refresca el cache;
+    // offline cae al cache. Antes era cache-first y había que subir CACHE_NAME
+    // en cada deploy para que el navegador viera los cambios de estilo.
     event.respondWith(
-      caches.match(event.request).then((cached) => cached || fetch(event.request)),
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return response;
+        })
+        .catch(() => caches.match(event.request)),
     );
   }
 });

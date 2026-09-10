@@ -10,11 +10,12 @@
     <option value="">Todos los tipos</option>
     <option value="cuento">Cuentos</option>
     <option value="oracion">Oraciones</option>
+    <option value="oracion_imagen">Oraciones con imágenes</option>
   </select>
   <input type="text" class="material__search" id="materialSearch" placeholder="Buscar material...">
   <div class="material__toolbar-actions">
-    <button type="button" class="material__ai-btn" id="storyOpenBtn" disabled title="Disponible próximamente">
-      <span>✨</span>Crear con IA<span class="material__ai-badge">Próximamente</span>
+    <button type="button" class="material__ai-btn" id="storyOpenBtn">
+      <span>✨</span>Crear con IA
     </button>
     <button type="button" class="material__add-btn" id="uploadOpenBtn"><span>+</span>Subir archivo</button>
   </div>
@@ -22,10 +23,16 @@
 
 <div class="overlay" id="storyOverlay">
   <form class="story-modal" id="storyForm">
-    <div class="upload-modal__title">Crear un cuento con el alumno</div>
-    <p class="story-modal__description">Registra las respuestas que el alumno le da oralmente a la miss. Gemini preparará un borrador editable.</p>
+    <div class="upload-modal__title" id="storyModalTitle">Crear un cuento con IA</div>
+    <p class="story-modal__description" id="storyModalDescription">El docente define los datos del cuento y la IA prepara un borrador editable.</p>
 
-    <div class="story-modal__grid">
+    <div class="upload-modal__type-toggle" role="tablist" aria-label="Tipo de contenido a generar">
+      <button type="button" class="upload-modal__type-btn is-active" id="storyTypeCuentoBtn" data-type="cuento" role="tab" aria-selected="true">📖 Cuento</button>
+      <button type="button" class="upload-modal__type-btn" id="storyTypeOracionBtn" data-type="oracion" role="tab" aria-selected="false">✏️ Oraciones</button>
+      <button type="button" class="upload-modal__type-btn" id="storyTypeOracionImagenBtn" data-type="oracion_imagen" role="tab" aria-selected="false">🖼️ Oraciones con imágenes</button>
+    </div>
+
+    <div class="story-modal__grid" id="storyCuentoFields">
       <label class="story-field">
         <span>Personaje principal</span>
         <input type="text" id="storyCharacter" required maxlength="120" placeholder="Ej.: una zorrita llamada Luna">
@@ -48,8 +55,46 @@
         <input type="text" id="storyObjective" required maxlength="240" placeholder="Ej.: practicar la escucha activa">
       </label>
       <label class="story-field story-field--wide">
-        <span>Otros detalles elegidos por el alumno</span>
+        <span>Otros detalles para el cuento</span>
         <textarea id="storyDetails" maxlength="1000" placeholder="Amigos, problema que resolver, objetos, final deseado…"></textarea>
+      </label>
+    </div>
+
+    <div class="story-modal__grid" id="storySentenceFields" hidden>
+      <label class="story-field story-field--wide">
+        <span>Tema de las oraciones</span>
+        <input type="text" id="sentenceTopic" required maxlength="160" placeholder="Ej.: los animales de la granja">
+      </label>
+      <label class="story-field">
+        <span>Nivel o grado</span>
+        <input type="text" id="sentenceGrade" required maxlength="100" placeholder="Ej.: 3.° de primaria">
+      </label>
+      <label class="story-field">
+        <span>Cantidad de oraciones</span>
+        <input type="number" id="sentenceCount" required min="1" max="40" step="1" value="10" inputmode="numeric">
+      </label>
+      <label class="story-field story-field--wide">
+        <span>Detalles opcionales</span>
+        <textarea id="sentenceDetails" maxlength="1000" placeholder="Vocabulario a practicar, dificultad, contexto…"></textarea>
+      </label>
+    </div>
+
+    <div class="story-modal__grid" id="storyImageFields" hidden>
+      <label class="story-field story-field--wide">
+        <span>Tema de las oraciones</span>
+        <input type="text" id="sentenceImageTopic" required maxlength="160" placeholder="Ej.: las profesiones">
+      </label>
+      <label class="story-field">
+        <span>Nivel o grado</span>
+        <input type="text" id="sentenceImageGrade" required maxlength="100" placeholder="Ej.: 2.° de primaria">
+      </label>
+      <label class="story-field">
+        <span>Cantidad de oraciones</span>
+        <input type="number" id="sentenceImageCount" required min="1" max="20" step="1" value="8" inputmode="numeric">
+      </label>
+      <label class="story-field story-field--wide">
+        <span>Detalles opcionales</span>
+        <textarea id="sentenceImageDetails" maxlength="1000" placeholder="Vocabulario, contexto, qué debe mostrar cada imagen…"></textarea>
       </label>
     </div>
 
@@ -67,12 +112,13 @@
     <div class="upload-modal__type-toggle" role="tablist" aria-label="Tipo de material">
       <button type="button" class="upload-modal__type-btn is-active" id="uploadTypeCuentoBtn" data-type="cuento" role="tab" aria-selected="true">📖 Cuento</button>
       <button type="button" class="upload-modal__type-btn" id="uploadTypeOracionBtn" data-type="oracion" role="tab" aria-selected="false">✏️ Oraciones</button>
+      <button type="button" class="upload-modal__type-btn" id="uploadTypeOracionImagenBtn" data-type="oracion_imagen" role="tab" aria-selected="false">🖼️ Con imágenes</button>
     </div>
 
     <label class="dropzone" id="dropzone" for="uploadFileInput">
       <div class="dropzone__icon">📤</div>
       <div class="dropzone__text" id="dropzoneText">Arrastra el archivo aquí o haz clic para seleccionar</div>
-      <div class="dropzone__hint">DOC, TXT o PDF · máx. 50 MB</div>
+      <div class="dropzone__hint" id="dropzoneHint">DOC, TXT o PDF · máx. 50 MB</div>
       <input type="file" id="uploadFileInput" accept=".doc,.docx,.txt,.pdf" hidden>
     </label>
 
@@ -80,42 +126,20 @@
       <input type="text" class="upload-modal__input" id="uploadTitleInput" placeholder="Título del cuento">
     </div>
 
-    <div class="upload-modal__period" data-period-filter data-period-nav="false" role="group" aria-label="Periodo académico del material">
-      <span class="upload-modal__label">Periodo académico</span>
-      <div class="upload-modal__period-row">
-        <label class="upload-modal__field" for="uploadPeriodoYearSelect">
-          <span class="upload-modal__sublabel">Año</span>
-          <select class="upload-modal__select" id="uploadPeriodoYearSelect" data-period-year>
-            {% for anio in periodos | map(attribute='anio') | unique | sort %}
-            <option value="{{ anio }}"{% if current_periodo_anio == anio %} selected{% endif %}>{{ anio }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label class="upload-modal__field" for="uploadPeriodoSelect">
-          <span class="upload-modal__sublabel">Periodo</span>
-          <select class="upload-modal__select" id="uploadPeriodoSelect" name="id_periodo" data-period-select>
-            <option value=""{% if current_periodo_id is none %} selected{% endif %}>Sin periodo asignado</option>
-            {% for p in periodos %}
-            <option value="{{ p.id }}" data-anio="{{ p.anio }}"{% if current_periodo_id == p.id %} selected{% endif %}>{{ p.nombre }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label class="upload-modal__field upload-modal__field--wide" for="uploadTemaSelect">
-          <span class="upload-modal__sublabel">Tema</span>
-          <select class="upload-modal__select" id="uploadTemaSelect" name="id_tema" aria-describedby="uploadTemaHint">
-            <option value="">Sin tema</option>
-            {% for t in temas %}
-            <option value="{{ t.id }}" data-periodo="{{ t.id_periodo }}">{{ t.nombre }}</option>
-            {% endfor %}
-          </select>
-        </label>
-      </div>
-      <p class="upload-modal__hint" id="uploadTemaHint">Por defecto se asigna el periodo vigente hoy. Los temas disponibles corresponden al periodo que elijas.</p>
-    </div>
-
     <div class="upload-modal__actions">
       <button type="button" class="btn btn--ghost" id="uploadCancelBtn">Cancelar</button>
       <button type="button" class="btn btn--primary" id="uploadStartBtn" disabled>Subir</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="imageSentencesOverlay">
+  <div class="upload-modal image-sentences-modal">
+    <div class="upload-modal__title">Oraciones propuestas</div>
+    <p class="upload-modal__hint" id="imageSentencesSubtitle">Cada oración tiene dos sustantivos marcados que luego se reemplazarán por imágenes. Revísalas antes de continuar.</p>
+    <ol class="image-sentences-list" id="imageSentencesList"></ol>
+    <div class="upload-modal__actions">
+      <button type="button" class="btn btn--primary" id="imageSentencesCloseBtn">Cerrar</button>
     </div>
   </div>
 </div>
@@ -159,6 +183,10 @@
           <div class="result-block__label">Oraciones identificadas por la IA</div>
           <p class="questions-review-note">La miss puede corregir cada oración; deja vacías las que no quiera guardar.</p>
           <ol class="sentences-review" id="resultSentencesList"></ol>
+          <div class="sentences-review__actions">
+            <button type="button" class="btn btn--ghost" id="addSentenceBtn">+ Agregar oración</button>
+            <button type="button" class="btn btn--accent" id="generateMoreSentencesBtn">✨ Generar 5 con IA</button>
+          </div>
         </div>
       </div>
 
@@ -196,6 +224,39 @@
       </div>
     </div>
 
+    <div class="upload-modal__period result-modal__period" data-period-filter data-period-nav="false" role="group" aria-label="Periodo y tema del material">
+      <span class="upload-modal__label">Clasificación del material</span>
+      <div class="upload-modal__period-row">
+        <label class="upload-modal__field" for="uploadPeriodoYearSelect">
+          <span class="upload-modal__sublabel">Año</span>
+          <select class="upload-modal__select" id="uploadPeriodoYearSelect" data-period-year>
+            {% for anio in periodos | map(attribute='anio') | unique | sort %}
+            <option value="{{ anio }}"{% if current_periodo_anio == anio %} selected{% endif %}>{{ anio }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="upload-modal__field" for="uploadPeriodoSelect">
+          <span class="upload-modal__sublabel">Periodo</span>
+          <select class="upload-modal__select" id="uploadPeriodoSelect" name="id_periodo" data-period-select>
+            <option value="" disabled{% if current_periodo_id is none %} selected{% endif %}>Selecciona un periodo</option>
+            {% for p in periodos %}
+            <option value="{{ p.id }}" data-anio="{{ p.anio }}"{% if current_periodo_id == p.id %} selected{% endif %}>{{ p.nombre }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="upload-modal__field upload-modal__field--wide" for="uploadTemaSelect">
+          <span class="upload-modal__sublabel">Tema</span>
+          <select class="upload-modal__select" id="uploadTemaSelect" name="id_tema" required aria-describedby="uploadTemaHint">
+            <option value="" disabled selected>Selecciona un tema</option>
+            {% for t in temas %}
+            <option value="{{ t.id }}" data-periodo="{{ t.id_periodo }}">{{ t.nombre }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <p class="upload-modal__hint" id="uploadTemaHint">Todo material debe tener un periodo y un tema. Los temas disponibles corresponden al periodo elegido; si falta el tema, créalo en la sección Temas.</p>
+    </div>
+
     <div class="result-modal__footer">
       <button type="button" class="btn btn--ghost" id="resultCancelBtn">Cancelar</button>
       <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Aprobar y guardar</button>
@@ -214,11 +275,11 @@
   {% for m in materials %}
   <div class="material-card" data-title="{{ m.nombre_material|lower }}" data-tipo="{{ m.tipo_material }}">
     <button type="button" class="material-card__header">
-      <div class="material-card__icon" style="background: #eaf0fd; color: #2f5bcf">{{ '✏️' if m.es_oracion else '📖' }}</div>
+      <div class="material-card__icon" style="background: #eaf0fd; color: #2f5bcf">{{ '🖼️' if m.es_oracion_imagen else ('✏️' if m.es_oracion else '📖') }}</div>
       <div class="material-card__meta">
         <div class="material-card__name">{{ m.nombre_material }}</div>
         <div class="material-card__sub">
-          {{ 'Oraciones' if m.es_oracion else 'Cuento' }} · Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}
+          {{ 'Oraciones con imágenes' if m.es_oracion_imagen else ('Oraciones' if m.es_oracion else 'Cuento') }} · Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}
           {% if m.duracion_objetivo_minutos %} · Objetivo {{ m.duracion_objetivo_minutos }} min{% endif %}
           {% if m.duracion_audio_segundos %} · Audio {{ '%.1f'|format((m.duracion_audio_segundos|float) / 60) }} min{% endif %}
         </div>
@@ -236,7 +297,7 @@
       <span class="material-card__chevron">▼</span>
     </button>
     <div class="material-card__detail">
-      {% if m.es_oracion %}
+      {% if m.es_oracion or m.es_oracion_imagen %}
       {% set sentences = sentences_by_material.get(m.id, []) %}
       <ol class="material-card__sentence-list">
         {% for sentence in sentences %}

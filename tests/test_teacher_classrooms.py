@@ -3,7 +3,26 @@ import os
 from datetime import date, timedelta
 
 from extensions import db
-from models import Interaccion, Material, Periodo, TIPO_CUENTO
+from models import Interaccion, Material, Periodo, Tema, TIPO_CUENTO
+
+TEST_TEACHER_ID = "DOC-TEST-1"
+
+
+def _periodo_con_tema(nombre="Bimestre activo", *, anio=None, start_offset=-1, end_offset=1):
+    """Crea un periodo y un tema suyo; devuelve (periodo_id, tema_id).
+    Todo material guardado vía API necesita ambos."""
+    periodo = Periodo(
+        nombre=nombre,
+        anio=anio or date.today().year,
+        fecha_inicio=date.today() + timedelta(days=start_offset),
+        fecha_fin=date.today() + timedelta(days=end_offset),
+    )
+    db.session.add(periodo)
+    db.session.commit()
+    tema = Tema(nombre=f"Tema de {nombre}", fk_user=TEST_TEACHER_ID, id_periodo=periodo.id)
+    db.session.add(tema)
+    db.session.commit()
+    return periodo.id, tema.id
 
 
 def add_material(owner, name):
@@ -262,12 +281,17 @@ def _stored_upload(app, stored_path):
 
 def test_saving_sentence_material_writes_a_json_list(app, client, tmp_path, monkeypatch):
     monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
+    with app.app_context():
+        periodo_id, tema_id = _periodo_con_tema()
+
     response = client.post(
         "/api/material/save",
         data={
             "tipo_material": "oracion",
             "title": "Oraciones de práctica",
             "sentences_json": json.dumps(["La luna brilla.", "El río canta."]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
         },
     )
 
@@ -292,15 +316,7 @@ def test_saving_material_without_id_periodo_falls_back_to_active_periodo(app, cl
     a mandarlo explícitamente."""
     monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
     with app.app_context():
-        active = Periodo(
-            nombre="Bimestre activo",
-            anio=date.today().year,
-            fecha_inicio=date.today() - timedelta(days=1),
-            fecha_fin=date.today() + timedelta(days=1),
-        )
-        db.session.add(active)
-        db.session.commit()
-        active_id = active.id
+        active_id, tema_id = _periodo_con_tema(nombre="Bimestre activo")
 
     response = client.post(
         "/api/material/save",
@@ -308,6 +324,7 @@ def test_saving_material_without_id_periodo_falls_back_to_active_periodo(app, cl
             "tipo_material": "oracion",
             "title": "Sin campo id_periodo",
             "sentences_json": json.dumps(["La luna brilla."]),
+            "id_tema": str(tema_id),
         },
     )
 
@@ -317,21 +334,12 @@ def test_saving_material_without_id_periodo_falls_back_to_active_periodo(app, cl
         assert material.id_periodo == active_id
 
 
-def test_saving_material_with_explicit_empty_id_periodo_leaves_it_unassigned(app, client, tmp_path, monkeypatch):
-    """El modal manda "" cuando la docente elige a propósito "Sin periodo
-    asignado": a diferencia del campo ausente, esto NO debe caer al periodo
-    vigente de hoy (hallazgo detectado al conectar el desplegable del modal,
-    que hasta ahora nunca enviaba este campo)."""
+def test_saving_material_with_explicit_empty_id_periodo_is_rejected(app, client, tmp_path, monkeypatch):
+    """Ningún material puede quedar sin periodo: si el modal manda "" (o no
+    hay periodo vigente para el fallback), se rechaza con 400."""
     monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
     with app.app_context():
-        active = Periodo(
-            nombre="Bimestre activo",
-            anio=date.today().year,
-            fecha_inicio=date.today() - timedelta(days=1),
-            fecha_fin=date.today() + timedelta(days=1),
-        )
-        db.session.add(active)
-        db.session.commit()
+        _periodo_con_tema(nombre="Bimestre activo")
 
     response = client.post(
         "/api/material/save",
@@ -343,10 +351,8 @@ def test_saving_material_with_explicit_empty_id_periodo_leaves_it_unassigned(app
         },
     )
 
-    assert response.status_code == 200
-    with app.app_context():
-        material = db.session.get(Material, response.get_json()["material_id"])
-        assert material.id_periodo is None
+    assert response.status_code == 400
+    assert "periodo" in response.get_json()["error"].lower()
 
 
 def test_saving_material_with_explicit_id_periodo_uses_it_even_if_not_active(app, client, tmp_path, monkeypatch):
@@ -354,21 +360,13 @@ def test_saving_material_with_explicit_id_periodo_uses_it_even_if_not_active(app
     el id explícito manda por sobre el periodo vigente por fecha."""
     monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
     with app.app_context():
-        active = Periodo(
-            nombre="Bimestre activo",
-            anio=date.today().year,
-            fecha_inicio=date.today() - timedelta(days=1),
-            fecha_fin=date.today() + timedelta(days=1),
-        )
-        future = Periodo(
+        _periodo_con_tema(nombre="Bimestre activo")
+        future_id, future_tema_id = _periodo_con_tema(
             nombre="Bimestre futuro",
             anio=date.today().year + 1,
-            fecha_inicio=date.today() + timedelta(days=200),
-            fecha_fin=date.today() + timedelta(days=260),
+            start_offset=200,
+            end_offset=260,
         )
-        db.session.add_all([active, future])
-        db.session.commit()
-        future_id = future.id
 
     response = client.post(
         "/api/material/save",
@@ -377,6 +375,7 @@ def test_saving_material_with_explicit_id_periodo_uses_it_even_if_not_active(app
             "title": "Preparado con anticipación",
             "sentences_json": json.dumps(["La luna brilla."]),
             "id_periodo": str(future_id),
+            "id_tema": str(future_tema_id),
         },
     )
 
@@ -386,14 +385,38 @@ def test_saving_material_with_explicit_id_periodo_uses_it_even_if_not_active(app
         assert material.id_periodo == future_id
 
 
+def test_saving_material_without_a_tema_is_rejected(app, client, tmp_path, monkeypatch):
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
+    with app.app_context():
+        periodo_id, _tema_id = _periodo_con_tema()
+
+    response = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion",
+            "title": "Sin tema",
+            "sentences_json": json.dumps(["La luna brilla."]),
+            "id_periodo": str(periodo_id),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "tema" in response.get_json()["error"].lower()
+
+
 def test_saving_sentence_material_still_accepts_raw_text(app, client, tmp_path, monkeypatch):
     monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
+    with app.app_context():
+        periodo_id, tema_id = _periodo_con_tema()
+
     response = client.post(
         "/api/material/save",
         data={
             "tipo_material": "oracion",
             "title": "Oraciones heredadas",
             "sentences_text": "La luna brilla.\nEl río canta.",
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
         },
     )
 

@@ -98,6 +98,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const uploadFileInput = document.getElementById("uploadFileInput");
   const dropzone = document.getElementById("dropzone");
   const dropzoneText = document.getElementById("dropzoneText");
+  const dropzoneHint = document.getElementById("dropzoneHint");
+  const imageSentencesOverlay = document.getElementById("imageSentencesOverlay");
+  const imageSentencesList = document.getElementById("imageSentencesList");
+  const imageSentencesSubtitle = document.getElementById("imageSentencesSubtitle");
+  const imageSentencesCloseBtn = document.getElementById("imageSentencesCloseBtn");
   const loadingOverlay = document.getElementById("loadingOverlay");
   const loadingSpinner = document.getElementById("loadingSpinner");
   const loadingText = document.getElementById("loadingText");
@@ -113,8 +118,17 @@ document.addEventListener("DOMContentLoaded", () => {
   const storyCancelBtn = document.getElementById("storyCancelBtn");
   const storyForm = document.getElementById("storyForm");
   const storyGenerateBtn = document.getElementById("storyGenerateBtn");
+  const storyModalTitle = document.getElementById("storyModalTitle");
+  const storyModalDescription = document.getElementById("storyModalDescription");
+  const storyTypeCuentoBtn = document.getElementById("storyTypeCuentoBtn");
+  const storyTypeOracionBtn = document.getElementById("storyTypeOracionBtn");
+  const storyTypeOracionImagenBtn = document.getElementById("storyTypeOracionImagenBtn");
+  const storyCuentoFields = document.getElementById("storyCuentoFields");
+  const storySentenceFields = document.getElementById("storySentenceFields");
+  const storyImageFields = document.getElementById("storyImageFields");
   const uploadTypeCuentoBtn = document.getElementById("uploadTypeCuentoBtn");
   const uploadTypeOracionBtn = document.getElementById("uploadTypeOracionBtn");
+  const uploadTypeOracionImagenBtn = document.getElementById("uploadTypeOracionImagenBtn");
   const resultTranscribedLabel = document.getElementById("resultTranscribedLabel");
   const resultTranscribedBlock = document.getElementById("resultTranscribedBlock");
   const resultSummaryBlock = document.getElementById("resultSummaryBlock");
@@ -124,6 +138,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const resultQuestionsColumn = document.getElementById("resultQuestionsColumn");
 
   let selectedFile = null;
+  let currentStoryType = "cuento";
+  // Tema/nivel del último borrador de oraciones por IA; lo reutiliza el botón
+  // "Generar 5 con IA" dentro de la revisión. Vacío si las oraciones vienen de
+  // un documento subido (ahí la IA infiere el tema de las oraciones actuales).
+  let lastSentenceContext = { topic: "", grade_level: "" };
   let currentUploadType = "cuento";
   let currentResultType = "cuento";
   let currentMaterialTitle = "";
@@ -152,19 +171,32 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   filterUploadTemas();
-  uploadPeriodoSelect.addEventListener("change", () => filterUploadTemas());
+  uploadPeriodoSelect.addEventListener("change", () => {
+    filterUploadTemas();
+    updateDoneButtonState();
+  });
   // period_filter.js restablece Periodo al cambiar Año. Este segundo
   // listener se ejecuta después y mantiene Tema sincronizado con ese reset.
-  uploadPeriodoYearSelect.addEventListener("change", () => filterUploadTemas());
+  uploadPeriodoYearSelect.addEventListener("change", () => {
+    filterUploadTemas();
+    updateDoneButtonState();
+  });
+  uploadTemaSelect.addEventListener("change", () => updateDoneButtonState());
+
+  const uploadTypeButtons = [uploadTypeCuentoBtn, uploadTypeOracionBtn, uploadTypeOracionImagenBtn];
 
   function setUploadType(type) {
     currentUploadType = type;
-    const isOracion = type === "oracion";
-    uploadTypeCuentoBtn.classList.toggle("is-active", !isOracion);
-    uploadTypeOracionBtn.classList.toggle("is-active", isOracion);
-    uploadTypeCuentoBtn.setAttribute("aria-selected", String(!isOracion));
-    uploadTypeOracionBtn.setAttribute("aria-selected", String(isOracion));
-    uploadTitleInput.placeholder = isOracion ? "Título del material" : "Título del cuento";
+    uploadTypeButtons.forEach((btn) => {
+      const active = btn.dataset.type === type;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-selected", String(active));
+    });
+    uploadTitleInput.placeholder = type === "cuento" ? "Título del cuento" : "Título del material";
+    // "Oraciones con imágenes" aún no tiene backend: solo se muestra la vista.
+    dropzoneHint.textContent = type === "oracion_imagen"
+      ? "DOC, TXT o PDF con una oración por línea · máx. 50 MB"
+      : "DOC, TXT o PDF · máx. 50 MB";
     updateUploadButtonState();
   }
 
@@ -214,8 +246,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   uploadOpenBtn.addEventListener("click", openUpload);
   uploadCancelBtn.addEventListener("click", closeUpload);
-  uploadTypeCuentoBtn.addEventListener("click", () => setUploadType("cuento"));
-  uploadTypeOracionBtn.addEventListener("click", () => setUploadType("oracion"));
+  uploadTypeButtons.forEach((btn) => {
+    btn.addEventListener("click", () => setUploadType(btn.dataset.type));
+  });
 
   dropzone.addEventListener("dragover", (event) => {
     event.preventDefault();
@@ -270,6 +303,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   uploadStartBtn.addEventListener("click", async () => {
     if (!selectedFile) return;
+    if (currentUploadType === "oracion_imagen") {
+      alert("Las oraciones con imágenes estarán disponibles próximamente.");
+      return;
+    }
 
     currentMaterialTitle = uploadTitleInput.value.trim() || selectedFile.name;
     const uploadType = currentUploadType;
@@ -301,6 +338,7 @@ document.addEventListener("DOMContentLoaded", () => {
       resetResultState();
 
       if (uploadType === "oracion") {
+        lastSentenceContext = { topic: currentMaterialTitle, grade_level: "" };
         renderSentences(data.sentences || []);
         resultSubtitle.textContent = "A partir del documento original · revisa las oraciones identificadas antes de aprobar";
       } else {
@@ -325,8 +363,54 @@ document.addEventListener("DOMContentLoaded", () => {
     resetResultState();
   });
 
+  // "Crear con IA" genera un cuento o un set de oraciones. Ambos borradores
+  // caen en la misma pantalla de revisión/edición antes de crear el material.
+  const storyTypeButtons = [storyTypeCuentoBtn, storyTypeOracionBtn, storyTypeOracionImagenBtn];
+  const storyFieldGroups = {
+    cuento: storyCuentoFields,
+    oracion: storySentenceFields,
+    oracion_imagen: storyImageFields,
+  };
+  const storyCopy = {
+    cuento: [
+      "Crear un cuento con IA",
+      "El docente define los datos del cuento y la IA prepara un borrador editable.",
+    ],
+    oracion: [
+      "Crear oraciones con IA",
+      "El docente indica el tema y el nivel. La IA prepara un borrador de oraciones para revisar y editar antes de crear el material.",
+    ],
+    oracion_imagen: [
+      "Crear oraciones con imágenes con IA",
+      "El docente indica el tema y el nivel. La IA prepara un borrador de oraciones con una imagen para cada una, para revisar antes de crear el material.",
+    ],
+  };
+
+  function setStoryType(type) {
+    currentStoryType = type;
+    storyTypeButtons.forEach((btn) => {
+      const active = btn.dataset.type === type;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-selected", String(active));
+    });
+    Object.entries(storyFieldGroups).forEach(([key, group]) => {
+      const active = key === type;
+      group.hidden = !active;
+      // Deshabilitar el grupo oculto lo excluye de la validación nativa del form.
+      group.querySelectorAll("input, textarea").forEach((el) => { el.disabled = !active; });
+    });
+    const [title, description] = storyCopy[type];
+    storyModalTitle.textContent = title;
+    storyModalDescription.textContent = description;
+  }
+
+  storyTypeButtons.forEach((btn) => {
+    btn.addEventListener("click", () => setStoryType(btn.dataset.type));
+  });
+
   storyOpenBtn.addEventListener("click", () => {
     storyForm.reset();
+    setStoryType("cuento");
     storyOverlay.classList.add("is-open");
   });
 
@@ -334,8 +418,125 @@ document.addEventListener("DOMContentLoaded", () => {
     storyOverlay.classList.remove("is-open");
   });
 
+  // "Oraciones con imágenes": por ahora solo se generan las oraciones (cada una
+  // con dos sustantivos concretos) y se muestran para que la docente las revise.
+  // La generación de imágenes es un paso posterior que todavía no existe.
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+  }
+
+  function markNouns(texto, nouns) {
+    let html = escapeHtml(texto);
+    (nouns || []).forEach((noun) => {
+      const needle = escapeHtml(noun).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (needle) html = html.replace(new RegExp(needle, "i"), (m) => `<mark>${m}</mark>`);
+    });
+    return html;
+  }
+
+  function renderImageSentences(items, topic) {
+    imageSentencesSubtitle.textContent = topic
+      ? `Tema: ${topic}. Cada oración tiene dos sustantivos marcados que luego se reemplazarán por imágenes.`
+      : "Cada oración tiene dos sustantivos marcados que luego se reemplazarán por imágenes.";
+    imageSentencesList.innerHTML = "";
+    (items || []).forEach((item) => {
+      const li = document.createElement("li");
+      li.innerHTML = markNouns(item.texto || "", Array.isArray(item.sustantivos) ? item.sustantivos : []);
+      imageSentencesList.appendChild(li);
+    });
+  }
+
+  imageSentencesCloseBtn.addEventListener("click", () => {
+    imageSentencesOverlay.classList.remove("is-open");
+  });
+
   storyForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+
+    if (currentStoryType === "oracion_imagen") {
+      const imagePayload = {
+        topic: document.getElementById("sentenceImageTopic").value.trim(),
+        grade_level: document.getElementById("sentenceImageGrade").value.trim(),
+        count: Number.parseInt(document.getElementById("sentenceImageCount").value, 10),
+        extra_details: document.getElementById("sentenceImageDetails").value.trim(),
+      };
+
+      storyGenerateBtn.disabled = true;
+      storyGenerateBtn.textContent = "Creando…";
+      storyOverlay.classList.remove("is-open");
+      showLoading();
+      loadingText.textContent = "Generando oraciones con dos sustantivos…";
+
+      try {
+        const response = await authorizedFetch("/api/sentences/generate-images", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(imagePayload),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "No se pudieron generar las oraciones.");
+        }
+        renderImageSentences(data.items || [], imagePayload.topic);
+        loadingOverlay.classList.remove("is-open");
+        imageSentencesOverlay.classList.add("is-open");
+      } catch (error) {
+        showLoadingError(error.message || "No se pudieron generar las oraciones.");
+      } finally {
+        storyGenerateBtn.disabled = false;
+        storyGenerateBtn.textContent = "Generar borrador";
+      }
+      return;
+    }
+
+    if (currentStoryType === "oracion") {
+      const sentencePayload = {
+        topic: document.getElementById("sentenceTopic").value.trim(),
+        grade_level: document.getElementById("sentenceGrade").value.trim(),
+        count: Number.parseInt(document.getElementById("sentenceCount").value, 10),
+        extra_details: document.getElementById("sentenceDetails").value.trim(),
+      };
+
+      storyGenerateBtn.disabled = true;
+      storyGenerateBtn.textContent = "Creando…";
+      storyOverlay.classList.remove("is-open");
+      showLoading();
+      loadingText.textContent = "Generando un borrador de oraciones con IA…";
+
+      try {
+        const response = await authorizedFetch("/api/sentences/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sentencePayload),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "No se pudieron generar las oraciones.");
+        }
+
+        currentMaterialTitle = data.title;
+        currentTargetDurationMinutes = null;
+        lastSentenceContext = {
+          topic: sentencePayload.topic,
+          grade_level: sentencePayload.grade_level,
+        };
+        configureResultModalForType("oracion");
+        resetResultState();
+        renderSentences(data.sentences || []);
+        resultSubtitle.textContent = "Borrador generado por IA · revisa y edita las oraciones antes de crear el material";
+        loadingOverlay.classList.remove("is-open");
+        resultOverlay.classList.add("is-open");
+      } catch (error) {
+        showLoadingError(error.message || "No se pudieron generar las oraciones.");
+      } finally {
+        storyGenerateBtn.disabled = false;
+        storyGenerateBtn.textContent = "Generar borrador";
+      }
+      return;
+    }
+
     const payload = {
       character: document.getElementById("storyCharacter").value.trim(),
       setting: document.getElementById("storySetting").value.trim(),
@@ -349,7 +550,7 @@ document.addEventListener("DOMContentLoaded", () => {
     storyGenerateBtn.textContent = "Creando…";
     storyOverlay.classList.remove("is-open");
     showLoading();
-    loadingText.textContent = "Creando un cuento con las elecciones del alumno…";
+    loadingText.textContent = "Creando un cuento con IA…";
 
     try {
       const response = await authorizedFetch("/api/story/generate", {
@@ -581,9 +782,13 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   function updateDoneButtonState() {
-    resultDoneBtn.disabled = currentResultType === "oracion"
-      ? getSentencesData().length === 0
-      : !(audioFullReady && audioSummaryReady && questionsReady);
+    // Todo material se guarda con un tema (y su periodo). Sin tema elegido no
+    // se puede aprobar, sea cuento u oraciones.
+    const temaChosen = Boolean(uploadTemaSelect.value);
+    const contentReady = currentResultType === "oracion"
+      ? getSentencesData().length > 0
+      : audioFullReady && audioSummaryReady && questionsReady;
+    resultDoneBtn.disabled = !(contentReady && temaChosen);
   }
 
   function resetResultState() {
@@ -608,38 +813,45 @@ document.addEventListener("DOMContentLoaded", () => {
     questionsResult.innerHTML = "";
     resultSentencesList.innerHTML = "";
 
+    // El tema se elige de nuevo para cada material; parte sin selección y con
+    // las opciones acotadas al periodo vigente.
+    filterUploadTemas(true);
+
     updateDoneButtonState();
   }
 
-  // Sentence review: one editable line per sentence the IA identified. The
-  // teacher can fix wording or clear a line to drop it, mirroring how the
-  // story questions are reviewed before saving.
+  // Sentence review: one editable line per sentence. The teacher can fix
+  // wording, clear a line to drop it, remove it, add blank lines, or ask the
+  // IA for more — mirroring how the story questions are reviewed before saving.
+  function appendSentenceItem(text = "", { focus = false } = {}) {
+    const item = document.createElement("li");
+    item.className = "sentences-review__item";
+
+    const editable = document.createElement("div");
+    editable.className = "sentences-review__editable";
+    editable.contentEditable = "true";
+    editable.spellcheck = true;
+    editable.textContent = typeof text === "string" ? text : "";
+    editable.addEventListener("input", updateDoneButtonState);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "sentences-review__remove";
+    remove.title = "Quitar esta oración";
+    remove.textContent = "✕";
+    remove.addEventListener("click", () => {
+      item.remove();
+      updateDoneButtonState();
+    });
+
+    item.append(editable, remove);
+    resultSentencesList.appendChild(item);
+    if (focus) editable.focus();
+  }
+
   function renderSentences(sentences) {
     resultSentencesList.innerHTML = "";
-    (sentences || []).forEach((sentence) => {
-      const item = document.createElement("li");
-      item.className = "sentences-review__item";
-
-      const editable = document.createElement("div");
-      editable.className = "sentences-review__editable";
-      editable.contentEditable = "true";
-      editable.spellcheck = true;
-      editable.textContent = typeof sentence === "string" ? sentence : "";
-      editable.addEventListener("input", updateDoneButtonState);
-
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "sentences-review__remove";
-      remove.title = "Quitar esta oración";
-      remove.textContent = "✕";
-      remove.addEventListener("click", () => {
-        item.remove();
-        updateDoneButtonState();
-      });
-
-      item.append(editable, remove);
-      resultSentencesList.appendChild(item);
-    });
+    (sentences || []).forEach((sentence) => appendSentenceItem(sentence));
     updateDoneButtonState();
   }
 
@@ -648,6 +860,44 @@ document.addEventListener("DOMContentLoaded", () => {
       .map((el) => el.textContent.replace(/\s+/g, " ").trim())
       .filter(Boolean);
   }
+
+  const addSentenceBtn = document.getElementById("addSentenceBtn");
+  const generateMoreSentencesBtn = document.getElementById("generateMoreSentencesBtn");
+
+  addSentenceBtn?.addEventListener("click", () => {
+    appendSentenceItem("", { focus: true });
+    updateDoneButtonState();
+  });
+
+  generateMoreSentencesBtn?.addEventListener("click", async () => {
+    const existing = getSentencesData();
+    const originalLabel = generateMoreSentencesBtn.textContent;
+    generateMoreSentencesBtn.disabled = true;
+    generateMoreSentencesBtn.textContent = "Generando…";
+    try {
+      const response = await authorizedFetch("/api/sentences/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          count: 5,
+          existing,
+          topic: lastSentenceContext.topic || currentMaterialTitle || "",
+          grade_level: lastSentenceContext.grade_level || "",
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudieron generar más oraciones.");
+      }
+      (data.sentences || []).forEach((sentence) => appendSentenceItem(sentence));
+      updateDoneButtonState();
+    } catch (error) {
+      alert(error.message || "No se pudieron generar más oraciones.");
+    } finally {
+      generateMoreSentencesBtn.disabled = false;
+      generateMoreSentencesBtn.textContent = originalLabel;
+    }
+  });
 
   // Question generation: request N questions per type and list them, editable, by category
   const generateQuestionsBtn = document.getElementById("generateQuestionsBtn");

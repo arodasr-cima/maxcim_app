@@ -368,15 +368,18 @@ def test_get_oracion_material_round_trips_through_robot_api(app, client):
 
 
 def test_get_oracion_material_serves_the_json_list_written_on_save(
-    app, client, tmp_path, monkeypatch
+    app, client, tmp_path, monkeypatch, periodo_tema
 ):
     monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
+    periodo_id, tema_id = periodo_tema()
     save = client.post(
         "/api/material/save",
         data={
             "tipo_material": TIPO_ORACION,
             "title": "Oraciones nuevas",
             "sentences_json": json.dumps(["Hoy llueve.", "Mañana saldrá el sol."]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
         },
     )
     assert save.status_code == 200
@@ -389,13 +392,16 @@ def test_get_oracion_material_serves_the_json_list_written_on_save(
     assert body["oraciones_url"] == f"http://localhost/api/materials/{material_id}/oraciones"
 
 
-def test_material_save_requires_reviewed_expected_answers(client):
+def test_material_save_requires_reviewed_expected_answers(client, periodo_tema):
+    periodo_id, tema_id = periodo_tema()
     response = client.post(
         "/api/material/save",
         data={
             "title": "Cuento",
             "transcribed_text": "Texto del cuento",
             "summary_text": "Resumen",
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
             "questions_json": json.dumps([{
                 "tipo": "literal",
                 "pregunta": "¿Quién es el personaje?",
