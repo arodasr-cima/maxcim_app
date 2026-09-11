@@ -224,6 +224,196 @@ def test_demo_sentence_material_is_identified_and_saved_as_a_list(
     assert "3 oraciones" in page
 
 
+def test_demo_image_sentence_material_is_extracted_and_saved(
+    demo_app, demo_client, tmp_path, monkeypatch
+):
+    monkeypatch.setitem(demo_app.config, "UPLOADS_ROOT", str(tmp_path))
+    enter_demo(demo_client)
+    document = (
+        "Ese oso ama la miel.\n"
+        "La niña dibuja una casa. El perro corre tras la pelota.\n"
+    )
+
+    processed = demo_client.post(
+        "/api/material/process",
+        data={
+            "tipo_material": "oracion_imagen",
+            "title": "Oraciones con imágenes",
+            "file": (io.BytesIO(document.encode("utf-8")), "oraciones.txt"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert processed.status_code == 200
+    items = processed.get_json()["items"]
+    assert items and "sentences" not in processed.get_json()
+    for item in items:
+        assert item["texto"].strip()
+        assert len(item["sustantivos"]) == 2
+        assert all(noun.strip() for noun in item["sustantivos"])
+
+    with demo_app.app_context():
+        periodo = Periodo(
+            nombre="I BIMESTRE", anio=date.today().year,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=1),
+        )
+        db.session.add(periodo)
+        db.session.commit()
+        tema = Tema(nombre="Animales", fk_user="DOC-DEMO-01", id_periodo=periodo.id)
+        db.session.add(tema)
+        db.session.commit()
+        periodo_id, tema_id = periodo.id, tema.id
+
+    saved = demo_client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion_imagen",
+            "title": "Oraciones con imágenes",
+            "sentences_json": json.dumps(items),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert saved.status_code == 200
+    material_id = saved.get_json()["material_id"]
+
+    robot_view = demo_client.get(
+        f"/api/materials/{material_id}?teacher_id=DOC-DEMO-01"
+    ).get_json()
+    assert robot_view["tipo_material"] == "oracion_imagen"
+    assert robot_view["oraciones"] == [item["texto"] for item in items]
+    # Guardado sin `staging_token`: se conserva el texto y los sustantivos,
+    # todavía sin imágenes (imagen_url None, plantilla == texto completo).
+    detalle = robot_view["oraciones_detalle"]
+    assert [d["oracion_completa"] for d in detalle] == [item["texto"] for item in items]
+    for d, item in zip(detalle, items):
+        assert d["plantilla"] == item["texto"]
+        assert [s["palabra"] for s in d["sustantivos"]] == item["sustantivos"]
+        assert all(s["imagen_url"] is None for s in d["sustantivos"])
+
+    resource = demo_client.get(
+        f"/api/materials/{material_id}/oraciones?teacher_id=DOC-DEMO-01"
+    ).get_json()
+    assert resource["oraciones_detalle"] == detalle
+
+    only_images = demo_client.get(
+        "/api/materials?teacher_id=DOC-DEMO-01&tipo=oracion_imagen"
+    ).get_json()
+    assert [m["id"] for m in only_images] == [material_id]
+
+    page = demo_client.get("/material").get_data(as_text=True)
+    assert items[0]["texto"] in page
+
+
+def test_demo_image_sentence_design_flow_generates_and_exposes_images(
+    demo_app, demo_client, tmp_path, monkeypatch
+):
+    monkeypatch.setitem(demo_app.config, "UPLOADS_ROOT", str(tmp_path))
+    enter_demo(demo_client)
+
+    with demo_app.app_context():
+        periodo = Periodo(
+            nombre="I BIMESTRE", anio=date.today().year,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=1),
+        )
+        db.session.add(periodo)
+        db.session.commit()
+        tema = Tema(nombre="Animales", fk_user="DOC-DEMO-01", id_periodo=periodo.id)
+        db.session.add(tema)
+        db.session.commit()
+        periodo_id, tema_id = periodo.id, tema.id
+
+    verified = [
+        {"texto": "Ese oso ama la miel.", "sustantivos": ["oso", "miel"]},
+        {"texto": "La niña dibuja una casa.", "sustantivos": ["niña", "casa"]},
+    ]
+
+    prepared = demo_client.post(
+        "/api/material/image-sentences/prepare",
+        json={"title": "Oraciones con imágenes", "items": verified},
+    )
+    assert prepared.status_code == 200
+    body = prepared.get_json()
+    token = body["token"]
+    assert body["items"][0]["plantilla"] == "Ese {{0}} ama la {{1}}."
+    first_img_url = body["items"][0]["sustantivos"][0]["imagen_url"]
+
+    # La imagen en revisión se sirve como PNG.
+    img = demo_client.get(first_img_url)
+    assert img.status_code == 200
+    assert img.data.startswith(b"\x89PNG\r\n\x1a\n")
+
+    # Regenerar una sola imagen devuelve una URL nueva (cache-busted).
+    regen = demo_client.post(
+        "/api/material/image-sentences/regenerate",
+        json={"token": token, "sentence_index": 0, "noun_index": 1},
+    )
+    assert regen.status_code == 200
+    assert "?v=" in regen.get_json()["imagen_url"]
+
+    saved = demo_client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion_imagen",
+            "title": "Oraciones con imágenes",
+            "staging_token": token,
+            "sentences_json": json.dumps([
+                {**verified[0], "staging_index": 0},
+                {**verified[1], "staging_index": 1},
+            ]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert saved.status_code == 200
+    material_id = saved.get_json()["material_id"]
+
+    robot_view = demo_client.get(
+        f"/api/materials/{material_id}?teacher_id=DOC-DEMO-01"
+    ).get_json()
+    detalle = robot_view["oraciones_detalle"]
+    assert detalle[0]["plantilla"] == "Ese {{0}} ama la {{1}}."
+    img_url = detalle[0]["sustantivos"][0]["imagen_url"]
+    assert img_url and "/imagen/0/0" in img_url
+
+    got = demo_client.get(
+        f"/api/materials/{material_id}/imagen/0/0?teacher_id=DOC-DEMO-01"
+    )
+    assert got.status_code == 200
+    assert got.data.startswith(b"\x89PNG\r\n\x1a\n")
+
+    # El staging se limpió al guardar.
+    assert demo_client.get(first_img_url).status_code == 404
+
+
+def test_image_sentence_save_rejects_items_without_two_nouns(client, periodo_tema):
+    periodo_id, tema_id = periodo_tema()
+    bad = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion_imagen",
+            "title": "Oraciones con imágenes",
+            "sentences_json": json.dumps([{"texto": "Un texto suelto.", "sustantivos": ["gato"]}]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert bad.status_code == 400
+
+    empty = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion_imagen",
+            "title": "Oraciones con imágenes",
+            "sentences_json": "not-json",
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert empty.status_code == 400
+
+
 def test_demo_can_register_and_list_interactions(demo_app, demo_client):
     enter_demo(demo_client)
     with demo_app.app_context():

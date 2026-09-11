@@ -99,10 +99,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const dropzone = document.getElementById("dropzone");
   const dropzoneText = document.getElementById("dropzoneText");
   const dropzoneHint = document.getElementById("dropzoneHint");
-  const imageSentencesOverlay = document.getElementById("imageSentencesOverlay");
-  const imageSentencesList = document.getElementById("imageSentencesList");
-  const imageSentencesSubtitle = document.getElementById("imageSentencesSubtitle");
-  const imageSentencesCloseBtn = document.getElementById("imageSentencesCloseBtn");
   const loadingOverlay = document.getElementById("loadingOverlay");
   const loadingSpinner = document.getElementById("loadingSpinner");
   const loadingText = document.getElementById("loadingText");
@@ -133,9 +129,25 @@ document.addEventListener("DOMContentLoaded", () => {
   const resultTranscribedBlock = document.getElementById("resultTranscribedBlock");
   const resultSummaryBlock = document.getElementById("resultSummaryBlock");
   const resultSentencesBlock = document.getElementById("resultSentencesBlock");
+  const resultSentencesLabel = document.getElementById("resultSentencesLabel");
+  const resultSentencesNote = document.getElementById("resultSentencesNote");
   const resultSentencesList = document.getElementById("resultSentencesList");
+  const addSentenceBtn = document.getElementById("addSentenceBtn");
+  const generateMoreSentencesBtn = document.getElementById("generateMoreSentencesBtn");
   const resultAudioColumn = document.getElementById("resultAudioColumn");
   const resultQuestionsColumn = document.getElementById("resultQuestionsColumn");
+  const imageDesignOverlay = document.getElementById("imageDesignOverlay");
+  const imageDesignPrevBtn = document.getElementById("imageDesignPrevBtn");
+  const imageDesignNextBtn = document.getElementById("imageDesignNextBtn");
+  const imageDesignCounter = document.getElementById("imageDesignCounter");
+  const imageDesignStage = document.getElementById("imageDesignStage");
+  const imageDesignMixedLine = document.getElementById("imageDesignMixedLine");
+  const imageDesignNounControls = document.getElementById("imageDesignNounControls");
+  const imageDesignRemoveBtn = document.getElementById("imageDesignRemoveBtn");
+  const imageDesignEmpty = document.getElementById("imageDesignEmpty");
+  const imageDesignBackBtn = document.getElementById("imageDesignBackBtn");
+  const imageDesignDiscardBtn = document.getElementById("imageDesignDiscardBtn");
+  const imageDesignSaveBtn = document.getElementById("imageDesignSaveBtn");
 
   let selectedFile = null;
   let currentStoryType = "cuento";
@@ -154,6 +166,10 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentTargetDurationMinutes = null;
   let audioFullDurationSeconds = null;
   let audioSummaryDurationSeconds = null;
+  let imageDesignToken = "";
+  let designSentences = [];
+  let currentDesignIndex = 0;
+  let imageDesignBusy = false;
 
   const uploadTemaOptions = Array.from(uploadTemaSelect.options).filter((option) => option.value);
 
@@ -174,14 +190,19 @@ document.addEventListener("DOMContentLoaded", () => {
   uploadPeriodoSelect.addEventListener("change", () => {
     filterUploadTemas();
     updateDoneButtonState();
+    updateDesignNav();
   });
   // period_filter.js restablece Periodo al cambiar Año. Este segundo
   // listener se ejecuta después y mantiene Tema sincronizado con ese reset.
   uploadPeriodoYearSelect.addEventListener("change", () => {
     filterUploadTemas();
     updateDoneButtonState();
+    updateDesignNav();
   });
-  uploadTemaSelect.addEventListener("change", () => updateDoneButtonState());
+  uploadTemaSelect.addEventListener("change", () => {
+    updateDoneButtonState();
+    updateDesignNav();
+  });
 
   const uploadTypeButtons = [uploadTypeCuentoBtn, uploadTypeOracionBtn, uploadTypeOracionImagenBtn];
 
@@ -192,10 +213,13 @@ document.addEventListener("DOMContentLoaded", () => {
       btn.classList.toggle("is-active", active);
       btn.setAttribute("aria-selected", String(active));
     });
-    uploadTitleInput.placeholder = type === "cuento" ? "Título del cuento" : "Título del material";
-    // "Oraciones con imágenes" aún no tiene backend: solo se muestra la vista.
+    uploadTitleInput.placeholder = type === "cuento"
+      ? "Título del cuento"
+      : type === "oracion_imagen"
+        ? "Título de las oraciones con imágenes"
+        : "Título del material";
     dropzoneHint.textContent = type === "oracion_imagen"
-      ? "DOC, TXT o PDF con una oración por línea · máx. 50 MB"
+      ? "DOC, TXT o PDF con una oración por línea - máx. 50 MB"
       : "DOC, TXT o PDF · máx. 50 MB";
     updateUploadButtonState();
   }
@@ -206,13 +230,26 @@ document.addEventListener("DOMContentLoaded", () => {
   function configureResultModalForType(type) {
     currentResultType = type;
     const isOracion = type === "oracion";
+    const isImageSentence = type === "oracion_imagen";
+    const isSentenceType = isOracion || isImageSentence;
     resultTranscribedLabel.textContent = "Texto completo";
-    resultTranscribedBlock.hidden = isOracion;
-    resultSummaryBlock.hidden = isOracion;
-    resultSentencesBlock.hidden = !isOracion;
-    resultAudioColumn.hidden = isOracion;
-    resultQuestionsColumn.hidden = isOracion;
-    resultDoneBtn.textContent = isOracion ? "Aprobar y guardar oraciones" : "Aprobar y guardar";
+    resultTranscribedBlock.hidden = isSentenceType;
+    resultSummaryBlock.hidden = isSentenceType;
+    resultSentencesBlock.hidden = !isSentenceType;
+    resultAudioColumn.hidden = isSentenceType;
+    resultQuestionsColumn.hidden = isSentenceType;
+    generateMoreSentencesBtn.hidden = isImageSentence;
+    resultSentencesLabel.textContent = isImageSentence
+      ? "Oraciones con imágenes para revisar"
+      : "Oraciones para revisar";
+    resultSentencesNote.textContent = isImageSentence
+      ? "Corrige cada oración y sus dos sustantivos; deja vacías las que no quieras guardar."
+      : "Corrige cada oración; deja vacías las que no quieras guardar.";
+    resultDoneBtn.textContent = isImageSentence
+      ? "Siguiente: diseñar imágenes"
+      : isOracion
+        ? "Aprobar y guardar oraciones"
+        : "Aprobar y guardar";
   }
 
   function updateUploadButtonState() {
@@ -220,6 +257,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function resetUploadForm() {
+    resetImageDesignState();
     selectedFile = null;
     uploadTitleInput.value = "";
     filterUploadTemas();
@@ -270,9 +308,9 @@ document.addEventListener("DOMContentLoaded", () => {
     setSelectedFile(uploadFileInput.files && uploadFileInput.files[0]);
   });
 
-  function showLoading() {
+  function showLoading(message = "Extrayendo texto y generando resumen con IA...") {
     loadingSpinner.hidden = false;
-    loadingText.textContent = "Extrayendo texto y generando resumen con IA...";
+    loadingText.textContent = message;
     loadingCloseBtn.hidden = true;
     loadingOverlay.classList.add("is-open");
   }
@@ -301,12 +339,72 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function saveDesignedImageSentenceMaterial() {
+    const formData = new FormData();
+    formData.append("tipo_material", "oracion_imagen");
+    formData.append("title", currentMaterialTitle);
+    formData.append("staging_token", imageDesignToken);
+    formData.append("sentences_json", JSON.stringify(designSentences.map((sentence) => ({
+      texto: sentence.texto,
+      sustantivos: sentence.sustantivos.map((noun) => noun.palabra),
+      staging_index: sentence.staging_index,
+    }))));
+    formData.append("id_periodo", uploadPeriodoSelect.value);
+    formData.append("id_tema", uploadTemaSelect.value);
+
+    const response = await authorizedFetch("/api/material/save", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "No se pudieron guardar las oraciones con imágenes.");
+    }
+    return data;
+  }
+
+  async function prepareImageSentenceDesign(items) {
+    resetImageDesignState();
+    resultOverlay.classList.remove("is-open");
+    showLoading("Generando las imágenes con IA, puede tardar un momento");
+
+    try {
+      const response = await authorizedFetch("/api/material/image-sentences/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: currentMaterialTitle, items }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudieron generar las imágenes.");
+      }
+
+      imageDesignToken = typeof data.token === "string" ? data.token : "";
+      designSentences = (Array.isArray(data.items) ? data.items : []).map((item) => ({
+        ...item,
+        staging_index: item.index,
+        sustantivos: Array.isArray(item.sustantivos)
+          ? item.sustantivos.map((noun) => ({ ...noun }))
+          : [],
+      }));
+      if (!imageDesignToken || !designSentences.length) {
+        throw new Error("No se recibió un diseño válido para las oraciones.");
+      }
+
+      currentDesignIndex = 0;
+      renderDesignSentence();
+      imageDesignOverlay.classList.add("is-open");
+    } catch (error) {
+      resetImageDesignState();
+      resultOverlay.classList.add("is-open");
+      throw error;
+    } finally {
+      loadingOverlay.classList.remove("is-open");
+    }
+  }
+
   uploadStartBtn.addEventListener("click", async () => {
     if (!selectedFile) return;
-    if (currentUploadType === "oracion_imagen") {
-      alert("Las oraciones con imágenes estarán disponibles próximamente.");
-      return;
-    }
 
     currentMaterialTitle = uploadTitleInput.value.trim() || selectedFile.name;
     const uploadType = currentUploadType;
@@ -317,10 +415,11 @@ document.addEventListener("DOMContentLoaded", () => {
     formData.append("tipo_material", uploadType);
 
     closeUpload();
-    showLoading();
-    if (uploadType === "oracion") {
-      loadingText.textContent = "Identificando las oraciones con IA...";
-    }
+    showLoading(uploadType === "oracion_imagen"
+      ? "Identificando las oraciones con imagenes con IA..."
+      : uploadType === "oracion"
+        ? "Identificando las oraciones con IA..."
+        : undefined);
 
     try {
       const response = await authorizedFetch("/api/material/process", {
@@ -337,7 +436,10 @@ document.addEventListener("DOMContentLoaded", () => {
       configureResultModalForType(uploadType);
       resetResultState();
 
-      if (uploadType === "oracion") {
+      if (uploadType === "oracion_imagen") {
+        renderImageSentenceRows(data.items || []);
+        resultSubtitle.textContent = "A partir del documento original - revisa las oraciones y sus dos sustantivos antes de aprobar";
+      } else if (uploadType === "oracion") {
         lastSentenceContext = { topic: currentMaterialTitle, grade_level: "" };
         renderSentences(data.sentences || []);
         resultSubtitle.textContent = "A partir del documento original · revisa las oraciones identificadas antes de aprobar";
@@ -374,15 +476,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const storyCopy = {
     cuento: [
       "Crear un cuento con IA",
-      "El docente define los datos del cuento y la IA prepara un borrador editable.",
+      "Define aquí los datos del cuento y la IA prepara un borrador editable.",
     ],
     oracion: [
       "Crear oraciones con IA",
-      "El docente indica el tema y el nivel. La IA prepara un borrador de oraciones para revisar y editar antes de crear el material.",
+      "Indica el tema y el nivel. La IA prepara un borrador de oraciones para revisar y editar antes de crear el material.",
     ],
     oracion_imagen: [
       "Crear oraciones con imágenes con IA",
-      "El docente indica el tema y el nivel. La IA prepara un borrador de oraciones con una imagen para cada una, para revisar antes de crear el material.",
+      "Indica el tema y el nivel. La IA prepara un borrador de oraciones con una imagen para cada una, para revisar antes de crear el material.",
     ],
   };
 
@@ -409,6 +511,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   storyOpenBtn.addEventListener("click", () => {
+    resetImageDesignState();
     storyForm.reset();
     setStoryType("cuento");
     storyOverlay.classList.add("is-open");
@@ -418,9 +521,8 @@ document.addEventListener("DOMContentLoaded", () => {
     storyOverlay.classList.remove("is-open");
   });
 
-  // "Oraciones con imágenes": por ahora solo se generan las oraciones (cada una
-  // con dos sustantivos concretos) y se muestran para que la docente las revise.
-  // La generación de imágenes es un paso posterior que todavía no existe.
+  // "Oraciones con imágenes": cada oración conserva los dos sustantivos
+  // concretos que más adelante se reemplazarán por imágenes.
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (c) => (
       { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
@@ -428,29 +530,29 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function markNouns(texto, nouns) {
-    let html = escapeHtml(texto);
-    (nouns || []).forEach((noun) => {
-      const needle = escapeHtml(noun).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (needle) html = html.replace(new RegExp(needle, "i"), (m) => `<mark>${m}</mark>`);
-    });
+    const source = String(texto || "");
+    const escapedNouns = Array.from(new Set(
+      (nouns || [])
+        .map((noun) => String(noun || "").trim())
+        .filter(Boolean)
+    ))
+      .sort((a, b) => b.length - a.length)
+      .map((noun) => noun.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    if (!escapedNouns.length) return escapeHtml(source);
+
+    const matcher = new RegExp(escapedNouns.join("|"), "gi");
+    let html = "";
+    let cursor = 0;
+    let match = matcher.exec(source);
+    while (match) {
+      html += escapeHtml(source.slice(cursor, match.index));
+      html += `<mark>${escapeHtml(match[0])}</mark>`;
+      cursor = match.index + match[0].length;
+      match = matcher.exec(source);
+    }
+    html += escapeHtml(source.slice(cursor));
     return html;
   }
-
-  function renderImageSentences(items, topic) {
-    imageSentencesSubtitle.textContent = topic
-      ? `Tema: ${topic}. Cada oración tiene dos sustantivos marcados que luego se reemplazarán por imágenes.`
-      : "Cada oración tiene dos sustantivos marcados que luego se reemplazarán por imágenes.";
-    imageSentencesList.innerHTML = "";
-    (items || []).forEach((item) => {
-      const li = document.createElement("li");
-      li.innerHTML = markNouns(item.texto || "", Array.isArray(item.sustantivos) ? item.sustantivos : []);
-      imageSentencesList.appendChild(li);
-    });
-  }
-
-  imageSentencesCloseBtn.addEventListener("click", () => {
-    imageSentencesOverlay.classList.remove("is-open");
-  });
 
   storyForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -479,9 +581,14 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!response.ok) {
           throw new Error(data.error || "No se pudieron generar las oraciones.");
         }
-        renderImageSentences(data.items || [], imagePayload.topic);
+        currentMaterialTitle = data.title;
+        currentTargetDurationMinutes = null;
+        configureResultModalForType("oracion_imagen");
+        resetResultState();
+        renderImageSentenceRows(data.items || []);
+        resultSubtitle.textContent = "Borrador generado por IA - revisa las oraciones y sus dos sustantivos antes de crear el material";
         loadingOverlay.classList.remove("is-open");
-        imageSentencesOverlay.classList.add("is-open");
+        resultOverlay.classList.add("is-open");
       } catch (error) {
         showLoadingError(error.message || "No se pudieron generar las oraciones.");
       } finally {
@@ -581,6 +688,30 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   resultDoneBtn.addEventListener("click", async () => {
+    if (currentResultType === "oracion_imagen") {
+      const items = getImageSentencesData();
+      if (!items.length) {
+        alert("Agrega al menos una oración con dos sustantivos.");
+        return;
+      }
+      if (items.length > 20) {
+        alert("Puedes diseñar un máximo de 20 oraciones a la vez.");
+        return;
+      }
+      const originalLabel = resultDoneBtn.textContent;
+      resultDoneBtn.disabled = true;
+      resultDoneBtn.textContent = "Generando imágenes...";
+      try {
+        await prepareImageSentenceDesign(items);
+      } catch (error) {
+        alert(error.message || "No se pudieron generar las imágenes.");
+      } finally {
+        resultDoneBtn.textContent = originalLabel;
+        updateDoneButtonState();
+      }
+      return;
+    }
+
     if (currentResultType === "oracion") {
       const sentences = getSentencesData();
       if (!sentences.length) {
@@ -785,13 +916,16 @@ document.addEventListener("DOMContentLoaded", () => {
     // Todo material se guarda con un tema (y su periodo). Sin tema elegido no
     // se puede aprobar, sea cuento u oraciones.
     const temaChosen = Boolean(uploadTemaSelect.value);
-    const contentReady = currentResultType === "oracion"
-      ? getSentencesData().length > 0
-      : audioFullReady && audioSummaryReady && questionsReady;
+    const contentReady = currentResultType === "oracion_imagen"
+      ? getImageSentencesData().length > 0
+      : currentResultType === "oracion"
+        ? getSentencesData().length > 0
+        : audioFullReady && audioSummaryReady && questionsReady;
     resultDoneBtn.disabled = !(contentReady && temaChosen);
   }
 
   function resetResultState() {
+    resetImageDesignState();
     audioFullReady = false;
     audioSummaryReady = false;
     questionsReady = false;
@@ -856,16 +990,350 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function getSentencesData() {
-    return Array.from(resultSentencesList.querySelectorAll(".sentences-review__editable"))
+    return Array.from(resultSentencesList.querySelectorAll(".sentences-review__item:not(.sentences-review__item--image) .sentences-review__editable"))
       .map((el) => el.textContent.replace(/\s+/g, " ").trim())
       .filter(Boolean);
   }
 
-  const addSentenceBtn = document.getElementById("addSentenceBtn");
-  const generateMoreSentencesBtn = document.getElementById("generateMoreSentencesBtn");
+  function appendImageSentenceItem(item = {}, { focus = false } = {}) {
+    const row = document.createElement("li");
+    row.className = "sentences-review__item sentences-review__item--image";
+
+    const content = document.createElement("div");
+    content.className = "sentences-review__image-content";
+
+    const editable = document.createElement("div");
+    editable.className = "sentences-review__editable";
+    editable.contentEditable = "true";
+    editable.spellcheck = true;
+    editable.dataset.imageSentenceText = "";
+    editable.textContent = typeof item.texto === "string" ? item.texto : "";
+
+    const preview = document.createElement("div");
+    preview.className = "sentences-review__preview";
+    preview.setAttribute("aria-label", "Vista previa con sustantivos resaltados");
+
+    const nouns = Array.isArray(item.sustantivos) ? item.sustantivos : [];
+    const nounFields = document.createElement("div");
+    nounFields.className = "sentences-review__nouns";
+    const nounInputs = [0, 1].map((index) => {
+      const label = document.createElement("label");
+      label.className = "sentences-review__noun-field";
+
+      const labelText = document.createElement("span");
+      labelText.textContent = `Sustantivo ${index + 1}`;
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "sentences-review__noun-input";
+      input.value = typeof nouns[index] === "string" ? nouns[index] : "";
+      input.maxLength = 300;
+      input.autocomplete = "off";
+      input.dataset.imageSentenceNoun = String(index);
+
+      label.append(labelText, input);
+      nounFields.appendChild(label);
+      return input;
+    });
+
+    function refreshPreviewAndState() {
+      const text = editable.textContent.replace(/\s+/g, " ").trim();
+      const currentNouns = nounInputs.map((input) => input.value.replace(/\s+/g, " ").trim());
+      preview.innerHTML = text
+        ? markNouns(text, currentNouns)
+        : '<span class="sentences-review__preview-empty">Vista previa de la oración</span>';
+      updateDoneButtonState();
+    }
+
+    editable.addEventListener("input", refreshPreviewAndState);
+    nounInputs.forEach((input) => input.addEventListener("input", refreshPreviewAndState));
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "sentences-review__remove";
+    remove.title = "Quitar esta oración";
+    remove.setAttribute("aria-label", "Quitar esta oración");
+    remove.textContent = "✕";
+    remove.addEventListener("click", () => {
+      row.remove();
+      updateDoneButtonState();
+    });
+
+    content.append(editable, preview, nounFields);
+    row.append(content, remove);
+    resultSentencesList.appendChild(row);
+    refreshPreviewAndState();
+    if (focus) editable.focus();
+  }
+
+  function renderImageSentenceRows(items) {
+    resultSentencesList.innerHTML = "";
+    (items || []).forEach((item) => appendImageSentenceItem(item));
+    updateDoneButtonState();
+  }
+
+  function getImageSentencesData() {
+    const seen = new Set();
+    const items = [];
+    Array.from(resultSentencesList.querySelectorAll(".sentences-review__item--image")).forEach((row) => {
+      const text = row.querySelector("[data-image-sentence-text]")
+        ?.textContent.replace(/\s+/g, " ").trim() || "";
+      const nounInputs = Array.from(row.querySelectorAll("[data-image-sentence-noun]"));
+      const nouns = nounInputs.map((input) => input.value.replace(/\s+/g, " ").trim());
+      const nounsComplete = nouns.length === 2 && nouns.every(Boolean);
+      const missingNoun = Boolean(text) && !nounsComplete;
+
+      row.classList.toggle("sentences-review__item--invalid", missingNoun);
+      nounInputs.forEach((input) => {
+        input.setAttribute("aria-invalid", String(missingNoun && !input.value.trim()));
+      });
+
+      const key = text.toLocaleLowerCase("es");
+      if (text && nounsComplete && !seen.has(key) && items.length < 120) {
+        seen.add(key);
+        items.push({ texto: text, sustantivos: nouns });
+      }
+    });
+    return items;
+  }
+
+  function resetImageDesignState() {
+    imageDesignToken = "";
+    designSentences = [];
+    currentDesignIndex = 0;
+    imageDesignBusy = false;
+    imageDesignOverlay.classList.remove("is-open");
+    imageDesignMixedLine.replaceChildren();
+    imageDesignNounControls.replaceChildren();
+    imageDesignStage.hidden = true;
+    imageDesignEmpty.hidden = true;
+    imageDesignCounter.textContent = "Oración 0 de 0";
+    imageDesignPrevBtn.disabled = true;
+    imageDesignNextBtn.disabled = true;
+    imageDesignRemoveBtn.disabled = true;
+    imageDesignSaveBtn.disabled = true;
+    imageDesignSaveBtn.textContent = "Aprobar y guardar";
+  }
+
+  function updateDesignNav() {
+    const count = designSentences.length;
+    imageDesignCounter.textContent = count
+      ? `Oración ${currentDesignIndex + 1} de ${count}`
+      : "Oración 0 de 0";
+    imageDesignPrevBtn.disabled = imageDesignBusy || !count || currentDesignIndex === 0;
+    imageDesignNextBtn.disabled = imageDesignBusy || !count || currentDesignIndex >= count - 1;
+    imageDesignRemoveBtn.disabled = imageDesignBusy || !count;
+    imageDesignSaveBtn.disabled = imageDesignBusy || !count || !uploadTemaSelect.value;
+    imageDesignNounControls.querySelectorAll("input, button").forEach((control) => {
+      control.disabled = imageDesignBusy;
+    });
+  }
+
+  function appendDesignText(value) {
+    if (!value) return;
+    const text = document.createElement("span");
+    text.className = "image-design__text";
+    text.textContent = value;
+    imageDesignMixedLine.appendChild(text);
+  }
+
+  function renderDesignMixedLine(sentence) {
+    imageDesignMixedLine.replaceChildren();
+    const template = String(sentence.plantilla || sentence.texto || "");
+    const placeholderPattern = /\{\{([01])\}\}/g;
+    let cursor = 0;
+    let match = placeholderPattern.exec(template);
+
+    while (match) {
+      appendDesignText(template.slice(cursor, match.index));
+      const nounIndex = Number.parseInt(match[1], 10);
+      const noun = sentence.sustantivos[nounIndex];
+      if (noun) {
+        const image = document.createElement("img");
+        image.className = "image-design__img";
+        image.src = noun.imagen_url;
+        image.alt = noun.palabra;
+        image.dataset.nounIndex = String(nounIndex);
+        imageDesignMixedLine.appendChild(image);
+      }
+      cursor = match.index + match[0].length;
+      match = placeholderPattern.exec(template);
+    }
+    appendDesignText(template.slice(cursor));
+  }
+
+  async function regenerateDesignNoun(sentence, nounIndex, input, button) {
+    const noun = sentence.sustantivos[nounIndex];
+    const proposedWord = input.value.replace(/\s+/g, " ").trim();
+    if (!proposedWord) {
+      alert("Escribe el sustantivo antes de regenerar la imagen.");
+      return;
+    }
+
+    const payload = {
+      token: imageDesignToken,
+      sentence_index: sentence.staging_index,
+      noun_index: nounIndex,
+    };
+    if (proposedWord !== noun.palabra) {
+      payload.palabra = proposedWord;
+    }
+
+    const originalLabel = button.textContent;
+    imageDesignBusy = true;
+    button.textContent = "Generando…";
+    updateDesignNav();
+    try {
+      const response = await authorizedFetch("/api/material/image-sentences/regenerate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo regenerar la imagen.");
+      }
+
+      sentence.plantilla = data.plantilla;
+      sentence.sustantivos[nounIndex] = {
+        ...noun,
+        palabra: data.palabra,
+        imagen_url: data.imagen_url,
+      };
+      if (designSentences[currentDesignIndex] === sentence) {
+        renderDesignSentence();
+      }
+    } catch (error) {
+      alert(error.message || "No se pudo regenerar la imagen.");
+    } finally {
+      imageDesignBusy = false;
+      button.textContent = originalLabel;
+      updateDesignNav();
+    }
+  }
+
+  function renderDesignSentence() {
+    const count = designSentences.length;
+    if (!count) {
+      currentDesignIndex = 0;
+      imageDesignStage.hidden = true;
+      imageDesignEmpty.hidden = false;
+      imageDesignMixedLine.replaceChildren();
+      imageDesignNounControls.replaceChildren();
+      updateDesignNav();
+      return;
+    }
+
+    currentDesignIndex = Math.min(Math.max(currentDesignIndex, 0), count - 1);
+    const sentence = designSentences[currentDesignIndex];
+    imageDesignStage.hidden = false;
+    imageDesignEmpty.hidden = true;
+    renderDesignMixedLine(sentence);
+    imageDesignNounControls.replaceChildren();
+
+    sentence.sustantivos.forEach((noun, nounIndex) => {
+      const group = document.createElement("div");
+      group.className = "image-design__noun-control";
+
+      const label = document.createElement("label");
+      label.className = "image-design__noun-label";
+      const caption = document.createElement("span");
+      caption.textContent = `Sustantivo ${nounIndex + 1}`;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "image-design__noun-input";
+      input.maxLength = 60;
+      input.autocomplete = "off";
+      input.value = noun.palabra;
+      label.append(caption, input);
+
+      const regenerate = document.createElement("button");
+      regenerate.type = "button";
+      regenerate.className = "btn btn--accent image-design__regenerate";
+      regenerate.textContent = "Regenerar";
+      regenerate.addEventListener("click", () => {
+        regenerateDesignNoun(sentence, nounIndex, input, regenerate);
+      });
+
+      group.append(label, regenerate);
+      imageDesignNounControls.appendChild(group);
+    });
+    updateDesignNav();
+  }
+
+  imageDesignPrevBtn.addEventListener("click", () => {
+    if (currentDesignIndex <= 0) return;
+    currentDesignIndex -= 1;
+    renderDesignSentence();
+  });
+
+  imageDesignNextBtn.addEventListener("click", () => {
+    if (currentDesignIndex >= designSentences.length - 1) return;
+    currentDesignIndex += 1;
+    renderDesignSentence();
+  });
+
+  imageDesignRemoveBtn.addEventListener("click", () => {
+    if (!designSentences.length) return;
+    designSentences.splice(currentDesignIndex, 1);
+    if (currentDesignIndex >= designSentences.length) {
+      currentDesignIndex = Math.max(0, designSentences.length - 1);
+    }
+    renderDesignSentence();
+  });
+
+  imageDesignBackBtn.addEventListener("click", () => {
+    resetImageDesignState();
+    resultOverlay.classList.add("is-open");
+    updateDoneButtonState();
+  });
+
+  imageDesignDiscardBtn.addEventListener("click", () => {
+    imageDesignOverlay.classList.remove("is-open");
+    resultOverlay.classList.remove("is-open");
+    loadingOverlay.classList.remove("is-open");
+    uploadOverlay.classList.remove("is-open");
+    storyOverlay.classList.remove("is-open");
+    resetResultState();
+    resetUploadForm();
+    storyForm.reset();
+    setStoryType("cuento");
+    currentResultType = "cuento";
+    currentMaterialTitle = "";
+    currentTargetDurationMinutes = null;
+    lastSentenceContext = { topic: "", grade_level: "" };
+  });
+
+  imageDesignSaveBtn.addEventListener("click", async () => {
+    if (!designSentences.length) {
+      alert("No hay oraciones con imágenes para guardar.");
+      return;
+    }
+    if (!uploadTemaSelect.value) {
+      alert("Selecciona un tema antes de guardar.");
+      return;
+    }
+
+    imageDesignSaveBtn.disabled = true;
+    imageDesignSaveBtn.textContent = "Guardando";
+    try {
+      await saveDesignedImageSentenceMaterial();
+      imageDesignOverlay.classList.remove("is-open");
+      resultOverlay.classList.remove("is-open");
+      window.location.reload();
+    } catch (error) {
+      alert(error.message || "No se pudieron guardar las oraciones con imágenes.");
+      imageDesignSaveBtn.textContent = "Aprobar y guardar";
+      updateDesignNav();
+    }
+  });
 
   addSentenceBtn?.addEventListener("click", () => {
-    appendSentenceItem("", { focus: true });
+    if (currentResultType === "oracion_imagen") {
+      appendImageSentenceItem({}, { focus: true });
+    } else {
+      appendSentenceItem("", { focus: true });
+    }
     updateDoneButtonState();
   });
 
@@ -997,7 +1465,7 @@ document.addEventListener("DOMContentLoaded", () => {
         answer.className = "questions-result__editable questions-result__answer";
         answer.contentEditable = "true";
         answer.spellcheck = true;
-        answer.dataset.placeholder = "La miss debe completar este criterio";
+        answer.dataset.placeholder = "Completa este criterio";
         answer.textContent = expectedAnswer;
 
         item.append(questionLabel, question, answerLabel, answer);

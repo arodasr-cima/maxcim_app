@@ -45,6 +45,15 @@
           {% endfor %}
         </select>
       </label>
+      <label class="period-filter__field period-filter__field--tema" for="temaSelect">
+        <span class="period-filter__label">Tema</span>
+        <select class="period-filter__select" id="temaSelect" data-tema-select>
+          <option value="">Todos los temas</option>
+          {% for t in temas %}
+          <option value="{{ t.id }}" data-periodo="{{ t.id_periodo }}"{% if selected_tema_id == t.id %} selected{% endif %}>{{ t.nombre }}</option>
+          {% endfor %}
+        </select>
+      </label>
     </div>
 
     <section class="period-breakdown" aria-labelledby="periodBreakdownTitle">

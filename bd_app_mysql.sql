@@ -59,7 +59,9 @@ CREATE TABLE IF NOT EXISTS `tema` (
 CREATE TABLE IF NOT EXISTS `material` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `nombre_material` VARCHAR(255) NOT NULL,
-  -- Valores permitidos: 'cuento' y 'oracion'.
+  -- Valores permitidos: 'cuento', 'oracion' y 'oracion_imagen' (oraciones con
+  -- dos sustantivos concretos que luego se reemplazan por imágenes). No hay
+  -- CHECK: lo valida la app (TIPOS_MATERIAL en models.py).
   `tipo_material` VARCHAR(255) NOT NULL,
   `path_audio` VARCHAR(500) NULL,
   `path_texto` VARCHAR(500) NULL,

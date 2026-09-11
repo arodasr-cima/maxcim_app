@@ -2,6 +2,7 @@ import json
 import os
 from datetime import date, timedelta
 
+from app import material_progress_rows
 from extensions import db
 from models import Interaccion, Material, Periodo, Tema, TIPO_CUENTO
 
@@ -41,7 +42,7 @@ def add_material(owner, name):
     return material
 
 
-def add_interaction(material, student_id, *, correct, question, answer, appraisal):
+def add_interaction(material, student_id, *, correct, question, answer, appraisal, id_periodo=None):
     interaction = Interaccion(
         material=material,
         fk_alumno=student_id,
@@ -50,6 +51,9 @@ def add_interaction(material, student_id, *, correct, question, answer, appraisa
         path_audio_rpta="fixtures/respuesta.wav",
         apreciacion_robot=appraisal,
         rpta_correcta=correct,
+        # Igual que registrar_interaccion en producción: la interacción copia
+        # el periodo del material al crearse (no se resuelve al vuelo).
+        id_periodo=id_periodo if id_periodo is not None else (material.id_periodo if material else None),
     )
     db.session.add(interaction)
     return interaction
@@ -114,6 +118,57 @@ def test_media_token_rejects_path_escape(app, client):
         assert client.get(f"/media/{tok}").status_code == 404
 
 
+def test_material_progress_rows_groups_by_material_and_grades_severity():
+    """Función pura (sin BD): agrupa por material -o "Conversación" si no hay
+    uno- y clasifica cada grupo por su propio % de aciertos, no por el del
+    resto. El orden de salida es el de la primera aparición de cada uno."""
+    class FakeMaterial:
+        def __init__(self, name):
+            self.nombre_material = name
+
+    class FakeInteraction:
+        def __init__(self, id_material, material, correct):
+            self.id_material = id_material
+            self.material = material
+            self.rpta_correcta = correct
+
+    material_bueno = FakeMaterial("Material bueno")
+    material_regular = FakeMaterial("Material regular")
+    material_bajo = FakeMaterial("Material bajo")
+
+    interactions = [
+        FakeInteraction(1, material_bueno, True),
+        FakeInteraction(1, material_bueno, True),
+        FakeInteraction(1, material_bueno, True),
+        FakeInteraction(1, material_bueno, False),  # 3/4 = 75% -> good
+        FakeInteraction(2, material_regular, True),
+        FakeInteraction(2, material_regular, False),  # 1/2 = 50% -> warning
+        FakeInteraction(3, material_bajo, False),
+        FakeInteraction(3, material_bajo, False),
+        FakeInteraction(3, material_bajo, True),  # 1/3 = 33% -> danger
+        FakeInteraction(None, None, True),  # Conversación: 1/1 = 100% -> good
+    ]
+
+    rows = material_progress_rows(interactions)
+    by_name = {row["name"]: row for row in rows}
+
+    assert by_name["Material bueno"] == {
+        "name": "Material bueno", "is_conversation": False,
+        "correct": 3, "total": 4, "percent": 75, "severity": "good",
+    }
+    assert by_name["Material regular"]["percent"] == 50
+    assert by_name["Material regular"]["severity"] == "warning"
+    assert by_name["Material bajo"]["percent"] == 33
+    assert by_name["Material bajo"]["severity"] == "danger"
+    assert by_name["Conversación"]["is_conversation"] is True
+    assert by_name["Conversación"]["severity"] == "good"
+
+    # Orden de aparición: el de la primera interacción con cada material.
+    assert [row["name"] for row in rows] == [
+        "Material bueno", "Material regular", "Material bajo", "Conversación",
+    ]
+
+
 def test_progress_shows_results_and_ignores_other_teacher_materials(app, client, urls):
     with app.app_context():
         own_material = add_material("DOC-TEST-1", "Cuento autorizado")
@@ -148,9 +203,11 @@ def test_progress_shows_results_and_ignores_other_teacher_materials(app, client,
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert "✓" in html
-    assert "✕" in html
+    # "Resultados por material": una barra de aciertos/total por material, no
+    # una lista de cada interacción.
+    assert "Cuento autorizado" in html
     assert "1/2" in html
+    assert "(50%)" in html
     assert "Material ajeno" not in html
 
 
@@ -194,8 +251,9 @@ def test_progress_and_detail_label_a_materialless_turn_as_conversation(app, clie
     # The "Aciertos" tally counts the two conversation rows alongside the
     # material row: 2 correct out of 3.
     assert "2/3" in progress_html
-    # The row tooltip uses the label, never the literal "None".
-    assert "Conversación: ¿De qué quieres hablar hoy?" in progress_html
+    # Conversation bucket: 1 correct of 2 (the material bucket is 1/1, so
+    # "1/2" is unambiguous here). Never the literal "None" as a label.
+    assert "1/2" in progress_html
     assert ">None<" not in progress_html
     assert 'title="None' not in progress_html
     assert "Conversación: None" not in progress_html
@@ -270,6 +328,97 @@ def test_student_detail_shows_local_time_not_utc(app, client, urls):
     assert "20/08/2026" not in html
     assert "<span>03:00</span>" not in html
     assert '2026-08-20T03:00:00Z' in html
+
+
+def _seed_periodos_y_temas_para_filtro(anio_pasado=None):
+    """Un bimestre pasado con un tema, y el bimestre vigente hoy con dos
+    temas (A y B, en ese orden alfabético). Cada tema tiene su propio
+    material con una interacción, para poder distinguir en las pruebas cuál
+    quedó dentro/fuera de cada filtro por defecto."""
+    periodo_pasado, tema_pasado = _periodo_con_tema(
+        "Bimestre pasado", anio=anio_pasado or (date.today().year - 1),
+        start_offset=-200, end_offset=-100,
+    )
+    periodo_actual, _ = _periodo_con_tema("Bimestre vigente")
+    tema_a = Tema(nombre="A - Tema vigente", fk_user=TEST_TEACHER_ID, id_periodo=periodo_actual)
+    tema_b = Tema(nombre="B - Tema vigente", fk_user=TEST_TEACHER_ID, id_periodo=periodo_actual)
+    db.session.add_all([tema_a, tema_b])
+    db.session.commit()
+
+    material_pasado = add_material("DOC-TEST-1", "Material del bimestre pasado")
+    material_pasado.id_periodo = periodo_pasado
+    material_pasado.id_tema = tema_pasado
+    material_a = add_material("DOC-TEST-1", "Material del tema A")
+    material_a.id_periodo = periodo_actual
+    material_a.id_tema = tema_a.id
+    material_b = add_material("DOC-TEST-1", "Material del tema B")
+    material_b.id_periodo = periodo_actual
+    material_b.id_tema = tema_b.id
+    db.session.commit()
+
+    add_interaction(material_pasado, "ALU-TEST-1", correct=True,
+                     question="Pregunta del bimestre pasado", answer="r", appraisal="ap")
+    add_interaction(material_a, "ALU-TEST-1", correct=True,
+                     question="Pregunta del tema A", answer="r", appraisal="ap")
+    add_interaction(material_b, "ALU-TEST-1", correct=False,
+                     question="Pregunta del tema B", answer="r", appraisal="ap")
+    db.session.commit()
+
+    return {
+        "periodo_pasado": periodo_pasado,
+        "periodo_actual": periodo_actual,
+        "tema_pasado": tema_pasado,
+        "tema_a": tema_a.id,
+        "tema_b": tema_b.id,
+    }
+
+
+def test_progress_and_detail_default_to_current_periodo_and_first_tema(app, client, urls):
+    """Sin filtros en la URL (primera entrada a la vista) no se debe listar
+    todo el historial de una: se acota al periodo vigente y, dentro de este,
+    al primer tema de la docente -igual criterio que ya usa /temas."""
+    with app.app_context():
+        _seed_periodos_y_temas_para_filtro()
+
+    progress_html = client.get(urls.progress("AULA-REAL-1")).get_data(as_text=True)
+    # "Resultados por material" agrupa por material, no por pregunta.
+    assert "Material del tema A" in progress_html
+    assert "Material del tema B" not in progress_html
+    assert "Material del bimestre pasado" not in progress_html
+
+    detail_html = client.get(urls.student("AULA-REAL-1", "ALU-TEST-1")).get_data(as_text=True)
+    assert "Pregunta del tema A" in detail_html
+    assert "Pregunta del tema B" not in detail_html
+    assert "Pregunta del bimestre pasado" not in detail_html
+
+
+def test_progress_and_detail_explicit_todos_shows_full_history(app, client, urls):
+    """`?periodo=` y `?tema=` presentes (aunque vacíos) son la elección
+    explícita de "Todos" -distinta de no haber elegido nada todavía- y deben
+    respetarse mostrando el historial completo."""
+    with app.app_context():
+        _seed_periodos_y_temas_para_filtro()
+
+    html = client.get(urls.student("AULA-REAL-1", "ALU-TEST-1") + "?periodo=&tema=").get_data(as_text=True)
+    assert "Pregunta del tema A" in html
+    assert "Pregunta del tema B" in html
+    assert "Pregunta del bimestre pasado" in html
+
+    progress_html = client.get(urls.progress("AULA-REAL-1") + "?periodo=&tema=").get_data(as_text=True)
+    assert "2/3" in progress_html  # 2 correctas (pasado + tema A) de 3 en total
+
+
+def test_tema_filter_infers_its_own_periodo(app, client, urls):
+    """Un `?tema=<id>` sin `?periodo=` (p.ej. un enlace guardado) debe acotar
+    al periodo de ese tema, no al vigente hoy."""
+    with app.app_context():
+        seeded = _seed_periodos_y_temas_para_filtro()
+        tema_pasado_id = seeded["tema_pasado"]
+
+    html = client.get(f"{urls.student('AULA-REAL-1', 'ALU-TEST-1')}?tema={tema_pasado_id}").get_data(as_text=True)
+    assert "Pregunta del bimestre pasado" in html
+    assert "Pregunta del tema A" not in html
+    assert "Pregunta del tema B" not in html
 
 
 def _stored_upload(app, stored_path):

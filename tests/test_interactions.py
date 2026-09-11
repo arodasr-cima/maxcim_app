@@ -204,6 +204,7 @@ def test_create_app_forces_https_session_in_production(monkeypatch):
     from werkzeug.middleware.proxy_fix import ProxyFix
 
     monkeypatch.setattr(app_module, "gemini_client", None)
+    monkeypatch.delenv("ALLOW_INSECURE_SESSION_COOKIE", raising=False)
     application = app_module.create_app({
         "TESTING": False,
         "DEMO_MODE": False,
@@ -218,6 +219,41 @@ def test_create_app_forces_https_session_in_production(monkeypatch):
     assert application.config["SESSION_COOKIE_SECURE"] is True
     assert application.config["PREFERRED_URL_SCHEME"] == "https"
     assert isinstance(application.wsgi_app, ProxyFix)
+
+
+def test_allow_insecure_session_cookie_escape_hatch(monkeypatch):
+    """ALLOW_INSECURE_SESSION_COOKIE=true respeta SESSION_COOKIE_SECURE=false
+    y no fuerza el esquema https (solo para desarrollo local sobre http://)."""
+    monkeypatch.setattr(app_module, "gemini_client", None)
+    monkeypatch.setenv("ALLOW_INSECURE_SESSION_COOKIE", "true")
+    application = app_module.create_app({
+        "TESTING": False,
+        "DEMO_MODE": False,
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "SQLALCHEMY_ENGINE_OPTIONS": {},
+        "MAXCIM_WEBHOOK_SECRET": "robot-secret-0123456789abcdef0123456789abcdef",
+        "SECRET_KEY": "x" * 40,
+        "SESSION_TOKEN_ENCRYPTION_KEY": "x" * 40,
+        "SESSION_COOKIE_SECURE": False,
+    })
+    assert application.config["SESSION_COOKIE_SECURE"] is False
+    assert application.config.get("PREFERRED_URL_SCHEME") != "https"
+    health = application.test_client().get("/health")
+    assert "Strict-Transport-Security" not in health.headers
+
+    # Con el flag activo pero SESSION_COOKIE_SECURE=true, sigue siendo Secure.
+    monkeypatch.setattr(app_module, "gemini_client", None)
+    secure = app_module.create_app({
+        "TESTING": False,
+        "DEMO_MODE": False,
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "SQLALCHEMY_ENGINE_OPTIONS": {},
+        "MAXCIM_WEBHOOK_SECRET": "robot-secret-0123456789abcdef0123456789abcdef",
+        "SECRET_KEY": "x" * 40,
+        "SESSION_TOKEN_ENCRYPTION_KEY": "x" * 40,
+        "SESSION_COOKIE_SECURE": True,
+    })
+    assert secure.config["SESSION_COOKIE_SECURE"] is True
 
 
 def test_registrar_interaccion_requires_webhook_secret_in_production(monkeypatch):
@@ -321,6 +357,10 @@ def test_get_cuento_material_round_trips_through_robot_api(
         "fecha_subido": fecha_subido,
         "fk_user": TEST_TEACHER_ID,
         "docente": None,
+        "id_periodo": None,
+        "id_tema": None,
+        "periodo": None,
+        "tema": None,
         # Los *_url apuntan al endpoint autenticado, no a /static/.
         "texto_completo_url": f"{base}/texto",
         "texto_resumen_url": f"{base}/resumen",
@@ -356,6 +396,10 @@ def test_get_oracion_material_round_trips_through_robot_api(app, client):
         "fecha_subido": fecha_subido,
         "fk_user": TEST_TEACHER_ID,
         "docente": None,
+        "id_periodo": None,
+        "id_tema": None,
+        "periodo": None,
+        "tema": None,
         "oraciones": ["La luna brilla.", "El río canta."],
         "oraciones_url": None,
         "texto_completo_url": None,

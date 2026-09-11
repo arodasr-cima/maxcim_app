@@ -9,6 +9,7 @@ import re
 import secrets
 import shutil
 import tempfile
+import time
 import uuid
 import wave
 from datetime import UTC, date, datetime, timedelta
@@ -37,14 +38,25 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import contains_eager
 
 from extensions import db
-from models import Interaccion, Material, Periodo, Tema, TIPO_CUENTO, TIPO_ORACION, TIPOS_MATERIAL
+from models import (
+    Interaccion,
+    Material,
+    Periodo,
+    Tema,
+    TIPO_CUENTO,
+    TIPO_ORACION,
+    TIPO_ORACION_IMAGEN,
+    TIPOS_MATERIAL,
+)
 from services.demo import (
     DemoInstitutionalClient,
     create_demo_image_sentences,
+    create_demo_noun_image,
     create_demo_questions,
     create_demo_sentences,
     create_demo_story,
     create_demo_wav,
+    extract_demo_image_sentences,
     extract_demo_sentences,
     process_demo_document,
 )
@@ -62,6 +74,11 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
 GEMINI_TTS_VOICE = os.environ.get("GEMINI_TTS_VOICE", "Puck")
+# Modelo de generación de imágenes para "oraciones con imágenes": cada
+# sustantivo concreto de la oración se dibuja por separado (NO la oración
+# entera) y esa imagen ocupa su hueco; el texto va aparte, como HTML.
+# Requiere una versión de `google-genai` que acepte response_modalities=["IMAGE"].
+GEMINI_IMAGE_MODEL = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-3.7-flash")
 
 gemini_client = genai.Client(api_key=GOOGLE_API_KEY) if GOOGLE_API_KEY else None
 
@@ -195,7 +212,60 @@ IMAGE_SENTENCES_GENERATE_PROMPT = (
     'la forma {{"oraciones": [{{"texto": "La niña dibuja una casa.", '
     '"sustantivos": ["niña", "casa"]}}]}} y sin texto fuera del JSON.'
 )
+
+# Extracción de "oraciones con imágenes" desde un documento que subió la
+# docente: el modelo NO inventa oraciones, solo elige de entre las que ya
+# están escritas aquellas que sirven para el ejercicio (exactamente dos
+# sustantivos concretos y dibujables) y devuelve esos dos sustantivos por
+# oración. Este material lo leen niños de corta edad, así que se descartan
+# los nombres propios y los sustantivos que producirían una imagen ambigua.
+IMAGE_SENTENCES_EXTRACT_PROMPT = (
+    "Este documento contiene una lista de oraciones que una docente quiere usar "
+    "como material de lectura con imágenes para niños de corta edad. Cada "
+    "oración apta lleva EXACTAMENTE dos sustantivos comunes, concretos y "
+    "fáciles de dibujar (objetos, animales, personas, alimentos o lugares), que "
+    "después se reemplazarán por una imagen. "
+    "Identifica cada oración tal como la docente la escribió: no la resumas, no "
+    "la reformules, no inventes oraciones nuevas y no unas ni dividas oraciones. "
+    "Corrige solo errores evidentes de espaciado o de salto de línea. "
+    "DESCARTA por completo (no las incluyas en la respuesta) las oraciones que: "
+    "no tengan exactamente dos de esos sustantivos; contengan nombres propios "
+    "(personas, mascotas, marcas, lugares con nombre); o contengan un sustantivo "
+    "que produciría una imagen ambigua o confusa para un niño pequeño "
+    "(palabras abstractas, con varios significados, o difíciles de representar "
+    "con un dibujo claro). Ignora títulos, numeración, viñetas y encabezados. "
+    'Responde únicamente con un JSON de la forma {"oraciones": [{"texto": '
+    '"Ese oso ama la miel.", "sustantivos": ["oso", "miel"]}]}, en el mismo '
+    "orden del documento y sin texto fuera del JSON. Cada elemento debe traer "
+    "los dos sustantivos tal como aparecen en su oración."
+)
 MAX_IMAGE_SENTENCES_PER_REQUEST = 20
+# Tope por material al guardar (una docente puede subir un documento con
+# muchas más oraciones que las que se generan de una tacada). Igual criterio
+# que MAX_SENTENCES_PER_MATERIAL para las oraciones sin imagen.
+MAX_IMAGE_SENTENCES_PER_MATERIAL = 120
+
+# --- "Oraciones con imágenes": diseño (generación de las imágenes) -----------
+# En el paso de diseño se genera una imagen por cada sustantivo, así que el
+# tope es más bajo que en la extracción: 20 oraciones = 40 imágenes.
+MAX_IMAGE_DESIGN_SENTENCES = 20
+# Prompt corto a propósito: una caricatura educativa (estilo libro infantil),
+# UN solo objeto por sustantivo (nunca la oración entera), grande y centrado,
+# quieto y sin hacer la acción de la oración, sobre fondo blanco y sin texto.
+# La oración solo sirve para desambiguar qué dibujar.
+NOUN_IMAGE_STYLE_PROMPT = (
+    "Educational cartoon of a single «{palabra}», friendly children's book "
+    "illustration style: clean lines, soft flat color, polished — not a crude "
+    "emoji or doodle. Just the one object, calm and still (not doing any "
+    "action), large and centered, filling most of the frame on a plain white "
+    "background. No text, no other objects, no scenery, no ground shadow. "
+    "Use the sentence «{contexto}» only as a hint for what «{palabra}» means."
+)
+# Imágenes en revisión (aún sin material) mientras la docente aprueba el
+# diseño. Viven bajo UPLOADS_ROOT/_previews/<token>/ y se limpian al guardar
+# o cuando superan esta antigüedad.
+PREVIEW_STAGING_DIRNAME = "_previews"
+PREVIEW_STAGING_MAX_AGE_SECONDS = 6 * 3600
 
 QUESTION_TYPES = ["literales", "inferenciales", "criticas"]
 QUESTION_TYPE_DESCRIPTIONS = {
@@ -427,6 +497,52 @@ def extract_sentences(file_storage) -> list[str]:
             os.remove(tmp_path)
 
 
+def image_sentence_template(texto: str, palabras: list[str]) -> str:
+    """Devuelve la oración con la primera aparición de cada sustantivo
+    reemplazada por su marcador posicional `{{0}}`, `{{1}}`, … El robot y la
+    consola sustituyen esos marcadores por la imagen. Lanza ValueError si un
+    sustantivo no aparece tal cual (como palabra completa) en la oración."""
+    plantilla = " ".join(str(texto or "").split())
+    for index, palabra in enumerate(palabras):
+        needle = " ".join(str(palabra or "").split())
+        if not needle:
+            raise ValueError("Cada oración necesita sus dos sustantivos.")
+        pattern = re.compile(rf"(?<!\w){re.escape(needle)}(?!\w)", re.IGNORECASE)
+        plantilla, replaced = pattern.subn(f"{{{{{index}}}}}", plantilla, count=1)
+        if not replaced:
+            raise ValueError(
+                f"El sustantivo «{needle}» no aparece tal cual en la oración."
+            )
+    return plantilla
+
+
+def generate_noun_image(palabra: str, *, oracion: str = "") -> bytes:
+    """Genera con Gemini un PNG del sustantivo `palabra` para que ocupe su
+    hueco en una "oración con imágenes". Devuelve los bytes de la imagen."""
+    prompt = NOUN_IMAGE_STYLE_PROMPT.format(
+        palabra=" ".join(str(palabra or "").split()),
+        contexto=" ".join(str(oracion or "").split()) or "—",
+    )
+    try:
+        response = gemini_client.models.generate_content(
+            model=GEMINI_IMAGE_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+        )
+    except TypeError as exc:  # SDK viejo: no conoce response_modalities
+        raise RuntimeError(
+            "La versión instalada de google-genai no soporta generación de "
+            "imágenes. Actualiza con: pip install -U google-genai"
+        ) from exc
+    for candidate in response.candidates or []:
+        parts = getattr(getattr(candidate, "content", None), "parts", None) or []
+        for part in parts:
+            inline = getattr(part, "inline_data", None)
+            if inline and getattr(inline, "data", None):
+                return bytes(inline.data)
+    raise ValueError("El modelo no devolvió ninguna imagen para este sustantivo.")
+
+
 def generate_questions(text: str, counts: dict[str, int]) -> dict[str, list[dict[str, str]]]:
     """Asks Gemini for reading-comprehension questions, grouped by type, in the
     quantities requested."""
@@ -494,9 +610,13 @@ def generate_sentences(
     return normalize_sentences(raw_sentences if isinstance(raw_sentences, list) else [])
 
 
-def normalize_image_sentences(raw_items) -> list[dict[str, object]]:
+def normalize_image_sentences(
+    raw_items, *, limit: int = MAX_IMAGE_SENTENCES_PER_REQUEST
+) -> list[dict[str, object]]:
     """Keeps only well-formed {texto, sustantivos:[a, b]} entries: text non-empty
-    and exactly two non-empty nouns. De-dupes by text, caps the count."""
+    and exactly two non-empty nouns. De-dupes by text, caps the count at
+    `limit` (the per-request cap by default; save_material passes the larger
+    per-material cap)."""
     seen: set[str] = set()
     items: list[dict[str, object]] = []
     for raw in raw_items or []:
@@ -504,7 +624,7 @@ def normalize_image_sentences(raw_items) -> list[dict[str, object]]:
             continue
         texto = " ".join(str(raw.get("texto") or "").split()).strip()[:MAX_SENTENCE_CHARS]
         nouns = [
-            " ".join(str(n or "").split()).strip()
+            " ".join(str(n or "").split()).strip()[:MAX_SENTENCE_CHARS]
             for n in (raw.get("sustantivos") or [])
         ]
         nouns = [n for n in nouns if n]
@@ -515,9 +635,48 @@ def normalize_image_sentences(raw_items) -> list[dict[str, object]]:
             continue
         seen.add(key)
         items.append({"texto": texto, "sustantivos": nouns})
-        if len(items) >= MAX_IMAGE_SENTENCES_PER_REQUEST:
+        if len(items) >= limit:
             break
     return items
+
+
+def extract_image_sentences(file_storage) -> list[dict[str, object]]:
+    """Uploads the teacher's document to Gemini and asks it to pick out the
+    sentences already written there that work as "oraciones con imágenes"
+    (exactly two concrete, drawable nouns, no proper nouns, no ambiguous
+    nouns). Mirrors extract_sentences; returns [{texto, sustantivos:[a, b]}]."""
+    filename = file_storage.filename or "documento"
+    mime_type = file_storage.mimetype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    suffix = os.path.splitext(filename)[1]
+
+    tmp_path = None
+    uploaded_file = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            file_storage.save(tmp)
+            tmp_path = tmp.name
+
+        uploaded_file = gemini_client.files.upload(
+            file=tmp_path,
+            config={"mime_type": mime_type, "display_name": filename},
+        )
+
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[uploaded_file, IMAGE_SENTENCES_EXTRACT_PROMPT],
+            config=types.GenerateContentConfig(response_mime_type="application/json"),
+        )
+        data = json.loads(response.text)
+        raw_items = data.get("oraciones") if isinstance(data, dict) else data
+        return normalize_image_sentences(raw_items if isinstance(raw_items, list) else [])
+    finally:
+        if uploaded_file is not None:
+            try:
+                gemini_client.files.delete(name=uploaded_file.name)
+            except Exception:
+                pass
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def generate_image_sentences(
@@ -772,6 +931,53 @@ def format_period_label(today: date) -> str:
     return f"{DIAS_ES[today.weekday()]} {today.day}, {MESES_ES[today.month - 1]}"
 
 
+# Umbrales de la barra "Resultados por material" del avance de aula: el color
+# es la severidad del acierto (bueno/atención/bajo), nunca una identidad de
+# serie, así que son fijos y no se mezclan con ninguna otra paleta de la app.
+MATERIAL_PROGRESS_GOOD_THRESHOLD = 75
+MATERIAL_PROGRESS_WARNING_THRESHOLD = 40
+
+
+def material_progress_rows(student_interactions: list) -> list[dict]:
+    """Agrupa las interacciones YA CARGADAS de un alumno por material (o
+    "Conversación" para las que no tienen material) y calcula, para cada
+    grupo, su relación aciertos/total.
+
+    No dispara ninguna consulta nueva: recibe la misma lista de objetos
+    `Interaccion` (con `.material` precargado por `contains_eager`) que ya se
+    usaba para el tally general de la fila, y solo la reagrupa en memoria.
+    El orden de salida es el de la primera interacción con cada material -la
+    lista de entrada ya viene ordenada por fecha ascendente-, así que las
+    barras aparecen en el orden en que el alumno fue trabajando cada una."""
+    buckets: dict[int | None, dict] = {}
+    for item in student_interactions:
+        key = item.id_material
+        bucket = buckets.get(key)
+        if bucket is None:
+            bucket = {
+                "name": item.material.nombre_material if item.material else "Conversación",
+                "is_conversation": item.material is None,
+                "correct": 0,
+                "total": 0,
+            }
+            buckets[key] = bucket
+        bucket["total"] += 1
+        if item.rpta_correcta:
+            bucket["correct"] += 1
+
+    rows = []
+    for bucket in buckets.values():
+        percent = round(bucket["correct"] / bucket["total"] * 100)
+        if percent >= MATERIAL_PROGRESS_GOOD_THRESHOLD:
+            severity = "good"
+        elif percent >= MATERIAL_PROGRESS_WARNING_THRESHOLD:
+            severity = "warning"
+        else:
+            severity = "danger"
+        rows.append({**bucket, "percent": percent, "severity": severity})
+    return rows
+
+
 def create_app(test_config: dict | None = None):
     app = Flask(__name__)
     app.config.from_mapping(
@@ -842,14 +1048,27 @@ def create_app(test_config: dict | None = None):
         # para otros secretos en hallazgos posteriores.
         _require_strong_secret(app.config, "MAXCIM_WEBHOOK_SECRET")
         # La sesión de la docente vive entera en la cookie firmada (incluye el
-        # JWT de CIMA cifrado). Fuera de demo se exige HTTPS sí o sí: el valor
-        # del `.env` se ignora para que no pueda quedar mal configurado.
-        if not app.config.get("SESSION_COOKIE_SECURE"):
+        # JWT de CIMA cifrado). Fuera de demo se exige HTTPS: el valor del
+        # `.env` se ignora para que no pueda quedar mal configurado.
+        #
+        # Escape hatch SOLO para desarrollo local sobre http://: con
+        # ALLOW_INSECURE_SESSION_COOKIE=true se respeta SESSION_COOKIE_SECURE=false
+        # y no se fuerza el esquema https (si no, la cookie no viaja por HTTP y
+        # las URLs `_external` saldrían https://). Nunca lo pongas en un
+        # despliegue real.
+        allow_insecure_cookie = env_bool("ALLOW_INSECURE_SESSION_COOKIE", False)
+        if allow_insecure_cookie and not app.config.get("SESSION_COOKIE_SECURE"):
             app.logger.warning(
-                "SESSION_COOKIE_SECURE llegó en false; se fuerza a true (DEMO_MODE=false)."
+                "ALLOW_INSECURE_SESSION_COOKIE=true: la cookie de sesión NO es "
+                "Secure. Solo debe usarse en desarrollo local sobre http://."
             )
-        app.config["SESSION_COOKIE_SECURE"] = True
-        app.config["PREFERRED_URL_SCHEME"] = "https"
+        else:
+            if not app.config.get("SESSION_COOKIE_SECURE"):
+                app.logger.warning(
+                    "SESSION_COOKIE_SECURE llegó en false; se fuerza a true (DEMO_MODE=false)."
+                )
+            app.config["SESSION_COOKIE_SECURE"] = True
+            app.config["PREFERRED_URL_SCHEME"] = "https"
         # Detrás de un terminador TLS, Gunicorn recibe HTTP en el salto interno.
         # ProxyFix hace que Flask lea el esquema/host reales de X-Forwarded-*,
         # necesario para emitir la cookie Secure y armar URLs https://.
@@ -1197,7 +1416,9 @@ def create_app(test_config: dict | None = None):
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-        if not app.config.get("DEMO_MODE"):
+        # HSTS solo si de verdad se sirve por HTTPS (Secure cookie activa); en
+        # desarrollo local sobre http:// forzaría al navegador a exigir TLS.
+        if not app.config.get("DEMO_MODE") and app.config.get("SESSION_COOKIE_SECURE"):
             response.headers.setdefault(
                 "Strict-Transport-Security", "max-age=63072000; includeSubDomains"
             )
@@ -1464,6 +1685,68 @@ def create_app(test_config: dict | None = None):
             students=students,
         )
 
+    def resolve_interaction_filters(teacher):
+        """Resuelve los filtros de Periodo y Tema para las vistas de
+        interacciones (avance de aula e historial de un alumno).
+
+        Mismo criterio que ya usa /temas: `?periodo=` ausente arranca acotado
+        al periodo académico vigente hoy -para no listar de entrada todo el
+        historial de golpe-; presente (aunque venga vacío o inválido) respeta
+        la elección explícita de la docente, incluyendo "Todos los
+        periodos". `?tema=` funciona igual, pero sin el parámetro el valor
+        por defecto es el primer tema de la docente dentro de ese periodo (no
+        "todos los temas")."""
+        available_periodos = Periodo.query.order_by(Periodo.fecha_inicio).all()
+        raw_periodo_id = request.args.get("periodo")
+        if raw_periodo_id is None:
+            active_periodo = current_periodo()
+            selected_periodo_id = active_periodo.id if active_periodo else None
+        else:
+            selected_periodo_id = None
+            if raw_periodo_id.strip():
+                try:
+                    candidate_periodo_id = int(raw_periodo_id)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    if any(p.id == candidate_periodo_id for p in available_periodos):
+                        selected_periodo_id = candidate_periodo_id
+
+        # Temas de la propia docente (no se comparten entre docentes),
+        # acotados por periodo en la plantilla (period_filter.js).
+        available_temas = (
+            Tema.query.filter_by(fk_user=str(teacher["id"]))
+            .order_by(Tema.id_periodo, Tema.nombre)
+            .all()
+        )
+        raw_tema_id = request.args.get("tema")
+        if raw_tema_id is None:
+            selected_tema_id = next(
+                (tema.id for tema in available_temas if tema.id_periodo == selected_periodo_id),
+                None,
+            ) if selected_periodo_id is not None else None
+        else:
+            selected_tema_id = None
+            if raw_tema_id.strip():
+                try:
+                    candidate_tema_id = int(raw_tema_id)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    if any(t.id == candidate_tema_id for t in available_temas):
+                        selected_tema_id = candidate_tema_id
+
+        if selected_tema_id is not None:
+            # El periodo del tema manda si llegan desincronizados (p.ej. un
+            # enlace viejo con `tema` pero sin `periodo`, o con un `periodo`
+            # que ya no le corresponde a ese tema).
+            selected_periodo_id = next(
+                (tema.id_periodo for tema in available_temas if tema.id == selected_tema_id),
+                selected_periodo_id,
+            )
+
+        return available_periodos, selected_periodo_id, available_temas, selected_tema_id
+
     @app.route("/aulas/<ref>/avance")
     @login_required
     def classroom_progress(ref):
@@ -1477,17 +1760,9 @@ def create_app(test_config: dict | None = None):
         except InstitutionalAPIError as exc:
             return render_classroom_error(teacher, exc)
 
-        available_periodos = Periodo.query.order_by(Periodo.fecha_inicio).all()
-        selected_periodo_id = None
-        raw_periodo_id = request.args.get("periodo")
-        if raw_periodo_id not in (None, ""):
-            try:
-                candidate_periodo_id = int(raw_periodo_id)
-            except (TypeError, ValueError):
-                pass
-            else:
-                if any(periodo.id == candidate_periodo_id for periodo in available_periodos):
-                    selected_periodo_id = candidate_periodo_id
+        available_periodos, selected_periodo_id, available_temas, selected_tema_id = (
+            resolve_interaction_filters(teacher)
+        )
 
         student_ids = [str(student.institutional_id) for student in students]
         interactions = []
@@ -1510,6 +1785,13 @@ def create_app(test_config: dict | None = None):
                 interactions_query = interactions_query.filter(
                     Interaccion.id_periodo == selected_periodo_id
                 )
+            if selected_tema_id is not None:
+                # Vía Material, igual que en student_detail: la interacción no
+                # guarda su propio id_tema, así que filtrar por tema exige un
+                # material con ese tema (las conversaciones sueltas quedan fuera).
+                interactions_query = interactions_query.filter(
+                    Material.id_tema == selected_tema_id
+                )
             interactions = interactions_query.order_by(
                 Interaccion.fecha_hora.asc(), Interaccion.id.asc()
             ).all()
@@ -1523,7 +1805,7 @@ def create_app(test_config: dict | None = None):
             correct = sum(1 for item in student_interactions if item.rpta_correcta)
             progress_rows.append({
                 "student": student,
-                "interactions": student_interactions,
+                "materials": material_progress_rows(student_interactions),
                 "correct": correct,
                 "total": len(student_interactions),
             })
@@ -1536,6 +1818,8 @@ def create_app(test_config: dict | None = None):
             progress_rows=progress_rows,
             periodos=available_periodos,
             selected_periodo_id=selected_periodo_id,
+            temas=available_temas,
+            selected_tema_id=selected_tema_id,
         )
 
     @app.route("/aulas/alumno/<ref>")
@@ -1567,17 +1851,9 @@ def create_app(test_config: dict | None = None):
                 ),
             )
 
-        available_periodos = Periodo.query.order_by(Periodo.fecha_inicio).all()
-        selected_periodo_id = None
-        raw_periodo_id = request.args.get("periodo")
-        if raw_periodo_id not in (None, ""):
-            try:
-                candidate_periodo_id = int(raw_periodo_id)
-            except (TypeError, ValueError):
-                pass
-            else:
-                if any(periodo.id == candidate_periodo_id for periodo in available_periodos):
-                    selected_periodo_id = candidate_periodo_id
+        available_periodos, selected_periodo_id, available_temas, selected_tema_id = (
+            resolve_interaction_filters(teacher)
+        )
 
         interactions_query = (
             Interaccion.query.outerjoin(Material)
@@ -1594,10 +1870,21 @@ def create_app(test_config: dict | None = None):
             Interaccion.fecha_hora.desc(), Interaccion.id.desc()
         ).all()
         interactions = all_interactions
-        if selected_periodo_id is not None:
-            interactions = interactions_query.filter(
-                Interaccion.id_periodo == selected_periodo_id
-            ).order_by(Interaccion.fecha_hora.desc(), Interaccion.id.desc()).all()
+        if selected_periodo_id is not None or selected_tema_id is not None:
+            filtered_query = interactions_query
+            if selected_periodo_id is not None:
+                filtered_query = filtered_query.filter(
+                    Interaccion.id_periodo == selected_periodo_id
+                )
+            if selected_tema_id is not None:
+                # Vía Material: la interacción no guarda su propio id_tema
+                # (a diferencia de id_periodo), así que el filtro exige un
+                # material con ese tema — las conversaciones sueltas
+                # (id_material NULL) quedan fuera cuando se filtra por tema.
+                filtered_query = filtered_query.filter(Material.id_tema == selected_tema_id)
+            interactions = filtered_query.order_by(
+                Interaccion.fecha_hora.desc(), Interaccion.id.desc()
+            ).all()
 
         breakdown_counts = {}
         for interaction in all_interactions:
@@ -1636,6 +1923,8 @@ def create_app(test_config: dict | None = None):
             periodos=available_periodos,
             selected_periodo_id=selected_periodo_id,
             periodo_breakdown=periodo_breakdown,
+            temas=available_temas,
+            selected_tema_id=selected_tema_id,
         )
 
     @app.route("/media/<token>")
@@ -1683,7 +1972,9 @@ def create_app(test_config: dict | None = None):
             .all()
         )
         sentences_by_material = {
-            m.id: material_sentences(m) for m in materials if m.es_oracion
+            m.id: material_sentences(m)
+            for m in materials
+            if m.es_oracion or m.es_oracion_imagen
         }
         return render_template(
             "material.html",
@@ -1883,6 +2174,22 @@ def create_app(test_config: dict | None = None):
             if not sentences:
                 return jsonify({"error": "No se encontró ninguna oración en el documento."}), 422
             return jsonify({"sentences": sentences})
+
+        if material_type == TIPO_ORACION_IMAGEN:
+            if not gemini_client and app.config.get("DEMO_MODE"):
+                return jsonify({"items": extract_demo_image_sentences(uploaded)})
+            if not gemini_client:
+                return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+            try:
+                items = extract_image_sentences(uploaded)
+            except Exception:
+                app.logger.exception("No se pudieron identificar las oraciones con Gemini")
+                return jsonify({"error": "No se pudieron identificar las oraciones con Gemini."}), 502
+            if not items:
+                return jsonify({
+                    "error": "No se encontró ninguna oración con dos sustantivos aptos en el documento."
+                }), 422
+            return jsonify({"items": items})
 
         if not gemini_client and app.config.get("DEMO_MODE"):
             transcribed_text, summary_text = process_demo_document(uploaded)
@@ -2148,6 +2455,216 @@ def create_app(test_config: dict | None = None):
 
         return jsonify({"title": title, "items": items})
 
+    # --- "Oraciones con imágenes": diseño (generar y aprobar las imágenes) ----
+    # Las imágenes se generan ANTES de guardar el material y viven en un
+    # directorio temporal (`_previews/<token>/`). La docente las revisa una a
+    # una, puede regenerar cualquiera, y al aprobar el diseño /api/material/save
+    # las mueve al material definitivo. Un token abandonado se borra solo por
+    # antigüedad (PREVIEW_STAGING_MAX_AGE_SECONDS).
+
+    def _previews_root() -> str:
+        return os.path.join(app.config["UPLOADS_ROOT"], PREVIEW_STAGING_DIRNAME)
+
+    def _staging_dir(token: str) -> str:
+        if not re.fullmatch(r"[0-9a-f]{32}", str(token or "")):
+            raise ValueError("Token de previsualización inválido.")
+        return os.path.join(_previews_root(), token)
+
+    def _sweep_stale_previews() -> None:
+        cutoff = time.time() - PREVIEW_STAGING_MAX_AGE_SECONDS
+        try:
+            names = os.listdir(_previews_root())
+        except OSError:
+            return
+        for name in names:
+            path = os.path.join(_previews_root(), name)
+            try:
+                if os.path.isdir(path) and os.path.getmtime(path) < cutoff:
+                    shutil.rmtree(path, ignore_errors=True)
+            except OSError:
+                pass
+
+    def _staging_image_name(sentence_index: int, noun_index: int) -> str:
+        return f"{sentence_index}-{noun_index}.png"
+
+    def _make_noun_image(palabra: str, oracion: str) -> bytes:
+        if not gemini_client and app.config.get("DEMO_MODE"):
+            return create_demo_noun_image(palabra, oracion)
+        return generate_noun_image(palabra, oracion=oracion)
+
+    def _image_sentences_ready() -> bool:
+        return bool(gemini_client) or bool(app.config.get("DEMO_MODE"))
+
+    def _staged_preview_payload(token: str, meta: dict) -> list[dict]:
+        payload = []
+        for index, oracion in enumerate(meta.get("oraciones", [])):
+            palabras = oracion.get("sustantivos", [])
+            payload.append({
+                "index": index,
+                "texto": oracion.get("texto", ""),
+                "plantilla": oracion.get("plantilla", ""),
+                "sustantivos": [
+                    {
+                        "palabra": palabra,
+                        "imagen_url": url_for(
+                            "image_sentence_preview_image",
+                            token=token,
+                            s=index,
+                            n=noun_index,
+                        ),
+                    }
+                    for noun_index, palabra in enumerate(palabras)
+                ],
+            })
+        return payload
+
+    @app.route("/api/material/image-sentences/prepare", methods=["POST"])
+    @login_required
+    def image_sentences_prepare():
+        """Genera las imágenes de cada sustantivo y las deja en revisión.
+        Cuerpo JSON: {title, items:[{texto, sustantivos:[a, b]}]}."""
+        payload = request.get_json(silent=True) or {}
+        raw_items = payload.get("items")
+        items = normalize_image_sentences(
+            raw_items if isinstance(raw_items, list) else [],
+            limit=MAX_IMAGE_DESIGN_SENTENCES,
+        )
+        if not items:
+            return jsonify({
+                "error": "Cada oración debe tener su texto y exactamente dos sustantivos."
+            }), 400
+
+        oraciones = []
+        for position, item in enumerate(items, start=1):
+            try:
+                plantilla = image_sentence_template(item["texto"], item["sustantivos"])
+            except ValueError as exc:
+                return jsonify({"error": f"Oración {position}: {exc}"}), 400
+            oraciones.append({
+                "texto": item["texto"],
+                "plantilla": plantilla,
+                "sustantivos": list(item["sustantivos"]),
+            })
+
+        if not _image_sentences_ready():
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+
+        _sweep_stale_previews()
+        token = uuid.uuid4().hex
+        staging = _staging_dir(token)
+        os.makedirs(staging, exist_ok=True)
+        try:
+            for sentence_index, oracion in enumerate(oraciones):
+                for noun_index, palabra in enumerate(oracion["sustantivos"]):
+                    data = _make_noun_image(palabra, oracion["texto"])
+                    with open(
+                        os.path.join(staging, _staging_image_name(sentence_index, noun_index)),
+                        "wb",
+                    ) as f:
+                        f.write(data)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            app.logger.exception("No se pudieron generar las imágenes de las oraciones")
+            return jsonify({"error": "No se pudieron generar las imágenes con Gemini."}), 502
+
+        meta = {
+            "created_at": utc_now().isoformat(),
+            "title": (payload.get("title") or "").strip(),
+            "oraciones": oraciones,
+        }
+        with open(os.path.join(staging, "meta.json"), "wb") as f:
+            f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+
+        return jsonify({"token": token, "items": _staged_preview_payload(token, meta)})
+
+    @app.route("/api/material/image-sentences/regenerate", methods=["POST"])
+    @login_required
+    def image_sentences_regenerate():
+        """Regenera una sola imagen del diseño en revisión. Cuerpo JSON:
+        {token, sentence_index, noun_index, palabra?}. Si `palabra` cambia, se
+        recalcula la plantilla de esa oración."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            staging = _staging_dir(payload.get("token"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        try:
+            with open(os.path.join(staging, "meta.json"), "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            return jsonify({
+                "error": "La previsualización expiró. Vuelve a generar el diseño."
+            }), 404
+
+        oraciones = meta.get("oraciones", [])
+        try:
+            sentence_index = int(payload.get("sentence_index"))
+            noun_index = int(payload.get("noun_index"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Índice de oración o sustantivo inválido."}), 400
+        if not (0 <= sentence_index < len(oraciones)) or noun_index not in (0, 1):
+            return jsonify({"error": "Índice de oración o sustantivo inválido."}), 400
+
+        if not _image_sentences_ready():
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+
+        oracion = oraciones[sentence_index]
+        nueva_palabra = " ".join(str(payload.get("palabra") or "").split())
+        if nueva_palabra and nueva_palabra != oracion["sustantivos"][noun_index]:
+            candidato = list(oracion["sustantivos"])
+            candidato[noun_index] = nueva_palabra
+            try:
+                oracion["plantilla"] = image_sentence_template(oracion["texto"], candidato)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            oracion["sustantivos"] = candidato
+            with open(os.path.join(staging, "meta.json"), "wb") as f:
+                f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+
+        palabra = oracion["sustantivos"][noun_index]
+        try:
+            data = _make_noun_image(palabra, oracion["texto"])
+        except Exception:
+            app.logger.exception("No se pudo regenerar la imagen del sustantivo")
+            return jsonify({"error": "No se pudo regenerar la imagen con Gemini."}), 502
+        with open(
+            os.path.join(staging, _staging_image_name(sentence_index, noun_index)), "wb"
+        ) as f:
+            f.write(data)
+
+        return jsonify({
+            "palabra": palabra,
+            "plantilla": oracion["plantilla"],
+            "imagen_url": url_for(
+                "image_sentence_preview_image",
+                token=payload.get("token"),
+                s=sentence_index,
+                n=noun_index,
+            ) + f"?v={secrets.token_hex(4)}",
+        })
+
+    @app.route(
+        "/api/material/image-sentences/preview/<token>/<int:s>/<int:n>", methods=["GET"]
+    )
+    @login_required
+    def image_sentence_preview_image(token, s, n):
+        try:
+            staging = _staging_dir(token)
+        except ValueError:
+            return jsonify({"error": "Imagen no encontrada."}), 404
+        path = os.path.join(staging, _staging_image_name(s, n))
+        try:
+            # Se lee a memoria (en vez de send_file) para no dejar el archivo
+            # abierto: /api/material/save borra este directorio justo después
+            # de aprobar el diseño y un handle vivo lo impediría en Windows.
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            return jsonify({"error": "Imagen no encontrada."}), 404
+        response = Response(data, mimetype="image/png")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.route("/api/material/save", methods=["POST"])
     @login_required
     def save_material():
@@ -2266,6 +2783,139 @@ def create_app(test_config: dict | None = None):
                 return jsonify({
                     "error": "El periodo o el tema indicado ya no está disponible. Vuelve a intentarlo."
                 }), 409
+            return jsonify({"material_id": material.id})
+
+        if material_type == TIPO_ORACION_IMAGEN:
+            sentences_json_raw = (request.form.get("sentences_json") or "").strip()
+            if not sentences_json_raw:
+                return jsonify({"error": "Escribe al menos una oración con dos sustantivos."}), 400
+            try:
+                parsed = json.loads(sentences_json_raw)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Las oraciones no tienen un formato JSON válido."}), 400
+            if not isinstance(parsed, list):
+                return jsonify({"error": "Las oraciones no tienen un formato JSON válido."}), 400
+
+            staging_token = (request.form.get("staging_token") or "").strip()
+
+            # `staging_index` (si viene) apunta al hueco del `_previews/<token>/`
+            # cuyas imágenes usar; permite que la docente haya quitado filas en
+            # el paso de diseño. Se conserva junto al item normalizado.
+            index_by_texto = {}
+            for raw in parsed if isinstance(parsed, list) else []:
+                if isinstance(raw, dict) and raw.get("texto"):
+                    key = " ".join(str(raw["texto"]).split()).casefold()
+                    if "staging_index" in raw:
+                        try:
+                            index_by_texto[key] = int(raw["staging_index"])
+                        except (TypeError, ValueError):
+                            pass
+
+            # Descarta las que la docente dejó sin exactamente dos sustantivos
+            # (mismo criterio que la extracción y la generación con IA).
+            items = normalize_image_sentences(
+                parsed,
+                limit=(
+                    MAX_IMAGE_DESIGN_SENTENCES if staging_token
+                    else MAX_IMAGE_SENTENCES_PER_MATERIAL
+                ),
+            )
+            if not items:
+                return jsonify({
+                    "error": "Cada oración debe tener su texto y exactamente dos sustantivos."
+                }), 400
+            total_chars = sum(
+                len(item["texto"]) + sum(len(n) for n in item["sustantivos"])
+                for item in items
+            )
+            if total_chars > MAX_SENTENCES_CHARS:
+                return jsonify({"error": "Las oraciones exceden el límite permitido."}), 413
+
+            # Con `staging_token`: flujo completo con imágenes ya aprobadas. Sin
+            # él: guardado simple, solo texto + sustantivos (cliente antiguo).
+            staging = None
+            if staging_token:
+                try:
+                    staging = _staging_dir(staging_token)
+                    with open(os.path.join(staging, "meta.json"), "r", encoding="utf-8") as f:
+                        staging_meta = json.load(f)
+                except (ValueError, OSError, json.JSONDecodeError):
+                    return jsonify({
+                        "error": "La previsualización expiró. Vuelve a generar el diseño."
+                    }), 400
+                staged_count = len(staging_meta.get("oraciones", []))
+
+            material_dir_name = uuid.uuid4().hex
+            material_dir = os.path.join(app.config["UPLOADS_ROOT"], material_dir_name)
+            os.makedirs(material_dir, exist_ok=True)
+
+            if staging:
+                oraciones_payload = []
+                img_dir = os.path.join(material_dir, "img")
+                os.makedirs(img_dir, exist_ok=True)
+                for position, item in enumerate(items):
+                    try:
+                        plantilla = image_sentence_template(item["texto"], item["sustantivos"])
+                    except ValueError as exc:
+                        shutil.rmtree(material_dir, ignore_errors=True)
+                        return jsonify({"error": f"Oración {position + 1}: {exc}"}), 400
+                    key = " ".join(item["texto"].split()).casefold()
+                    src_index = index_by_texto.get(key, position)
+                    if not (0 <= src_index < staged_count):
+                        shutil.rmtree(material_dir, ignore_errors=True)
+                        return jsonify({
+                            "error": f"Falta la imagen de la oración {position + 1}. "
+                                     "Vuelve a generar el diseño."
+                        }), 400
+                    sustantivos = []
+                    for noun_index, palabra in enumerate(item["sustantivos"]):
+                        src = os.path.join(
+                            staging, _staging_image_name(src_index, noun_index)
+                        )
+                        if not os.path.isfile(src):
+                            shutil.rmtree(material_dir, ignore_errors=True)
+                            return jsonify({
+                                "error": f"Falta la imagen de la oración {position + 1}. "
+                                         "Regénerala antes de aprobar."
+                            }), 400
+                        rel = f"img/{_staging_image_name(position, noun_index)}"
+                        shutil.copyfile(src, os.path.join(material_dir, rel))
+                        sustantivos.append({"palabra": palabra, "imagen": rel})
+                    oraciones_payload.append({
+                        "texto": item["texto"],
+                        "plantilla": plantilla,
+                        "sustantivos": sustantivos,
+                    })
+            else:
+                oraciones_payload = items
+
+            with open(os.path.join(material_dir, "oraciones.json"), "wb") as f:
+                f.write(json.dumps(oraciones_payload, ensure_ascii=False, indent=2).encode("utf-8"))
+
+            material = Material(
+                nombre_material=title,
+                tipo_material=TIPO_ORACION_IMAGEN,
+                path_preguntas=f"uploads/{material_dir_name}/oraciones.json",
+                path_texto=None,
+                path_texto_resumen=None,
+                path_audio=None,
+                path_audio_resumen=None,
+                fk_user=str(teacher["id"]),
+                id_periodo=material_periodo_id,
+                id_tema=material_tema_id,
+                fk_user_name=(str(teacher.get("raw_name") or teacher.get("name") or "").strip() or None),
+            )
+            db.session.add(material)
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                shutil.rmtree(material_dir, ignore_errors=True)
+                return jsonify({
+                    "error": "El periodo o el tema indicado ya no está disponible. Vuelve a intentarlo."
+                }), 409
+            if staging:
+                shutil.rmtree(staging, ignore_errors=True)
             return jsonify({"material_id": material.id})
 
         transcribed_text = (request.form.get("transcribed_text") or "").strip()
@@ -2407,16 +3057,101 @@ def create_app(test_config: dict | None = None):
         text left over from before oraciones were stored as a JSON file."""
         return value.startswith("uploads/") and value.endswith(".json")
 
-    def material_sentences(material) -> list[str]:
+    def _material_sentences_file(material):
+        """Raw JSON list stored at uploads/<id>/oraciones.json, or None for a
+        legacy `oracion` that still keeps plain text inline in path_preguntas."""
         raw = material.path_preguntas or ""
-        if stored_as_material_path(raw):
-            try:
-                with open(uploads_abspath(raw), "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except (OSError, json.JSONDecodeError):
-                return []
-            return normalize_sentences(data if isinstance(data, list) else [])
-        return split_text_into_sentences(raw)
+        if not stored_as_material_path(raw):
+            return None
+        try:
+            with open(uploads_abspath(raw), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return []
+        return data if isinstance(data, list) else []
+
+    def material_image_sentences(material) -> list[dict[str, object]]:
+        """Canonical form for an `oracion_imagen` material, tolerant of both
+        stored shapes:
+          - texto-only  {texto, sustantivos:["a","b"]}          (sin imágenes)
+          - con imágenes {texto, plantilla, sustantivos:[{palabra, imagen}]}
+        Returns [{texto, plantilla|None, sustantivos:[{palabra, imagen|None}]}].
+        `imagen` es la ruta relativa a la carpeta del material (p.ej.
+        "img/0-1.png") o None."""
+        rows = _material_sentences_file(material) or []
+        seen: set[str] = set()
+        out: list[dict[str, object]] = []
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            texto = " ".join(str(raw.get("texto") or "").split()).strip()
+            if not texto:
+                continue
+            sustantivos = []
+            for entry in raw.get("sustantivos") or []:
+                if isinstance(entry, dict):
+                    palabra = " ".join(str(entry.get("palabra") or "").split()).strip()
+                    imagen = str(entry.get("imagen") or "").strip() or None
+                else:
+                    palabra = " ".join(str(entry or "").split()).strip()
+                    imagen = None
+                if palabra:
+                    sustantivos.append({"palabra": palabra, "imagen": imagen})
+            if len(sustantivos) != 2:
+                continue
+            key = texto.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            plantilla = " ".join(str(raw.get("plantilla") or "").split()).strip() or None
+            out.append({"texto": texto, "plantilla": plantilla, "sustantivos": sustantivos})
+            if len(out) >= MAX_IMAGE_SENTENCES_PER_MATERIAL:
+                break
+        return out
+
+    def _material_image_url(material, sentence_index, noun_index):
+        scheme = "https" if app.config.get("PREFERRED_URL_SCHEME") == "https" else request.scheme
+        return url_for(
+            "download_material_image",
+            material_id=material.id,
+            s=sentence_index,
+            n=noun_index,
+            _external=True,
+            _scheme=scheme,
+        )
+
+    def serialize_image_sentences(material) -> list[dict[str, object]]:
+        """Robot-facing view of every sentence: the full text, the template with
+        {{0}}/{{1}} markers, and each noun with the authenticated URL of its
+        image (or None when the material was saved without images)."""
+        detalle = []
+        for index, oracion in enumerate(material_image_sentences(material)):
+            detalle.append({
+                "oracion_completa": oracion["texto"],
+                "plantilla": oracion["plantilla"] or oracion["texto"],
+                "sustantivos": [
+                    {
+                        "palabra": noun["palabra"],
+                        "imagen_url": (
+                            _material_image_url(material, index, noun_index)
+                            if noun["imagen"] else None
+                        ),
+                    }
+                    for noun_index, noun in enumerate(oracion["sustantivos"])
+                ],
+            })
+        return detalle
+
+    def material_sentences(material) -> list[str]:
+        # Una "oración con imágenes" guarda objetos {texto, sustantivos}; para
+        # los consumidores que solo quieren el texto (la tarjeta del listado)
+        # se devuelve la lista de textos.
+        if material.es_oracion_imagen:
+            return [item["texto"] for item in material_image_sentences(material)]
+        data = _material_sentences_file(material)
+        if data is not None:
+            return normalize_sentences(data)
+        return split_text_into_sentences(material.path_preguntas or "")
 
     def _material_resource_url(material, recurso):
         # Los `*_url` apuntan al endpoint autenticado del robot, no a
@@ -2438,16 +3173,31 @@ def create_app(test_config: dict | None = None):
             _scheme=scheme,
         )
 
+    def _material_classification(material):
+        return {
+            "id_periodo": material.id_periodo,
+            "id_tema": material.id_tema,
+            "periodo": (
+                {"id": material.periodo.id, "nombre": material.periodo.nombre}
+                if material.periodo else None
+            ),
+            "tema": (
+                {"id": material.tema.id, "nombre": material.tema.nombre}
+                if material.tema else None
+            ),
+        }
+
     def serialize_material(material):
-        if material.es_oracion:
+        if material.es_oracion or material.es_oracion_imagen:
             is_path = stored_as_material_path(material.path_preguntas or "")
-            return {
+            payload = {
                 "id": material.id,
                 "titulo": material.nombre_material,
                 "tipo_material": material.tipo_material,
                 "fecha_subido": material.fecha_subido.isoformat() if material.fecha_subido else None,
                 "fk_user": material.fk_user,
                 "docente": material.fk_user_name,
+                **_material_classification(material),
                 "oraciones": material_sentences(material),
                 "oraciones_url": (
                     _material_resource_url(material, "oraciones") if is_path else None
@@ -2459,6 +3209,13 @@ def create_app(test_config: dict | None = None):
                 "preguntas_url": None,
                 "preguntas": [],
             }
+            if material.es_oracion_imagen:
+                # Además del texto plano (clave `oraciones`, común a los dos
+                # tipos), el robot recibe por oración: el texto completo, la
+                # plantilla con marcadores {{0}}/{{1}} y la URL de la imagen de
+                # cada sustantivo, para armar la pantalla.
+                payload["oraciones_detalle"] = serialize_image_sentences(material)
+            return payload
         try:
             with open(uploads_abspath(material.path_preguntas), "r", encoding="utf-8") as f:
                 preguntas = json.load(f)
@@ -2471,6 +3228,7 @@ def create_app(test_config: dict | None = None):
             "fecha_subido": material.fecha_subido.isoformat() if material.fecha_subido else None,
             "fk_user": material.fk_user,
             "docente": material.fk_user_name,
+            **_material_classification(material),
             "texto_completo_url": _material_resource_url(material, "texto") if material.path_texto else None,
             "texto_resumen_url": _material_resource_url(material, "resumen") if material.path_texto_resumen else None,
             "audio_completo_url": _material_resource_url(material, "audio") if material.path_audio else None,
@@ -2547,6 +3305,81 @@ def create_app(test_config: dict | None = None):
         ).all()
         return jsonify([serialize_material(m) for m in materials])
 
+    def _resolve_teacher_ids(teacher_id: str, docente: str) -> list[str] | None:
+        """IDs institucionales (`fk_user`) a los que apunta la query del robot.
+        Con `teacher_id` es directo; con `docente` (el nombre) se resuelve a
+        partir de `material.fk_user_name`, así que una docente sin ningún
+        material no se puede ubicar solo por nombre. Devuelve None si no hay
+        forma de resolverla."""
+        if teacher_id:
+            return [teacher_id]
+        rows = (
+            db.session.query(Material.fk_user)
+            .filter(db.func.lower(Material.fk_user_name) == docente.lower())
+            .distinct()
+            .all()
+        )
+        ids = [row[0] for row in rows if row[0]]
+        return ids or None
+
+    def serialize_tema(tema, materiales_count=None):
+        return {
+            "id": tema.id,
+            "nombre": tema.nombre,
+            "fk_user": tema.fk_user,
+            "periodo": (
+                {
+                    "id": tema.periodo.id,
+                    "nombre": tema.periodo.nombre,
+                    "anio": tema.periodo.anio,
+                }
+                if tema.periodo
+                else None
+            ),
+            "materiales_count": materiales_count,
+        }
+
+    # Robot-side endpoint: los temas de una docente (para agrupar sus
+    # materiales en pantalla). Mismo control de acceso que /api/materials:
+    # secreto compartido + identificación de la docente (`teacher_id`/`dni` o
+    # `docente`). Filtro opcional `periodo={id}`.
+    @app.route("/api/temas", methods=["GET"])
+    def list_temas():
+        if not webhook_authorized():
+            return jsonify({"error": "Integración no autorizada."}), 401
+        teacher_id, docente = robot_teacher_query()
+        if not teacher_id and not docente:
+            return jsonify({
+                "error": "Falta identificar a la docente (docente o teacher_id)."
+            }), 400
+
+        teacher_ids = _resolve_teacher_ids(teacher_id, docente)
+        if not teacher_ids:
+            return jsonify([])
+
+        query = Tema.query.filter(Tema.fk_user.in_(teacher_ids))
+        raw_periodo = (request.args.get("periodo") or "").strip()
+        if raw_periodo:
+            try:
+                periodo_id = int(raw_periodo)
+            except (TypeError, ValueError):
+                return jsonify({"error": "El periodo indicado no es válido."}), 400
+            query = query.filter(Tema.id_periodo == periodo_id)
+
+        temas = query.order_by(Tema.id_periodo, Tema.nombre).all()
+
+        counts: dict[int, int] = {}
+        if temas:
+            rows = (
+                db.session.query(Material.id_tema, db.func.count(Material.id))
+                .filter(Material.id_tema.in_([t.id for t in temas]))
+                .group_by(Material.id_tema)
+                .all()
+            )
+            counts = {tema_id: total for tema_id, total in rows}
+
+        return jsonify([serialize_tema(t, counts.get(t.id, 0)) for t in temas])
+
     @app.route("/api/materials/<int:material_id>", methods=["GET"])
     def get_material(material_id):
         if not webhook_authorized():
@@ -2574,16 +3407,19 @@ def create_app(test_config: dict | None = None):
             return error
 
         if recurso == "oraciones":
-            if not material.es_oracion:
+            if not (material.es_oracion or material.es_oracion_imagen):
                 return jsonify({
                     "error": "Este material es un cuento; usa texto, resumen, audio, "
                              "audio-resumen o preguntas."
                 }), 404
-            return jsonify({"oraciones": material_sentences(material)})
+            payload = {"oraciones": material_sentences(material)}
+            if material.es_oracion_imagen:
+                payload["oraciones_detalle"] = serialize_image_sentences(material)
+            return jsonify(payload)
 
         if recurso not in MATERIAL_DOWNLOADS:
             return jsonify({"error": "Recurso de material no reconocido."}), 404
-        if material.es_oracion:
+        if material.es_oracion or material.es_oracion_imagen:
             return jsonify({
                 "error": "Este material es una oración; solo expone 'oraciones'."
             }), 404
@@ -2603,6 +3439,43 @@ def create_app(test_config: dict | None = None):
             mimetype=mimetype,
             as_attachment=True,
             download_name=download_name,
+        )
+
+    # Robot-side endpoint: descarga la imagen de un sustantivo de una "oración
+    # con imágenes" (`<oración>` y `<sustantivo>` son índices 0-based, tal como
+    # llegan en `oraciones_detalle`). Mismo control de acceso que el resto de
+    # la API del robot: secreto compartido + identificación de la docente dueña.
+    @app.route(
+        "/api/materials/<int:material_id>/imagen/<int:s>/<int:n>", methods=["GET"]
+    )
+    def download_material_image(material_id, s, n):
+        if not webhook_authorized():
+            return jsonify({"error": "Integración no autorizada."}), 401
+        material, error = robot_material_or_error(material_id, require_identifier=True)
+        if error:
+            return error
+        if not material.es_oracion_imagen:
+            return jsonify({"error": "Este material no tiene imágenes de oraciones."}), 404
+
+        oraciones = material_image_sentences(material)
+        if not (0 <= s < len(oraciones)) or n not in (0, 1):
+            return jsonify({"error": "Imagen de oración no encontrada."}), 404
+        rel = oraciones[s]["sustantivos"][n]["imagen"]
+        if not rel:
+            return jsonify({"error": "Esta oración se guardó sin imágenes."}), 404
+
+        base_dir = posixpath.dirname(str(material.path_preguntas or ""))
+        try:
+            abs_path = uploads_abspath(posixpath.join(base_dir, rel))
+        except ValueError:
+            return jsonify({"error": "Imagen de oración no encontrada."}), 404
+        if not os.path.isfile(abs_path):
+            return jsonify({"error": "Imagen de oración no encontrada."}), 404
+        return send_file(
+            abs_path,
+            mimetype="image/png",
+            as_attachment=True,
+            download_name=f"oracion_{s}_sustantivo_{n}.png",
         )
 
     def parse_optional_bool(value):

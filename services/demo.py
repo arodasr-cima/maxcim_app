@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import math
 import os
 import re
+import struct
 import wave
+import zlib
 
 from services.institutional import (
     AuthenticatedTeacher,
@@ -243,6 +246,53 @@ def extract_demo_sentences(file_storage) -> list[str]:
             seen.add(key)
             unique.append(sentence)
     return unique
+
+
+def _solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """Minimal solid-color PNG encoder (no Pillow dependency)."""
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    row = b"\x00" + bytes(rgb) * width
+    raw = row * height
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+def create_demo_noun_image(palabra: str, oracion: str = "") -> bytes:
+    """Deterministic placeholder PNG for DEMO_MODE: a solid tile whose color is
+    derived from the noun, so each one looks distinct without calling Gemini."""
+    digest = hashlib.sha256((palabra or "x").strip().lower().encode("utf-8")).digest()
+    # Pastel-ish: keep every channel in the upper half so it reads as a soft tile.
+    rgb = tuple(128 + (digest[i] % 128) for i in range(3))
+    return _solid_png(256, 256, rgb)
+
+
+def extract_demo_image_sentences(file_storage) -> list[dict]:
+    """Deterministic {texto, sustantivos:[a, b]} fixture for DEMO_MODE: reuses
+    the demo document text to decide how many sentences to return, then pairs
+    each with a fixed set of concrete, drawable nouns (mirrors how
+    extract_demo_sentences reuses the demo text for the plain `oracion` flow)."""
+    text, _summary = process_demo_document(file_storage)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    sentences: list[str] = []
+    for line in lines:
+        sentences.extend(
+            part.strip()
+            for part in re.split(r"(?<=[.!?…])\s+", line)
+            if part.strip()
+        )
+    count = max(3, min(6, len(sentences) or 3))
+    return create_demo_image_sentences("la lectura", "el aula", count)
 
 
 def process_demo_document(file_storage) -> tuple[str, str]:

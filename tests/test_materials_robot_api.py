@@ -233,3 +233,45 @@ def test_save_material_stamps_the_logged_in_teacher_name(app, client, static_tmp
 
     with app.app_context():
         assert db.session.get(Material, material_id).fk_user_name == "DOCENTE DE PRUEBAS"
+
+
+def test_list_temas_by_teacher_and_by_docente_name(app, client, periodo_tema):
+    p1, t1 = periodo_tema("I BIMESTRE", teacher_id=TEACHER)
+    p2, t2 = periodo_tema("II BIMESTRE", teacher_id=TEACHER)
+    periodo_tema("III BIMESTRE", teacher_id=OTHER_TEACHER)
+    with app.app_context():
+        # Un material en t1 (para contar) y para poder resolver por nombre.
+        db.session.add(Material(
+            nombre_material="Con tema", tipo_material=TIPO_ORACION,
+            path_preguntas="Hola.", fk_user=TEACHER, fk_user_name=DOCENTE,
+            id_periodo=p1, id_tema=t1,
+        ))
+        db.session.commit()
+
+    by_id = client.get(f"/api/temas?teacher_id={TEACHER}")
+    assert by_id.status_code == 200
+    body = by_id.get_json()
+    assert {t["id"] for t in body} == {t1, t2}
+    assert all(t["fk_user"] == TEACHER for t in body)
+    counts = {t["id"]: t["materiales_count"] for t in body}
+    assert counts == {t1: 1, t2: 0}
+    periodo = next(t["periodo"] for t in body if t["id"] == t1)
+    assert periodo["id"] == p1 and periodo["nombre"] == "I BIMESTRE" and "anio" in periodo
+
+    # `docente` (nombre) se resuelve vía material.fk_user_name, sin distinguir may.
+    by_name = client.get(f"/api/temas?docente={DOCENTE.upper()}")
+    assert {t["id"] for t in by_name.get_json()} == {t1, t2}
+
+    # Filtro opcional por periodo.
+    assert [t["id"] for t in client.get(
+        f"/api/temas?teacher_id={TEACHER}&periodo={p2}"
+    ).get_json()] == [t2]
+
+
+def test_list_temas_requires_identifier_and_isolates_by_teacher(app, client, periodo_tema):
+    assert client.get("/api/temas").status_code == 400
+
+    periodo_tema("I BIMESTRE", teacher_id=OTHER_TEACHER)
+    # Docente sin temas propios ni materiales: lista vacía, no error.
+    assert client.get(f"/api/temas?teacher_id={TEACHER}").get_json() == []
+    assert client.get("/api/temas?docente=Nadie Conocido").get_json() == []

@@ -21,9 +21,58 @@ interacciones con los alumnos. Vive dentro de la misma app Flask
 
 | Método y ruta | Para qué sirve |
 |---|---|
-| `GET /api/materials?teacher_id={id}` (o `docente={nombre}`) | Listar materiales de una docente. Filtro opcional `tipo=cuento\|oracion` |
-| `GET /api/materials/{id}` | Obtener metadatos de un material (cuento u oración) |
-| `GET /api/materials/{id}/{recurso}` | Descargar un recurso del material: `texto`, `resumen`, `audio`, `audio-resumen`, `preguntas` (cuentos) u `oraciones` (oraciones) |
+| `GET /api/materials?teacher_id={id}` (o `docente={nombre}`) | Listar materiales de una docente. Filtro opcional `tipo=cuento\|oracion\|oracion_imagen` |
+| `GET /api/temas?teacher_id={id}` (o `docente={nombre}`) | Listar los temas de una docente. Filtro opcional `periodo={id}` |
+| `GET /api/materials/{id}` | Obtener metadatos de un material (cuento, oración u oración con imágenes) |
+| `GET /api/materials/{id}/{recurso}` | Descargar un recurso del material: `texto`, `resumen`, `audio`, `audio-resumen`, `preguntas` (cuentos) u `oraciones` (oraciones y oraciones con imágenes) |
+| `GET /api/materials/{id}/imagen/{oración}/{sustantivo}` | Descargar el PNG de un sustantivo de una "oración con imágenes" (índices 0-based tal como llegan en `oraciones_detalle`) |
+
+### Temas de una docente
+
+`GET /api/temas?teacher_id={id}` devuelve los temas con los que la docente
+organiza su material, ordenados por periodo y nombre:
+
+```json
+[
+  {
+    "id": 3,
+    "nombre": "Animales",
+    "fk_user": "1000001",
+    "periodo": {"id": 2, "nombre": "II BIMESTRE", "anio": 2026},
+    "materiales_count": 5
+  }
+]
+```
+
+Acepta `docente={nombre}` como alternativa a `teacher_id`, pero el nombre se
+resuelve a partir de `material.fk_user_name`: una docente sin ningún material
+no se puede ubicar solo por nombre (responde `[]`). Filtro opcional
+`periodo={id}`.
+
+Cada material de `GET /api/materials` incluye `id_periodo` e `id_tema`, así que
+el robot puede agrupar la lista de materiales por tema usando este endpoint.
+
+### Oraciones con imágenes (`tipo_material: "oracion_imagen"`)
+
+`GET /api/materials/{id}` y `GET /api/materials/{id}/oraciones` incluyen
+`oraciones` (lista de textos completos, igual que una `oracion`) y además
+`oraciones_detalle`, con una entrada por oración:
+
+```json
+{
+  "oracion_completa": "El niño monta en su bicicleta azul.",
+  "plantilla": "El {{0}} monta en su {{1}} azul.",
+  "sustantivos": [
+    {"palabra": "niño",      "imagen_url": "https://.../api/materials/12/imagen/0/0"},
+    {"palabra": "bicicleta", "imagen_url": "https://.../api/materials/12/imagen/0/1"}
+  ]
+}
+```
+
+El robot arma la pantalla sustituyendo `{{0}}` / `{{1}}` en `plantilla` por la
+imagen de `sustantivos[0]` / `sustantivos[1]`. `imagen_url` es `null` si el
+material se guardó sin imágenes; las URLs de imagen exigen el mismo secreto y
+la identificación de la docente que el resto de la API.
 | `POST /api/interacciones` | Registrar un turno de pregunta/respuesta, subiendo el audio de la respuesta |
 | `GET /api/interacciones/{id}/audio` | Descargar el audio de una respuesta ya registrada |
 | `GET /api/interacciones?id_material={id}&fk_alumno={id}` | Consultar historial de interacciones (se exige al menos uno de los dos filtros) |

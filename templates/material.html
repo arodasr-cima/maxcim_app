@@ -24,7 +24,7 @@
 <div class="overlay" id="storyOverlay">
   <form class="story-modal" id="storyForm">
     <div class="upload-modal__title" id="storyModalTitle">Crear un cuento con IA</div>
-    <p class="story-modal__description" id="storyModalDescription">El docente define los datos del cuento y la IA prepara un borrador editable.</p>
+    <p class="story-modal__description" id="storyModalDescription">Define aquí los datos del cuento y la IA prepara un borrador editable.</p>
 
     <div class="upload-modal__type-toggle" role="tablist" aria-label="Tipo de contenido a generar">
       <button type="button" class="upload-modal__type-btn is-active" id="storyTypeCuentoBtn" data-type="cuento" role="tab" aria-selected="true">📖 Cuento</button>
@@ -133,17 +133,6 @@
   </div>
 </div>
 
-<div class="overlay" id="imageSentencesOverlay">
-  <div class="upload-modal image-sentences-modal">
-    <div class="upload-modal__title">Oraciones propuestas</div>
-    <p class="upload-modal__hint" id="imageSentencesSubtitle">Cada oración tiene dos sustantivos marcados que luego se reemplazarán por imágenes. Revísalas antes de continuar.</p>
-    <ol class="image-sentences-list" id="imageSentencesList"></ol>
-    <div class="upload-modal__actions">
-      <button type="button" class="btn btn--primary" id="imageSentencesCloseBtn">Cerrar</button>
-    </div>
-  </div>
-</div>
-
 <div class="overlay" id="deleteOverlay">
   <div class="upload-modal">
     <div class="upload-modal__title">Eliminar material</div>
@@ -180,8 +169,8 @@
           <div class="result-block__box result-block__box--short" id="resultSummaryText" contenteditable="true" spellcheck="false"></div>
         </div>
         <div class="result-block" id="resultSentencesBlock" hidden>
-          <div class="result-block__label">Oraciones identificadas por la IA</div>
-          <p class="questions-review-note">La miss puede corregir cada oración; deja vacías las que no quiera guardar.</p>
+          <div class="result-block__label" id="resultSentencesLabel">Oraciones para revisar</div>
+          <p class="questions-review-note" id="resultSentencesNote">Corrige cada oración; deja vacías las que no quieras guardar.</p>
           <ol class="sentences-review" id="resultSentencesList"></ol>
           <div class="sentences-review__actions">
             <button type="button" class="btn btn--ghost" id="addSentenceBtn">+ Agregar oración</button>
@@ -212,7 +201,7 @@
 
       <div class="result-col" id="resultQuestionsColumn">
         <div class="result-col__title">Preguntas y respuestas esperadas</div>
-        <p class="questions-review-note">Gemini propone. La miss debe revisar y puede modificar todo antes de aprobar.</p>
+        <p class="questions-review-note">Gemini propone. Revisa y modifica lo que necesites antes de aprobar.</p>
         {% for q in question_configuration %}
         <div class="question-row question-row--{{ q.key }}">
           <div class="question-row__label">{{ q.label }}</div>
@@ -260,6 +249,32 @@
     <div class="result-modal__footer">
       <button type="button" class="btn btn--ghost" id="resultCancelBtn">Cancelar</button>
       <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Aprobar y guardar</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="imageDesignOverlay">
+  <div class="upload-modal image-design" role="dialog" aria-modal="true" aria-labelledby="imageDesignTitle">
+    <div class="upload-modal__title" id="imageDesignTitle">Diseño de las oraciones con imágenes</div>
+    <p class="upload-modal__hint image-design__intro">Revisa cada oración, ajusta sus palabras y regenera las imágenes que necesites.</p>
+
+    <div class="image-design__nav" aria-label="Navegación entre oraciones">
+      <button type="button" class="btn btn--ghost" id="imageDesignPrevBtn">Anterior</button>
+      <span class="image-design__counter" id="imageDesignCounter" aria-live="polite">Oración 0 de 0</span>
+      <button type="button" class="btn btn--ghost" id="imageDesignNextBtn">Siguiente</button>
+    </div>
+
+    <div class="image-design__stage" id="imageDesignStage" hidden>
+      <div class="image-design__line" id="imageDesignMixedLine" aria-label="Vista previa de la oración con imágenes"></div>
+      <div class="image-design__noun-controls" id="imageDesignNounControls"></div>
+      <button type="button" class="image-design__remove" id="imageDesignRemoveBtn">Quitar esta oración</button>
+    </div>
+    <p class="image-design__empty" id="imageDesignEmpty" hidden>No quedan oraciones en el diseño. Vuelve para agregar otra antes de guardar.</p>
+
+    <div class="image-design__footer">
+      <button type="button" class="btn btn--ghost" id="imageDesignBackBtn">Volver</button>
+      <button type="button" class="btn btn--ghost image-design__discard" id="imageDesignDiscardBtn">Descartar</button>
+      <button type="button" class="btn btn--primary" id="imageDesignSaveBtn" disabled>Aprobar y guardar</button>
     </div>
   </div>
 </div>

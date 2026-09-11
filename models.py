@@ -14,14 +14,16 @@ def _utc_now() -> datetime:
 
 
 # Valores permitidos de `material.tipo_material` (ver bd_app.sql). Un cuento
-# usa todas las rutas; una oración solo guarda su texto en `path_preguntas`.
+# usa todas las rutas; una oración (con o sin imágenes) solo guarda su
+# contenido en `path_preguntas`, apuntando a un JSON en uploads/<id>/.
 TIPO_CUENTO = "cuento"
 TIPO_ORACION = "oracion"
-# ponytail: "oraciones con imágenes" por ahora solo existe en la UI (filtro y
-# pestañas del modal). Cuando se implemente el backend, añadir a TIPOS_MATERIAL
-# y a las rutas process_material / save_material.
+# "Oraciones con imágenes": cada oración lleva exactamente dos sustantivos
+# concretos (dibujables) que más adelante se reemplazan por imágenes. Se
+# guarda como una lista JSON de objetos {texto, sustantivos:[a, b]} en
+# uploads/<id>/oraciones.json (una `oracion` guarda ahí una lista de strings).
 TIPO_ORACION_IMAGEN = "oracion_imagen"
-TIPOS_MATERIAL = (TIPO_CUENTO, TIPO_ORACION)
+TIPOS_MATERIAL = (TIPO_CUENTO, TIPO_ORACION, TIPO_ORACION_IMAGEN)
 
 
 class Periodo(db.Model):
