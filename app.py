@@ -934,8 +934,8 @@ def format_period_label(today: date) -> str:
 # Umbrales de la barra "Resultados por material" del avance de aula: el color
 # es la severidad del acierto (bueno/atención/bajo), nunca una identidad de
 # serie, así que son fijos y no se mezclan con ninguna otra paleta de la app.
-MATERIAL_PROGRESS_GOOD_THRESHOLD = 75
-MATERIAL_PROGRESS_WARNING_THRESHOLD = 40
+MATERIAL_PROGRESS_GOOD_THRESHOLD = 56
+MATERIAL_PROGRESS_WARNING_THRESHOLD = 31
 
 
 def material_progress_rows(student_interactions: list) -> list[dict]:

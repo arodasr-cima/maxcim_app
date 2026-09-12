@@ -145,7 +145,8 @@ def test_material_progress_rows_groups_by_material_and_grades_severity():
         FakeInteraction(2, material_regular, False),  # 1/2 = 50% -> warning
         FakeInteraction(3, material_bajo, False),
         FakeInteraction(3, material_bajo, False),
-        FakeInteraction(3, material_bajo, True),  # 1/3 = 33% -> danger
+        FakeInteraction(3, material_bajo, False),
+        FakeInteraction(3, material_bajo, True),  # 1/4 = 25% -> danger
         FakeInteraction(None, None, True),  # Conversación: 1/1 = 100% -> good
     ]
 
@@ -158,7 +159,7 @@ def test_material_progress_rows_groups_by_material_and_grades_severity():
     }
     assert by_name["Material regular"]["percent"] == 50
     assert by_name["Material regular"]["severity"] == "warning"
-    assert by_name["Material bajo"]["percent"] == 33
+    assert by_name["Material bajo"]["percent"] == 25
     assert by_name["Material bajo"]["severity"] == "danger"
     assert by_name["Conversación"]["is_conversation"] is True
     assert by_name["Conversación"]["severity"] == "good"

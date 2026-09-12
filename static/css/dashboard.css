@@ -3877,27 +3877,27 @@ body {
 }
 
 .material-progress--good .material-progress__track {
-  background: #e9f7ef;
+  background: #d7f7e0;
 }
 
 .material-progress--good .material-progress__fill {
-  background: #1f9d55;
+  background: #00c853;
 }
 
 .material-progress--warning .material-progress__track {
-  background: #fdf3e2;
+  background: #fff4c2;
 }
 
 .material-progress--warning .material-progress__fill {
-  background: #d97706;
+  background: #ffd400;
 }
 
 .material-progress--danger .material-progress__track {
-  background: #fdf1f1;
+  background: #ffe0dd;
 }
 
 .material-progress--danger .material-progress__fill {
-  background: #d64545;
+  background: #ff3b30;
 }
 
 /* Turno sin material: una conversación libre del alumno con MAXCIM. */
