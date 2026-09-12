@@ -10,3 +10,9 @@ static/uploads/
 # Informes de auditoría: documentan vulnerabilidades reales sin parchear,
 # nunca deben quedar versionados.
 SECURITY_AUDIT*.md
+
+# Seeders contra un servidor remoto: llevan un bloque LOCAL_* al inicio
+# pensado para pegar ahí la credencial real (host/usuario/clave del MySQL
+# remoto), así que nunca deben quedar versionados.
+seed_interacciones_remote.py
+seed_periodos_remote.py

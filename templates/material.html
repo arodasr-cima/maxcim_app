@@ -122,6 +122,11 @@
       <input type="file" id="uploadFileInput" accept=".doc,.docx,.txt,.pdf" hidden>
     </label>
 
+    <div class="upload-modal__manual" id="uploadManualOption" hidden>
+      <span class="upload-modal__manual-divider">o</span>
+      <button type="button" class="btn btn--ghost upload-modal__manual-btn" id="manualEditorOpenBtn">✏️ Modo editor: escribir las oraciones a mano</button>
+    </div>
+
     <div class="upload-modal__row">
       <input type="text" class="upload-modal__input" id="uploadTitleInput" placeholder="Título del cuento">
     </div>
@@ -154,7 +159,7 @@
 
 <div class="overlay" id="resultOverlay">
   <div class="result-modal">
-    <div class="result-modal__title">Contenido generado</div>
+    <div class="result-modal__title editable-title" id="resultModalTitle" contenteditable="true" spellcheck="false" role="textbox" aria-label="Nombre del material" title="Toca para editar el nombre del material">Contenido generado</div>
     <div class="result-modal__subtitle" id="resultSubtitle">A partir del documento original</div>
 
     <div class="result-modal__columns">
@@ -255,8 +260,8 @@
 
 <div class="overlay" id="imageDesignOverlay">
   <div class="upload-modal image-design" role="dialog" aria-modal="true" aria-labelledby="imageDesignTitle">
-    <div class="upload-modal__title" id="imageDesignTitle">Diseño de las oraciones con imágenes</div>
-    <p class="upload-modal__hint image-design__intro">Revisa cada oración, ajusta sus palabras y regenera las imágenes que necesites.</p>
+    <div class="upload-modal__title editable-title" id="imageDesignTitle" contenteditable="true" spellcheck="false" role="textbox" aria-label="Nombre del material" title="Toca para editar el nombre del material">Diseño de las oraciones con imágenes</div>
+    <p class="upload-modal__hint image-design__intro">Revisa cada oración, ajusta sus palabras y elige si quieres regenerar o subir tus propias imágenes.</p>
 
     <div class="image-design__nav" aria-label="Navegación entre oraciones">
       <button type="button" class="btn btn--ghost" id="imageDesignPrevBtn">Anterior</button>

@@ -10,6 +10,7 @@ import secrets
 import shutil
 import tempfile
 import time
+import unicodedata
 import uuid
 import wave
 from datetime import UTC, date, datetime, timedelta
@@ -34,6 +35,7 @@ from flask import (
 )
 from google import genai
 from google.genai import types
+from PIL import Image, UnidentifiedImageError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import contains_eager
 
@@ -266,6 +268,15 @@ NOUN_IMAGE_STYLE_PROMPT = (
 # o cuando superan esta antigüedad.
 PREVIEW_STAGING_DIRNAME = "_previews"
 PREVIEW_STAGING_MAX_AGE_SECONDS = 6 * 3600
+
+# Alternativa a la generación con IA: la docente puede subir su propia
+# imagen para un sustantivo (ver /api/material/image-sentences/upload-image).
+# El nombre y formato originales del archivo son indiferentes -nunca se
+# confía en ellos-: se decodifica con Pillow y se vuelve a codificar como
+# PNG, lo que de paso descarta cualquier archivo que no sea realmente una
+# imagen y limita su tamaño en memoria.
+MAX_NOUN_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024
+NOUN_IMAGE_MAX_DIMENSION = 1024
 
 QUESTION_TYPES = ["literales", "inferenciales", "criticas"]
 QUESTION_TYPE_DESCRIPTIONS = {
@@ -514,6 +525,67 @@ def image_sentence_template(texto: str, palabras: list[str]) -> str:
                 f"El sustantivo «{needle}» no aparece tal cual en la oración."
             )
     return plantilla
+
+
+def _slugify_noun(word: str) -> str:
+    """Nombre de archivo seguro a partir de un sustantivo, p.ej. "camión" ->
+    "camion". Cadena vacía si no queda ningún carácter usable (el llamador
+    cae entonces al identificador posicional de siempre)."""
+    ascii_only = unicodedata.normalize("NFKD", word or "").encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "-", ascii_only.lower()).strip("-")[:40]
+
+
+def _unique_noun_filename(word: str, position: int, noun_index: int, used: set[str]) -> str:
+    """Nombre final (dentro de `img/`) para la imagen de un sustantivo: el
+    propio sustantivo si produce un nombre de archivo válido y no choca con
+    otro ya usado en este material («pollo.png»), o si no, el identificador
+    posicional de siempre («2-0.png», igual que en el directorio de
+    previsualización). Muta `used` para que la próxima llamada no repita
+    nombre -dos oraciones pueden compartir un sustantivo pero llevar
+    imágenes distintas."""
+    base = _slugify_noun(word) or f"{position}-{noun_index}"
+    name = f"{base}.png"
+    suffix = 2
+    while name in used:
+        name = f"{base}-{suffix}.png"
+        suffix += 1
+    used.add(name)
+    return name
+
+
+def normalize_uploaded_noun_image(file_storage) -> bytes:
+    """Valida que el archivo que subió la docente para un sustantivo sea
+    realmente una imagen -nunca se confía en su extensión ni en el
+    Content-Type que declaró el navegador- y la re-codifica como PNG, igual
+    formato que las que genera Gemini. Lanza ValueError con un mensaje apto
+    para mostrar si el archivo está vacío, es demasiado grande o no es una
+    imagen decodificable."""
+    raw = file_storage.read()
+    if not raw:
+        raise ValueError("El archivo está vacío.")
+    if len(raw) > MAX_NOUN_IMAGE_UPLOAD_BYTES:
+        raise ValueError(
+            f"La imagen supera el tamaño máximo permitido "
+            f"({MAX_NOUN_IMAGE_UPLOAD_BYTES // (1024 * 1024)} MB)."
+        )
+    try:
+        # verify() detecta corrupción sin decodificar los píxeles, pero deja
+        # el objeto inutilizable para lo que sigue -por eso se reabre.
+        Image.open(io.BytesIO(raw)).verify()
+        img = Image.open(io.BytesIO(raw))
+        img.load()
+    except Exception as exc:
+        raise ValueError("El archivo no es una imagen válida.") from exc
+
+    if img.width <= 0 or img.height <= 0:
+        raise ValueError("El archivo no es una imagen válida.")
+    if img.width > NOUN_IMAGE_MAX_DIMENSION or img.height > NOUN_IMAGE_MAX_DIMENSION:
+        img.thumbnail((NOUN_IMAGE_MAX_DIMENSION, NOUN_IMAGE_MAX_DIMENSION), Image.LANCZOS)
+    img = img.convert("RGBA" if "A" in img.getbands() else "RGB")
+
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
 
 
 def generate_noun_image(palabra: str, *, oracion: str = "") -> bytes:
@@ -2495,6 +2567,14 @@ def create_app(test_config: dict | None = None):
     def _image_sentences_ready() -> bool:
         return bool(gemini_client) or bool(app.config.get("DEMO_MODE"))
 
+    def _noun_source(oracion: dict, noun_index: int) -> str:
+        """"ia" o "manual", según si la imagen actual de ese sustantivo vino
+        de Gemini o de un archivo que subió la docente. Solo es informativo
+        para la consola (p.ej. una insignia en el diseño); el material
+        guardado no distingue el origen de cada imagen."""
+        fuentes = oracion.get("fuentes") or []
+        return fuentes[noun_index] if noun_index < len(fuentes) else "ia"
+
     def _staged_preview_payload(token: str, meta: dict) -> list[dict]:
         payload = []
         for index, oracion in enumerate(meta.get("oraciones", [])):
@@ -2506,6 +2586,7 @@ def create_app(test_config: dict | None = None):
                 "sustantivos": [
                     {
                         "palabra": palabra,
+                        "fuente": _noun_source(oracion, noun_index),
                         "imagen_url": url_for(
                             "image_sentence_preview_image",
                             token=token,
@@ -2517,6 +2598,23 @@ def create_app(test_config: dict | None = None):
                 ],
             })
         return payload
+
+    def _apply_noun_word_change(
+        meta: dict, staging: str, oracion: dict, noun_index: int, nueva_palabra: str
+    ) -> None:
+        """Si `nueva_palabra` viene y difiere de la actual, la aplica y
+        recalcula la plantilla de la oración; persiste meta.json. Compartido
+        por /regenerate y /upload-image: ambas pueden cambiar la palabra a
+        la vez que reemplazan su imagen. Lanza ValueError (mensaje apto para
+        mostrar) si la nueva palabra no aparece tal cual en la oración."""
+        if not nueva_palabra or nueva_palabra == oracion["sustantivos"][noun_index]:
+            return
+        candidato = list(oracion["sustantivos"])
+        candidato[noun_index] = nueva_palabra
+        oracion["plantilla"] = image_sentence_template(oracion["texto"], candidato)
+        oracion["sustantivos"] = candidato
+        with open(os.path.join(staging, "meta.json"), "wb") as f:
+            f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
 
     @app.route("/api/material/image-sentences/prepare", methods=["POST"])
     @login_required
@@ -2544,6 +2642,7 @@ def create_app(test_config: dict | None = None):
                 "texto": item["texto"],
                 "plantilla": plantilla,
                 "sustantivos": list(item["sustantivos"]),
+                "fuentes": ["ia", "ia"],
             })
 
         if not _image_sentences_ready():
@@ -2610,16 +2709,10 @@ def create_app(test_config: dict | None = None):
 
         oracion = oraciones[sentence_index]
         nueva_palabra = " ".join(str(payload.get("palabra") or "").split())
-        if nueva_palabra and nueva_palabra != oracion["sustantivos"][noun_index]:
-            candidato = list(oracion["sustantivos"])
-            candidato[noun_index] = nueva_palabra
-            try:
-                oracion["plantilla"] = image_sentence_template(oracion["texto"], candidato)
-            except ValueError as exc:
-                return jsonify({"error": str(exc)}), 400
-            oracion["sustantivos"] = candidato
-            with open(os.path.join(staging, "meta.json"), "wb") as f:
-                f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+        try:
+            _apply_noun_word_change(meta, staging, oracion, noun_index, nueva_palabra)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
         palabra = oracion["sustantivos"][noun_index]
         try:
@@ -2631,13 +2724,83 @@ def create_app(test_config: dict | None = None):
             os.path.join(staging, _staging_image_name(sentence_index, noun_index)), "wb"
         ) as f:
             f.write(data)
+        oracion.setdefault("fuentes", ["ia", "ia"])[noun_index] = "ia"
+        with open(os.path.join(staging, "meta.json"), "wb") as f:
+            f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
 
         return jsonify({
             "palabra": palabra,
             "plantilla": oracion["plantilla"],
+            "fuente": "ia",
             "imagen_url": url_for(
                 "image_sentence_preview_image",
                 token=payload.get("token"),
+                s=sentence_index,
+                n=noun_index,
+            ) + f"?v={secrets.token_hex(4)}",
+        })
+
+    @app.route("/api/material/image-sentences/upload-image", methods=["POST"])
+    @login_required
+    def image_sentences_upload_image():
+        """Reemplaza, con una imagen que sube la docente, la de un sustantivo
+        del diseño en revisión -alternativa a "regenerar con IA"
+        (/image-sentences/regenerate). Cuerpo multipart/form-data: token,
+        sentence_index, noun_index, palabra? (igual que regenerate) y el
+        archivo en el campo `imagen`. El nombre original del archivo no
+        importa -se descarta-: la imagen final, al aprobar el diseño, se
+        nombra según el sustantivo (ver _unique_noun_filename en /save)."""
+        try:
+            staging = _staging_dir(request.form.get("token"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        try:
+            with open(os.path.join(staging, "meta.json"), "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            return jsonify({
+                "error": "La previsualización expiró. Vuelve a generar el diseño."
+            }), 404
+
+        oraciones = meta.get("oraciones", [])
+        try:
+            sentence_index = int(request.form.get("sentence_index"))
+            noun_index = int(request.form.get("noun_index"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Índice de oración o sustantivo inválido."}), 400
+        if not (0 <= sentence_index < len(oraciones)) or noun_index not in (0, 1):
+            return jsonify({"error": "Índice de oración o sustantivo inválido."}), 400
+
+        uploaded = request.files.get("imagen")
+        if not uploaded or not (uploaded.filename or "").strip():
+            return jsonify({"error": "Selecciona un archivo de imagen."}), 400
+        try:
+            data = normalize_uploaded_noun_image(uploaded)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        oracion = oraciones[sentence_index]
+        nueva_palabra = " ".join(str(request.form.get("palabra") or "").split())
+        try:
+            _apply_noun_word_change(meta, staging, oracion, noun_index, nueva_palabra)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        with open(
+            os.path.join(staging, _staging_image_name(sentence_index, noun_index)), "wb"
+        ) as f:
+            f.write(data)
+        oracion.setdefault("fuentes", ["ia", "ia"])[noun_index] = "manual"
+        with open(os.path.join(staging, "meta.json"), "wb") as f:
+            f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+
+        return jsonify({
+            "palabra": oracion["sustantivos"][noun_index],
+            "plantilla": oracion["plantilla"],
+            "fuente": "manual",
+            "imagen_url": url_for(
+                "image_sentence_preview_image",
+                token=request.form.get("token"),
                 s=sentence_index,
                 n=noun_index,
             ) + f"?v={secrets.token_hex(4)}",
@@ -2853,6 +3016,14 @@ def create_app(test_config: dict | None = None):
                 oraciones_payload = []
                 img_dir = os.path.join(material_dir, "img")
                 os.makedirs(img_dir, exist_ok=True)
+                # Nombres de archivo finales: preferimos el propio sustantivo
+                # ("pollo.png") sobre el identificador posicional de la
+                # previsualización, tanto para las imágenes generadas por IA
+                # como para las que subió la docente -da igual el nombre con
+                # el que llegó el archivo. `used_names` evita que dos
+                # sustantivos iguales en oraciones distintas (con imágenes
+                # distintas) choquen en el mismo nombre.
+                used_names: set[str] = set()
                 for position, item in enumerate(items):
                     try:
                         plantilla = image_sentence_template(item["texto"], item["sustantivos"])
@@ -2878,7 +3049,7 @@ def create_app(test_config: dict | None = None):
                                 "error": f"Falta la imagen de la oración {position + 1}. "
                                          "Regénerala antes de aprobar."
                             }), 400
-                        rel = f"img/{_staging_image_name(position, noun_index)}"
+                        rel = f"img/{_unique_noun_filename(palabra, position, noun_index, used_names)}"
                         shutil.copyfile(src, os.path.join(material_dir, rel))
                         sustantivos.append({"palabra": palabra, "imagen": rel})
                     oraciones_payload.append({

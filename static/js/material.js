@@ -99,11 +99,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const dropzone = document.getElementById("dropzone");
   const dropzoneText = document.getElementById("dropzoneText");
   const dropzoneHint = document.getElementById("dropzoneHint");
+  const uploadManualOption = document.getElementById("uploadManualOption");
+  const manualEditorOpenBtn = document.getElementById("manualEditorOpenBtn");
   const loadingOverlay = document.getElementById("loadingOverlay");
   const loadingSpinner = document.getElementById("loadingSpinner");
   const loadingText = document.getElementById("loadingText");
   const loadingCloseBtn = document.getElementById("loadingCloseBtn");
   const resultOverlay = document.getElementById("resultOverlay");
+  const resultModalTitle = document.getElementById("resultModalTitle");
   const resultDoneBtn = document.getElementById("resultDoneBtn");
   const resultCancelBtn = document.getElementById("resultCancelBtn");
   const resultSubtitle = document.getElementById("resultSubtitle");
@@ -137,6 +140,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const resultAudioColumn = document.getElementById("resultAudioColumn");
   const resultQuestionsColumn = document.getElementById("resultQuestionsColumn");
   const imageDesignOverlay = document.getElementById("imageDesignOverlay");
+  const imageDesignTitle = document.getElementById("imageDesignTitle");
   const imageDesignPrevBtn = document.getElementById("imageDesignPrevBtn");
   const imageDesignNextBtn = document.getElementById("imageDesignNextBtn");
   const imageDesignCounter = document.getElementById("imageDesignCounter");
@@ -157,6 +161,13 @@ document.addEventListener("DOMContentLoaded", () => {
   let lastSentenceContext = { topic: "", grade_level: "" };
   let currentUploadType = "cuento";
   let currentResultType = "cuento";
+  // "Modo editor": la docente escribe las oraciones a mano, sin documento ni
+  // IA. `manualEntryMode` es válido para "oracion" y "oracion_imagen";
+  // `manualImageEntryMode` además activa, solo para esta última, las 2
+  // imágenes por oración que sube ella misma (ver appendImageSentenceItem)
+  // -diseño únicamente por ahora, sin guardado todavía.
+  let manualEntryMode = false;
+  let manualImageEntryMode = false;
   let currentMaterialTitle = "";
   let audioFullReady = false;
   let audioSummaryReady = false;
@@ -221,6 +232,9 @@ document.addEventListener("DOMContentLoaded", () => {
     dropzoneHint.textContent = type === "oracion_imagen"
       ? "DOC, TXT o PDF con una oración por línea - máx. 50 MB"
       : "DOC, TXT o PDF · máx. 50 MB";
+    // El modo editor (escribir las oraciones a mano, sin documento) solo
+    // tiene sentido para los tipos que son listas de oraciones.
+    uploadManualOption.hidden = type === "cuento";
     updateUploadButtonState();
   }
 
@@ -229,6 +243,17 @@ document.addEventListener("DOMContentLoaded", () => {
   // preguntas (eso es exclusivo de los cuentos).
   function configureResultModalForType(type) {
     currentResultType = type;
+    // El modo editor lo activa explícitamente openManualEditor() DESPUÉS de
+    // llamar a esta función; cualquier otro camino (documento, IA) arranca
+    // siempre en modo revisión normal.
+    manualEntryMode = false;
+    manualImageEntryMode = false;
+    // El nombre del material también se puede editar aquí mismo (ver el
+    // listener "input" de resultModalTitle): se muestra el que ya se
+    // escribió al inicio -o el de la IA/el documento- en vez de un rótulo
+    // fijo como "Contenido generado".
+    resultModalTitle.textContent = currentMaterialTitle;
+    resultSentencesNote.hidden = false;
     const isOracion = type === "oracion";
     const isImageSentence = type === "oracion_imagen";
     const isSentenceType = isOracion || isImageSentence;
@@ -243,8 +268,8 @@ document.addEventListener("DOMContentLoaded", () => {
       ? "Oraciones con imágenes para revisar"
       : "Oraciones para revisar";
     resultSentencesNote.textContent = isImageSentence
-      ? "Corrige cada oración y sus dos sustantivos; deja vacías las que no quieras guardar."
-      : "Corrige cada oración; deja vacías las que no quieras guardar.";
+      ? "Corrige cada oración y sus dos sustantivos; usa ✕ para quitar la que no quieras guardar."
+      : "Corrige cada oración; usa ✕ para quitar la que no quieras guardar.";
     resultDoneBtn.textContent = isImageSentence
       ? "Siguiente: diseñar imágenes"
       : isOracion
@@ -275,6 +300,41 @@ document.addEventListener("DOMContentLoaded", () => {
     uploadOverlay.classList.remove("is-open");
   }
 
+  // "Modo editor": salta el documento y la IA -la docente escribe las
+  // oraciones ella misma. Reutiliza la misma pantalla de revisión que ya
+  // usan la extracción y la generación con IA (mismo botón "+ Agregar
+  // oración", mismo guardado para "oracion"); para "oracion_imagen" activa
+  // además los cuadros de subir imagen de appendImageSentenceItem. Todavía
+  // sin guardado propio para "oracion_imagen": eso es el siguiente paso.
+  function openManualEditor(type) {
+    // Si no escribió un nombre en el modal de arriba, arranca con uno
+    // genérico -el título ahora también se edita aquí mismo (ver
+    // resultModalTitle), así que no hace falta que quede vacío.
+    currentMaterialTitle = uploadTitleInput.value.trim() || "Nuevo material";
+    currentTargetDurationMinutes = null;
+    configureResultModalForType(type);
+    resetResultState();
+    manualEntryMode = true;
+    resultSentencesNote.hidden = true;
+
+    if (type === "oracion_imagen") {
+      manualImageEntryMode = true;
+      renderImageSentenceRows([]);
+      appendImageSentenceItem({}, { focus: true });
+      resultSubtitle.textContent = "Modo editor - escribe cada oración, sus dos palabras y sube tú misma las imágenes que las reemplazarán";
+      resultDoneBtn.textContent = "Continuar (próximamente)";
+    } else {
+      lastSentenceContext = { topic: currentMaterialTitle, grade_level: "" };
+      renderSentences([]);
+      appendSentenceItem("", { focus: true });
+      resultSubtitle.textContent = "Modo editor · escribe cada oración";
+    }
+
+    updateDoneButtonState();
+    closeUpload();
+    resultOverlay.classList.add("is-open");
+  }
+
   function setSelectedFile(file) {
     if (!file) return;
     selectedFile = file;
@@ -286,6 +346,10 @@ document.addEventListener("DOMContentLoaded", () => {
   uploadCancelBtn.addEventListener("click", closeUpload);
   uploadTypeButtons.forEach((btn) => {
     btn.addEventListener("click", () => setUploadType(btn.dataset.type));
+  });
+
+  manualEditorOpenBtn.addEventListener("click", () => {
+    openManualEditor(currentUploadType);
   });
 
   dropzone.addEventListener("dragover", (event) => {
@@ -393,6 +457,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       currentDesignIndex = 0;
       renderDesignSentence();
+      imageDesignTitle.textContent = currentMaterialTitle;
       imageDesignOverlay.classList.add("is-open");
     } catch (error) {
       resetImageDesignState();
@@ -463,6 +528,22 @@ document.addEventListener("DOMContentLoaded", () => {
   resultCancelBtn.addEventListener("click", () => {
     resultOverlay.classList.remove("is-open");
     resetResultState();
+  });
+
+  // El nombre del material se puede corregir aquí mismo, no solo en el
+  // input inicial del modal de subida: currentMaterialTitle es lo que
+  // finalmente viaja en el "title" del guardado (ver saveSentenceMaterial,
+  // saveDesignedImageSentenceMaterial y el guardado del cuento más abajo),
+  // así que basta con mantenerlo sincronizado con lo que quede escrito en
+  // el título.
+  resultModalTitle.addEventListener("input", () => {
+    currentMaterialTitle = resultModalTitle.textContent.replace(/\s+/g, " ").trim();
+  });
+
+  // Mismo nombre editable en el paso de diseño de imágenes: saveDesignedImageSentenceMaterial
+  // también lee currentMaterialTitle al guardar.
+  imageDesignTitle.addEventListener("input", () => {
+    currentMaterialTitle = imageDesignTitle.textContent.replace(/\s+/g, " ").trim();
   });
 
   // "Crear con IA" genera un cuento o un set de oraciones. Ambos borradores
@@ -694,6 +775,12 @@ document.addEventListener("DOMContentLoaded", () => {
         alert("Agrega al menos una oración con dos sustantivos.");
         return;
       }
+      if (manualImageEntryMode) {
+        // Diseño únicamente por ahora: el modo editor todavía no guarda
+        // -falta enviar las imágenes que subió la docente junto al material.
+        alert("El guardado del modo editor todavía no está disponible.");
+        return;
+      }
       if (items.length > 20) {
         alert("Puedes diseñar un máximo de 20 oraciones a la vez.");
         return;
@@ -916,11 +1003,19 @@ document.addEventListener("DOMContentLoaded", () => {
     // Todo material se guarda con un tema (y su periodo). Sin tema elegido no
     // se puede aprobar, sea cuento u oraciones.
     const temaChosen = Boolean(uploadTemaSelect.value);
-    const contentReady = currentResultType === "oracion_imagen"
-      ? getImageSentencesData().length > 0
-      : currentResultType === "oracion"
-        ? getSentencesData().length > 0
-        : audioFullReady && audioSummaryReady && questionsReady;
+    let contentReady;
+    if (currentResultType === "oracion_imagen") {
+      // getImageSentencesData() también marca en rojo las filas incompletas
+      // (efecto secundario deseado); no se usa su cantidad para decidir si
+      // ya se puede guardar porque deduplica por texto -dos oraciones
+      // completas con el mismo texto no deberían bloquear el guardado.
+      getImageSentencesData();
+      contentReady = allImageSentenceRowsComplete();
+    } else if (currentResultType === "oracion") {
+      contentReady = sentenceRowsAreValid();
+    } else {
+      contentReady = audioFullReady && audioSummaryReady && questionsReady;
+    }
     resultDoneBtn.disabled = !(contentReady && temaChosen);
   }
 
@@ -966,7 +1061,16 @@ document.addEventListener("DOMContentLoaded", () => {
     editable.contentEditable = "true";
     editable.spellcheck = true;
     editable.textContent = typeof text === "string" ? text : "";
-    editable.addEventListener("input", updateDoneButtonState);
+    // Recién creada, la fila no se marca inválida todavía aunque esté vacía
+    // -eso se vería mal apenas se abre el editor-; "touched" pasa a true en
+    // cuanto la docente escribe algo o sale del campo, y desde ahí sí se
+    // valida que no quede en blanco (ver sentenceRowsAreValid).
+    const markTouched = () => {
+      item.dataset.touched = "true";
+      updateDoneButtonState();
+    };
+    editable.addEventListener("input", markTouched);
+    editable.addEventListener("blur", markTouched);
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -995,6 +1099,68 @@ document.addEventListener("DOMContentLoaded", () => {
       .filter(Boolean);
   }
 
+  // Una oración no puede quedar en blanco (sea que vengan de un documento,
+  // de la IA o escritas a mano) - para quitar una línea se usa el botón ✕,
+  // no dejarla vacía. Marca cada fila ya "tocada" que esté vacía y devuelve
+  // false si falta alguna por corregir, o si no queda ninguna oración.
+  function sentenceRowsAreValid() {
+    const rows = Array.from(
+      resultSentencesList.querySelectorAll(".sentences-review__item:not(.sentences-review__item--image)")
+    );
+    if (!rows.length) return false;
+    let valid = true;
+    rows.forEach((row) => {
+      const blank = !row.querySelector(".sentences-review__editable").textContent.replace(/\s+/g, " ").trim();
+      row.classList.toggle("sentences-review__item--invalid", blank && row.dataset.touched === "true");
+      if (blank) valid = false;
+    });
+    return valid;
+  }
+
+  // Cuadro para subir, a mano, la imagen que reemplazará a un sustantivo
+  // (modo editor). Solo diseño por ahora: el archivo elegido se previsualiza
+  // aquí mismo (URL.createObjectURL) pero todavía no se envía a ningún lado
+  // -eso llega junto con el guardado de "oraciones con imágenes" manuales.
+  function buildNounImagePicker(index) {
+    const wrap = document.createElement("div");
+    wrap.className = "sentences-review__image-picker";
+
+    const preview = document.createElement("img");
+    preview.className = "sentences-review__image-preview";
+    preview.alt = "";
+    preview.hidden = true;
+
+    const dropLabel = document.createElement("label");
+    dropLabel.className = "sentences-review__image-dropzone";
+
+    const icon = document.createElement("span");
+    icon.className = "sentences-review__image-dropzone-icon";
+    icon.textContent = "🖼️";
+
+    const text = document.createElement("span");
+    text.className = "sentences-review__image-dropzone-text";
+    text.textContent = "Subir imagen";
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = "image/*";
+    fileInput.hidden = true;
+    fileInput.dataset.imageSentenceFile = String(index);
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      preview.src = URL.createObjectURL(file);
+      preview.hidden = false;
+      text.textContent = file.name;
+      dropLabel.classList.add("has-image");
+    });
+
+    dropLabel.append(icon, text, fileInput);
+    wrap.append(preview, dropLabel);
+    return wrap;
+  }
+
   function appendImageSentenceItem(item = {}, { focus = false } = {}) {
     const row = document.createElement("li");
     row.className = "sentences-review__item sentences-review__item--image";
@@ -1017,8 +1183,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const nounFields = document.createElement("div");
     nounFields.className = "sentences-review__nouns";
     const nounInputs = [0, 1].map((index) => {
+      const field = document.createElement("div");
+      field.className = "sentences-review__noun-field";
+
       const label = document.createElement("label");
-      label.className = "sentences-review__noun-field";
+      label.className = "sentences-review__noun-label";
 
       const labelText = document.createElement("span");
       labelText.textContent = `Sustantivo ${index + 1}`;
@@ -1032,21 +1201,41 @@ document.addEventListener("DOMContentLoaded", () => {
       input.dataset.imageSentenceNoun = String(index);
 
       label.append(labelText, input);
-      nounFields.appendChild(label);
+      field.appendChild(label);
+      // Solo en modo editor: la palabra ya trae su propio cuadro para subir
+      // la imagen que la reemplazará -sin esto, la imagen se genera después
+      // con IA en el paso de diseño (image-sentences/prepare).
+      if (manualImageEntryMode) {
+        field.appendChild(buildNounImagePicker(index));
+      }
+      nounFields.appendChild(field);
       return input;
     });
 
-    function refreshPreviewAndState() {
+    function refreshPreview() {
       const text = editable.textContent.replace(/\s+/g, " ").trim();
       const currentNouns = nounInputs.map((input) => input.value.replace(/\s+/g, " ").trim());
       preview.innerHTML = text
         ? markNouns(text, currentNouns)
         : '<span class="sentences-review__preview-empty">Vista previa de la oración</span>';
+    }
+
+    // Recién creada, la fila no se marca inválida todavía aunque esté
+    // incompleta -eso se vería mal apenas se abre la revisión-; "touched"
+    // pasa a true en cuanto la docente edita algo o sale de un campo, y
+    // desde ahí sí se exige texto + los 2 sustantivos (ver getImageSentencesData).
+    function handleFieldChange() {
+      row.dataset.touched = "true";
+      refreshPreview();
       updateDoneButtonState();
     }
 
-    editable.addEventListener("input", refreshPreviewAndState);
-    nounInputs.forEach((input) => input.addEventListener("input", refreshPreviewAndState));
+    editable.addEventListener("input", handleFieldChange);
+    editable.addEventListener("blur", handleFieldChange);
+    nounInputs.forEach((input) => {
+      input.addEventListener("input", handleFieldChange);
+      input.addEventListener("blur", handleFieldChange);
+    });
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -1062,7 +1251,7 @@ document.addEventListener("DOMContentLoaded", () => {
     content.append(editable, preview, nounFields);
     row.append(content, remove);
     resultSentencesList.appendChild(row);
-    refreshPreviewAndState();
+    refreshPreview();
     if (focus) editable.focus();
   }
 
@@ -1072,6 +1261,25 @@ document.addEventListener("DOMContentLoaded", () => {
     updateDoneButtonState();
   }
 
+  // Como sentenceRowsAreValid(), pero para "oracion_imagen": exige texto +
+  // 2 sustantivos en cada fila, sin deduplicar (a diferencia de
+  // getImageSentencesData, que sí deduplica porque arma el payload a enviar).
+  function allImageSentenceRowsComplete() {
+    const rows = Array.from(resultSentencesList.querySelectorAll(".sentences-review__item--image"));
+    if (!rows.length) return false;
+    return rows.every((row) => {
+      const text = row.querySelector("[data-image-sentence-text]")
+        ?.textContent.replace(/\s+/g, " ").trim() || "";
+      const nouns = Array.from(row.querySelectorAll("[data-image-sentence-noun]"))
+        .map((input) => input.value.replace(/\s+/g, " ").trim());
+      return Boolean(text) && nouns.length === 2 && nouns.every(Boolean);
+    });
+  }
+
+  // Una oración con imágenes tampoco puede quedar en blanco ni incompleta:
+  // hace falta el texto Y sus 2 sustantivos, sea que la fila venga de un
+  // documento, de la IA o se haya escrito a mano. Igual que en las oraciones
+  // planas, solo se marca inválida una vez "tocada" (ver appendImageSentenceItem).
   function getImageSentencesData() {
     const seen = new Set();
     const items = [];
@@ -1080,16 +1288,16 @@ document.addEventListener("DOMContentLoaded", () => {
         ?.textContent.replace(/\s+/g, " ").trim() || "";
       const nounInputs = Array.from(row.querySelectorAll("[data-image-sentence-noun]"));
       const nouns = nounInputs.map((input) => input.value.replace(/\s+/g, " ").trim());
-      const nounsComplete = nouns.length === 2 && nouns.every(Boolean);
-      const missingNoun = Boolean(text) && !nounsComplete;
+      const complete = Boolean(text) && nouns.length === 2 && nouns.every(Boolean);
+      const touched = row.dataset.touched === "true";
 
-      row.classList.toggle("sentences-review__item--invalid", missingNoun);
+      row.classList.toggle("sentences-review__item--invalid", touched && !complete);
       nounInputs.forEach((input) => {
-        input.setAttribute("aria-invalid", String(missingNoun && !input.value.trim()));
+        input.setAttribute("aria-invalid", String(touched && !complete && !input.value.trim()));
       });
 
       const key = text.toLocaleLowerCase("es");
-      if (text && nounsComplete && !seen.has(key) && items.length < 120) {
+      if (complete && !seen.has(key) && items.length < 120) {
         seen.add(key);
         items.push({ texto: text, sustantivos: nouns });
       }
@@ -1199,6 +1407,7 @@ document.addEventListener("DOMContentLoaded", () => {
         ...noun,
         palabra: data.palabra,
         imagen_url: data.imagen_url,
+        fuente: data.fuente === "manual" ? "manual" : "ia",
       };
       if (designSentences[currentDesignIndex] === sentence) {
         renderDesignSentence();
@@ -1207,6 +1416,64 @@ document.addEventListener("DOMContentLoaded", () => {
       alert(error.message || "No se pudo regenerar la imagen.");
     } finally {
       imageDesignBusy = false;
+      button.textContent = originalLabel;
+      updateDesignNav();
+    }
+  }
+
+  async function uploadDesignNounImage(sentence, nounIndex, input, fileInput, button) {
+    const file = fileInput.files?.[0];
+    if (!file || imageDesignBusy) {
+      fileInput.value = "";
+      return;
+    }
+
+    const noun = sentence.sustantivos[nounIndex];
+    const proposedWord = input.value.replace(/\s+/g, " ").trim();
+    if (!proposedWord) {
+      fileInput.value = "";
+      alert("Escribe el sustantivo antes de subir la imagen.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("token", imageDesignToken);
+    formData.append("sentence_index", sentence.staging_index);
+    formData.append("noun_index", nounIndex);
+    if (proposedWord !== noun.palabra) {
+      formData.append("palabra", proposedWord);
+    }
+    formData.append("imagen", file);
+
+    const originalLabel = button.textContent;
+    imageDesignBusy = true;
+    button.textContent = "Subiendo…";
+    updateDesignNav();
+    try {
+      const response = await authorizedFetch("/api/material/image-sentences/upload-image", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo subir la imagen.");
+      }
+
+      sentence.plantilla = data.plantilla;
+      sentence.sustantivos[nounIndex] = {
+        ...noun,
+        palabra: data.palabra,
+        imagen_url: data.imagen_url,
+        fuente: data.fuente === "ia" ? "ia" : "manual",
+      };
+      if (designSentences[currentDesignIndex] === sentence) {
+        renderDesignSentence();
+      }
+    } catch (error) {
+      alert(error.message || "No se pudo subir la imagen.");
+    } finally {
+      imageDesignBusy = false;
+      fileInput.value = "";
       button.textContent = originalLabel;
       updateDesignNav();
     }
@@ -1237,15 +1504,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const label = document.createElement("label");
       label.className = "image-design__noun-label";
+      const heading = document.createElement("span");
+      heading.className = "image-design__noun-heading";
       const caption = document.createElement("span");
       caption.textContent = `Sustantivo ${nounIndex + 1}`;
+      const source = document.createElement("span");
+      const isManual = noun.fuente === "manual";
+      source.className = `image-design__source image-design__source--${isManual ? "manual" : "ia"}`;
+      source.textContent = isManual ? "Subida por ti" : "Generada por IA";
+      heading.append(caption, source);
       const input = document.createElement("input");
       input.type = "text";
       input.className = "image-design__noun-input";
       input.maxLength = 60;
       input.autocomplete = "off";
       input.value = noun.palabra;
-      label.append(caption, input);
+      label.append(heading, input);
+
+      const actions = document.createElement("div");
+      actions.className = "image-design__noun-actions";
 
       const regenerate = document.createElement("button");
       regenerate.type = "button";
@@ -1255,7 +1532,25 @@ document.addEventListener("DOMContentLoaded", () => {
         regenerateDesignNoun(sentence, nounIndex, input, regenerate);
       });
 
-      group.append(label, regenerate);
+      const fileInput = document.createElement("input");
+      fileInput.type = "file";
+      fileInput.className = "image-design__file-input";
+      fileInput.accept = "image/*";
+      fileInput.hidden = true;
+
+      const upload = document.createElement("button");
+      upload.type = "button";
+      upload.className = "btn btn--ghost image-design__upload";
+      upload.textContent = "Subir imagen";
+      upload.addEventListener("click", () => {
+        fileInput.click();
+      });
+      fileInput.addEventListener("change", () => {
+        uploadDesignNounImage(sentence, nounIndex, input, fileInput, upload);
+      });
+
+      actions.append(regenerate, fileInput, upload);
+      group.append(label, actions);
       imageDesignNounControls.appendChild(group);
     });
     updateDesignNav();

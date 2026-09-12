@@ -387,6 +387,113 @@ def test_demo_image_sentence_design_flow_generates_and_exposes_images(
     assert demo_client.get(first_img_url).status_code == 404
 
 
+def _tiny_png(color) -> bytes:
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_image_sentence_upload_own_image_names_file_after_the_word(
+    demo_app, demo_client, tmp_path, monkeypatch
+):
+    """La docente puede reemplazar, con su propio archivo, la imagen que
+    Gemini generó para un sustantivo. El nombre/formato del archivo subido
+    es indiferente (aquí sube un .jpg llamado cualquier_cosa.jpg); al
+    aprobar el diseño, el archivo final se guarda como PNG y se nombra
+    según el sustantivo ("pollo.png"), no por posición. Dos sustantivos
+    iguales en oraciones distintas -pero con imágenes distintas- no deben
+    pisarse: el segundo cae a "pollo-2.png"."""
+    monkeypatch.setitem(demo_app.config, "UPLOADS_ROOT", str(tmp_path))
+    enter_demo(demo_client)
+
+    with demo_app.app_context():
+        periodo = Periodo(
+            nombre="I BIMESTRE", anio=date.today().year,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=1),
+        )
+        db.session.add(periodo)
+        db.session.commit()
+        tema = Tema(nombre="Animales", fk_user="DOC-DEMO-01", id_periodo=periodo.id)
+        db.session.add(tema)
+        db.session.commit()
+        periodo_id, tema_id = periodo.id, tema.id
+
+    verified = [
+        {"texto": "El pollo come maíz.", "sustantivos": ["pollo", "maíz"]},
+        {"texto": "Otro pollo duerme en el nido.", "sustantivos": ["pollo", "nido"]},
+    ]
+    prepared = demo_client.post(
+        "/api/material/image-sentences/prepare",
+        json={"title": "Oraciones con imágenes", "items": verified},
+    )
+    assert prepared.status_code == 200
+    body = prepared.get_json()
+    token = body["token"]
+    assert body["items"][0]["sustantivos"][0]["fuente"] == "ia"
+
+    # Sube su propio archivo para el "pollo" de la primera oración: nombre y
+    # formato de archivo arbitrarios (un .jpg con cualquier nombre).
+    upload = demo_client.post(
+        "/api/material/image-sentences/upload-image",
+        data={
+            "token": token,
+            "sentence_index": "0",
+            "noun_index": "0",
+            "imagen": (io.BytesIO(_tiny_png((255, 0, 0))), "cualquier_cosa.jpg"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload.status_code == 200
+    assert upload.get_json()["fuente"] == "manual"
+
+    # Rechaza un archivo que no es una imagen real, sin importar su nombre.
+    bad_upload = demo_client.post(
+        "/api/material/image-sentences/upload-image",
+        data={
+            "token": token,
+            "sentence_index": "1",
+            "noun_index": "1",
+            "imagen": (io.BytesIO(b"esto no es una imagen"), "nido.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert bad_upload.status_code == 400
+
+    saved = demo_client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion_imagen",
+            "title": "Oraciones con imágenes",
+            "staging_token": token,
+            "sentences_json": json.dumps([
+                {**verified[0], "staging_index": 0},
+                {**verified[1], "staging_index": 1},
+            ]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert saved.status_code == 200
+    material_id = saved.get_json()["material_id"]
+
+    with demo_app.app_context():
+        material = db.session.get(Material, material_id)
+        oraciones_path = tmp_path / material.path_preguntas.removeprefix("uploads/")
+    oraciones = json.loads(oraciones_path.read_text(encoding="utf-8"))
+
+    # El sustantivo subido a mano se nombró "pollo.png"; el segundo "pollo"
+    # (generado por IA, imagen distinta) no lo pisa -cae a "pollo-2.png".
+    assert oraciones[0]["sustantivos"][0]["imagen"] == "img/pollo.png"
+    assert oraciones[1]["sustantivos"][0]["imagen"] == "img/pollo-2.png"
+    img_dir = oraciones_path.parent / "img"
+    assert (img_dir / "pollo.png").is_file()
+    assert (img_dir / "pollo-2.png").is_file()
+    # Son imágenes distintas: no se pisaron una a la otra.
+    assert (img_dir / "pollo.png").read_bytes() != (img_dir / "pollo-2.png").read_bytes()
+
+
 def test_image_sentence_save_rejects_items_without_two_nouns(client, periodo_tema):
     periodo_id, tema_id = periodo_tema()
     bad = client.post(
