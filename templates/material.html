@@ -218,8 +218,45 @@
       </div>
     </div>
 
-    <div class="upload-modal__period result-modal__period" data-period-filter data-period-nav="false" role="group" aria-label="Periodo y tema del material">
-      <span class="upload-modal__label">Clasificación del material</span>
+    <div class="result-modal__footer">
+      <button type="button" class="btn btn--ghost" id="resultCancelBtn">Cancelar</button>
+      <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Continuar</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="imageDesignOverlay">
+  <div class="upload-modal image-design" role="dialog" aria-modal="true" aria-labelledby="imageDesignTitle">
+    <div class="upload-modal__title editable-title" id="imageDesignTitle" contenteditable="true" spellcheck="false" role="textbox" aria-label="Nombre del material" title="Toca para editar el nombre del material">Diseño de las oraciones con imágenes</div>
+    <p class="upload-modal__hint image-design__intro">Revisa cada oración, ajusta sus palabras y elige si quieres regenerar o subir tus propias imágenes.</p>
+
+    <div class="image-design__nav" aria-label="Navegación entre oraciones">
+      <button type="button" class="btn btn--ghost" id="imageDesignPrevBtn">Anterior</button>
+      <span class="image-design__counter" id="imageDesignCounter" aria-live="polite">Oración 0 de 0</span>
+      <button type="button" class="btn btn--ghost" id="imageDesignNextBtn">Siguiente</button>
+    </div>
+
+    <div class="image-design__stage" id="imageDesignStage" hidden>
+      <div class="image-design__line" id="imageDesignMixedLine" aria-label="Vista previa de la oración con imágenes"></div>
+      <div class="image-design__noun-controls" id="imageDesignNounControls"></div>
+      <button type="button" class="image-design__remove" id="imageDesignRemoveBtn">Quitar esta oración</button>
+    </div>
+    <p class="image-design__empty" id="imageDesignEmpty" hidden>No quedan oraciones en el diseño. Vuelve para agregar otra antes de guardar.</p>
+
+    <div class="image-design__footer">
+      <button type="button" class="btn btn--ghost" id="imageDesignBackBtn">Volver</button>
+      <button type="button" class="btn btn--ghost image-design__discard" id="imageDesignDiscardBtn">Descartar</button>
+      <button type="button" class="btn btn--primary" id="imageDesignSaveBtn" disabled>Continuar</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="classifyOverlay">
+  <div class="upload-modal" role="dialog" aria-modal="true" aria-labelledby="classifyModalTitle">
+    <div class="upload-modal__title" id="classifyModalTitle">Periodo y tema del material</div>
+    <p class="upload-modal__hint" id="classifySubtitle">Último paso antes de guardar «<span id="classifyMaterialTitle"></span>».</p>
+
+    <div class="upload-modal__period" data-period-filter data-period-nav="false" role="group" aria-label="Periodo y tema del material">
       <div class="upload-modal__period-row">
         <label class="upload-modal__field" for="uploadPeriodoYearSelect">
           <span class="upload-modal__sublabel">Año</span>
@@ -251,35 +288,9 @@
       <p class="upload-modal__hint" id="uploadTemaHint">Todo material debe tener un periodo y un tema. Los temas disponibles corresponden al periodo elegido; si falta el tema, créalo en la sección Temas.</p>
     </div>
 
-    <div class="result-modal__footer">
-      <button type="button" class="btn btn--ghost" id="resultCancelBtn">Cancelar</button>
-      <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Aprobar y guardar</button>
-    </div>
-  </div>
-</div>
-
-<div class="overlay" id="imageDesignOverlay">
-  <div class="upload-modal image-design" role="dialog" aria-modal="true" aria-labelledby="imageDesignTitle">
-    <div class="upload-modal__title editable-title" id="imageDesignTitle" contenteditable="true" spellcheck="false" role="textbox" aria-label="Nombre del material" title="Toca para editar el nombre del material">Diseño de las oraciones con imágenes</div>
-    <p class="upload-modal__hint image-design__intro">Revisa cada oración, ajusta sus palabras y elige si quieres regenerar o subir tus propias imágenes.</p>
-
-    <div class="image-design__nav" aria-label="Navegación entre oraciones">
-      <button type="button" class="btn btn--ghost" id="imageDesignPrevBtn">Anterior</button>
-      <span class="image-design__counter" id="imageDesignCounter" aria-live="polite">Oración 0 de 0</span>
-      <button type="button" class="btn btn--ghost" id="imageDesignNextBtn">Siguiente</button>
-    </div>
-
-    <div class="image-design__stage" id="imageDesignStage" hidden>
-      <div class="image-design__line" id="imageDesignMixedLine" aria-label="Vista previa de la oración con imágenes"></div>
-      <div class="image-design__noun-controls" id="imageDesignNounControls"></div>
-      <button type="button" class="image-design__remove" id="imageDesignRemoveBtn">Quitar esta oración</button>
-    </div>
-    <p class="image-design__empty" id="imageDesignEmpty" hidden>No quedan oraciones en el diseño. Vuelve para agregar otra antes de guardar.</p>
-
-    <div class="image-design__footer">
-      <button type="button" class="btn btn--ghost" id="imageDesignBackBtn">Volver</button>
-      <button type="button" class="btn btn--ghost image-design__discard" id="imageDesignDiscardBtn">Descartar</button>
-      <button type="button" class="btn btn--primary" id="imageDesignSaveBtn" disabled>Aprobar y guardar</button>
+    <div class="upload-modal__actions">
+      <button type="button" class="btn btn--ghost" id="classifyBackBtn">Volver</button>
+      <button type="button" class="btn btn--primary" id="classifySaveBtn" disabled>Guardar material</button>
     </div>
   </div>
 </div>
@@ -319,11 +330,31 @@
     <div class="material-card__detail">
       {% if m.es_oracion or m.es_oracion_imagen %}
       {% set sentences = sentences_by_material.get(m.id, []) %}
+      {% if m.es_oracion_imagen %}
+      <div class="material-card__slider" data-slider>
+        <button type="button" class="material-card__slider-nav material-card__slider-nav--prev" data-slider-prev aria-label="Oración anterior">‹</button>
+        <ol class="material-card__slider-track" data-slider-track>
+          {% for oracion in image_sentences_by_material.get(m.id, []) %}
+          <li class="material-card__slide">
+            {% for part in oracion.parts %}
+              {% if part.type == "image" and part.imagen_url %}
+              <img class="material-card__slide-img" src="{{ part.imagen_url }}" alt="{{ part.palabra }}">
+              {% elif part.type == "image" %}
+              <mark>{{ part.palabra }}</mark>
+              {% else %}{{ part.value }}{% endif %}
+            {% endfor %}
+          </li>
+          {% endfor %}
+        </ol>
+        <button type="button" class="material-card__slider-nav material-card__slider-nav--next" data-slider-next aria-label="Siguiente oración">›</button>
+      </div>
+      {% else %}
       <ol class="material-card__sentence-list">
         {% for sentence in sentences %}
         <li>{{ sentence }}</li>
         {% endfor %}
       </ol>
+      {% endif %}
       <div class="material-card__actions">
         <span class="material-card__sentence-count">{{ sentences|length }} {{ 'oraciones' if sentences|length != 1 else 'oración' }}</span>
         <button type="button" class="material-card__delete" data-material-id="{{ m.id }}" data-material-name="{{ m.nombre_material }}">🗑 Eliminar</button>

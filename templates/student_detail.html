@@ -54,6 +54,15 @@
           {% endfor %}
         </select>
       </label>
+      <label class="period-filter__field period-filter__field--material" for="materialSelect">
+        <span class="period-filter__label">Material</span>
+        <select class="period-filter__select" id="materialSelect" data-material-select{% if selected_tema_id is none %} disabled{% endif %}>
+          <option value="">Todos los materiales</option>
+          {% for m in materials %}
+          <option value="{{ m.id }}"{% if selected_material_id == m.id %} selected{% endif %}>{{ m.nombre_material }}</option>
+          {% endfor %}
+        </select>
+      </label>
     </div>
 
     <section class="period-breakdown" aria-labelledby="periodBreakdownTitle">

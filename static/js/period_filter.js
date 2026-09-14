@@ -6,6 +6,14 @@ document.addEventListener("DOMContentLoaded", () => {
     // de un alumno). El modal de subir material maneja su propio <select> de
     // tema aparte (sin este atributo), así que aquí no interfiere.
     const temaSelect = filter.querySelector("[data-tema-select]");
+    // Opcional, un nivel más abajo de tema (por ahora solo el historial de un
+    // alumno): a diferencia de temaSelect, sus opciones ya llegan acotadas al
+    // tema elegido -el propio servidor las resuelve en cada recarga (ver
+    // resolve_material_filter en app.py)-, así que aquí no hace falta un
+    // filterMateriales() que oculte opciones: basta con resetearlo cuando
+    // cambia algo por encima (periodo o tema vuelven a dejarlo sin sentido) y
+    // sumarlo a la navegación.
+    const materialSelect = filter.querySelector("[data-material-select]");
     // Los filtros de listados navegan al elegir periodo (?periodo=<id> en la
     // URL). El selector del modal de subir material es un campo de
     // formulario más: solo debe acotar las opciones por año, sin navegar.
@@ -57,28 +65,43 @@ document.addEventListener("DOMContentLoaded", () => {
       if (temaSelect) {
         url.searchParams.set("tema", temaSelect.value);
       }
+      if (materialSelect) {
+        url.searchParams.set("material", materialSelect.value);
+      }
 
       window.location.assign(url.toString());
     }
 
     filterPeriods();
-    // Al cargar la página no se debe resetear el tema ya seleccionado por el
-    // servidor (el <select> de periodo ya viene con el valor que le
-    // corresponde a ese tema).
+    // Al cargar la página no se debe resetear el tema ni el material ya
+    // elegidos por el servidor (el <select> de periodo ya viene con el valor
+    // que le corresponde a ese tema, y el de material con las opciones de
+    // ese tema).
     filterTemas(false);
 
     yearSelect.addEventListener("change", () => {
       periodSelect.value = "";
       filterPeriods();
       filterTemas();
+      // El tema recién quedó sin elegir: cualquier material anterior ya no
+      // pertenece a ningún tema visible.
+      if (materialSelect) materialSelect.value = "";
     });
 
     if (shouldNavigate) {
       periodSelect.addEventListener("change", () => {
         filterTemas();
+        if (materialSelect) materialSelect.value = "";
         navigate();
       });
-      temaSelect?.addEventListener("change", navigate);
+      temaSelect?.addEventListener("change", () => {
+        // El material seguía siendo del tema anterior: sin recargar todavía
+        // no hay de dónde sacar los del tema nuevo, así que se limpia y la
+        // propia recarga lo repuebla ya acotado (ver resolve_material_filter).
+        if (materialSelect) materialSelect.value = "";
+        navigate();
+      });
+      materialSelect?.addEventListener("change", navigate);
     } else {
       periodSelect.addEventListener("change", () => filterTemas());
     }

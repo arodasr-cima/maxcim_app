@@ -527,6 +527,29 @@ def image_sentence_template(texto: str, palabras: list[str]) -> str:
     return plantilla
 
 
+_IMAGE_SENTENCE_PLACEHOLDER = re.compile(r"\{\{([01])\}\}")
+
+
+def split_image_sentence_template(plantilla: str, sustantivos: list[dict]) -> list[dict]:
+    """Parte una plantilla ({{0}}/{{1}} como marcador, ver image_sentence_template)
+    en tramos de texto e imagen, en orden, listos para intercalar en una
+    vista previa -mismo criterio que ya usa renderDesignMixedLine() en
+    material.js para el paso de diseño, pero aquí server-side para un
+    material ya guardado (ver material_image_preview)."""
+    parts: list[dict] = []
+    cursor = 0
+    for match in _IMAGE_SENTENCE_PLACEHOLDER.finditer(plantilla):
+        if match.start() > cursor:
+            parts.append({"type": "text", "value": plantilla[cursor:match.start()]})
+        noun_index = int(match.group(1))
+        if noun_index < len(sustantivos):
+            parts.append({"type": "image", **sustantivos[noun_index]})
+        cursor = match.end()
+    if cursor < len(plantilla):
+        parts.append({"type": "text", "value": plantilla[cursor:]})
+    return parts
+
+
 def _slugify_noun(word: str) -> str:
     """Nombre de archivo seguro a partir de un sustantivo, p.ej. "camión" ->
     "camion". Cadena vacía si no queda ningún carácter usable (el llamador
@@ -1819,6 +1842,34 @@ def create_app(test_config: dict | None = None):
 
         return available_periodos, selected_periodo_id, available_temas, selected_tema_id
 
+    def resolve_material_filter(teacher, selected_tema_id):
+        """Resuelve el filtro de Material para el historial de un alumno -un
+        nivel más abajo de tema, solo en esa vista (avance de aula se queda
+        en periodo/tema). Sin tema elegido no hay de dónde listar materiales
+        -el desplegable queda vacío-, así que a diferencia de tema (que sí
+        tiene un valor por defecto) `?material=` ausente simplemente no
+        filtra: se listan todas las interacciones del tema."""
+        available_materials = []
+        if selected_tema_id is not None:
+            available_materials = (
+                Material.query.filter_by(fk_user=str(teacher["id"]), id_tema=selected_tema_id)
+                .order_by(Material.nombre_material)
+                .all()
+            )
+
+        raw_material_id = request.args.get("material")
+        selected_material_id = None
+        if raw_material_id and raw_material_id.strip():
+            try:
+                candidate_material_id = int(raw_material_id)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if any(m.id == candidate_material_id for m in available_materials):
+                    selected_material_id = candidate_material_id
+
+        return available_materials, selected_material_id
+
     @app.route("/aulas/<ref>/avance")
     @login_required
     def classroom_progress(ref):
@@ -1926,6 +1977,9 @@ def create_app(test_config: dict | None = None):
         available_periodos, selected_periodo_id, available_temas, selected_tema_id = (
             resolve_interaction_filters(teacher)
         )
+        available_materials, selected_material_id = resolve_material_filter(
+            teacher, selected_tema_id
+        )
 
         interactions_query = (
             Interaccion.query.outerjoin(Material)
@@ -1942,7 +1996,11 @@ def create_app(test_config: dict | None = None):
             Interaccion.fecha_hora.desc(), Interaccion.id.desc()
         ).all()
         interactions = all_interactions
-        if selected_periodo_id is not None or selected_tema_id is not None:
+        if (
+            selected_periodo_id is not None
+            or selected_tema_id is not None
+            or selected_material_id is not None
+        ):
             filtered_query = interactions_query
             if selected_periodo_id is not None:
                 filtered_query = filtered_query.filter(
@@ -1954,6 +2012,10 @@ def create_app(test_config: dict | None = None):
                 # material con ese tema — las conversaciones sueltas
                 # (id_material NULL) quedan fuera cuando se filtra por tema.
                 filtered_query = filtered_query.filter(Material.id_tema == selected_tema_id)
+            if selected_material_id is not None:
+                filtered_query = filtered_query.filter(
+                    Interaccion.id_material == selected_material_id
+                )
             interactions = filtered_query.order_by(
                 Interaccion.fecha_hora.desc(), Interaccion.id.desc()
             ).all()
@@ -1997,6 +2059,8 @@ def create_app(test_config: dict | None = None):
             periodo_breakdown=periodo_breakdown,
             temas=available_temas,
             selected_tema_id=selected_tema_id,
+            materials=available_materials,
+            selected_material_id=selected_material_id,
         )
 
     @app.route("/media/<token>")
@@ -2048,12 +2112,21 @@ def create_app(test_config: dict | None = None):
             for m in materials
             if m.es_oracion or m.es_oracion_imagen
         }
+        # Vista previa compuesta (texto + imágenes) para las "oraciones con
+        # imágenes"; las oraciones planas se quedan con solo el texto de
+        # sentences_by_material (ver material.html).
+        image_sentences_by_material = {
+            m.id: material_image_preview(m)
+            for m in materials
+            if m.es_oracion_imagen
+        }
         return render_template(
             "material.html",
             active_nav="material",
             user=teacher,
             materials=materials,
             sentences_by_material=sentences_by_material,
+            image_sentences_by_material=image_sentences_by_material,
             skills=MATERIAL_SKILLS,
             question_configuration=QUESTION_CONFIGURATION,
             periodos=available_periodos,
@@ -2961,6 +3034,16 @@ def create_app(test_config: dict | None = None):
 
             staging_token = (request.form.get("staging_token") or "").strip()
 
+            # Modo editor: la docente sube sus propias imágenes junto con el
+            # resto del formulario, sin pasar por el staging de arriba (eso
+            # es solo para el diseño con IA) - un archivo
+            # "imagen_<staging_index>_<noun_index>" por cada sustantivo, con
+            # el mismo staging_index que ya manda cada oración (ver
+            # index_by_texto más abajo).
+            manual_image_files = {
+                key: value for key, value in request.files.items() if key.startswith("imagen_")
+            }
+
             # `staging_index` (si viene) apunta al hueco del `_previews/<token>/`
             # cuyas imágenes usar; permite que la docente haya quitado filas en
             # el paso de diseño. Se conserva junto al item normalizado.
@@ -3051,6 +3134,43 @@ def create_app(test_config: dict | None = None):
                             }), 400
                         rel = f"img/{_unique_noun_filename(palabra, position, noun_index, used_names)}"
                         shutil.copyfile(src, os.path.join(material_dir, rel))
+                        sustantivos.append({"palabra": palabra, "imagen": rel})
+                    oraciones_payload.append({
+                        "texto": item["texto"],
+                        "plantilla": plantilla,
+                        "sustantivos": sustantivos,
+                    })
+            elif manual_image_files:
+                # Modo editor: sin IA de por medio, las 2 imágenes de cada
+                # sustantivo llegan tal cual las subió la docente.
+                oraciones_payload = []
+                img_dir = os.path.join(material_dir, "img")
+                os.makedirs(img_dir, exist_ok=True)
+                used_names: set[str] = set()
+                for position, item in enumerate(items):
+                    try:
+                        plantilla = image_sentence_template(item["texto"], item["sustantivos"])
+                    except ValueError as exc:
+                        shutil.rmtree(material_dir, ignore_errors=True)
+                        return jsonify({"error": f"Oración {position + 1}: {exc}"}), 400
+                    key = " ".join(item["texto"].split()).casefold()
+                    src_index = index_by_texto.get(key, position)
+                    sustantivos = []
+                    for noun_index, palabra in enumerate(item["sustantivos"]):
+                        file_storage = manual_image_files.get(f"imagen_{src_index}_{noun_index}")
+                        if file_storage is None or not (file_storage.filename or "").strip():
+                            shutil.rmtree(material_dir, ignore_errors=True)
+                            return jsonify({
+                                "error": f"Falta una imagen de la oración {position + 1}."
+                            }), 400
+                        try:
+                            data = normalize_uploaded_noun_image(file_storage)
+                        except ValueError as exc:
+                            shutil.rmtree(material_dir, ignore_errors=True)
+                            return jsonify({"error": f"Oración {position + 1}: {exc}"}), 400
+                        rel = f"img/{_unique_noun_filename(palabra, position, noun_index, used_names)}"
+                        with open(os.path.join(material_dir, rel), "wb") as f:
+                            f.write(data)
                         sustantivos.append({"palabra": palabra, "imagen": rel})
                     oraciones_payload.append({
                         "texto": item["texto"],
@@ -3290,6 +3410,39 @@ def create_app(test_config: dict | None = None):
             _external=True,
             _scheme=scheme,
         )
+
+    def _material_image_stored_path(material, rel: str) -> str:
+        """Ruta de la imagen de un sustantivo (p.ej. "img/pollo.png",
+        relativa a la carpeta del material) resuelta a la ruta guardada
+        completa (relativa a UPLOADS_ROOT), tal como la esperan
+        `uploads_abspath` y `media_url`."""
+        base_dir = posixpath.dirname(str(material.path_preguntas or ""))
+        return posixpath.join(base_dir, rel)
+
+    def material_image_preview(material) -> list[dict[str, object]]:
+        """Vista previa de una "oración con imágenes" ya guardada, para
+        desplegarla en la consola tal como se ve en el paso de diseño: el
+        texto con cada sustantivo reemplazado por su imagen -o, si el
+        material se guardó sin imágenes (cliente antiguo), el propio
+        sustantivo resaltado en su lugar (ver split_image_sentence_template)."""
+        preview = []
+        for oracion in material_image_sentences(material):
+            sustantivos = [
+                {
+                    "palabra": noun["palabra"],
+                    "imagen_url": (
+                        media_url(_material_image_stored_path(material, noun["imagen"]))
+                        if noun["imagen"] else None
+                    ),
+                }
+                for noun in oracion["sustantivos"]
+            ]
+            plantilla = oracion["plantilla"] or oracion["texto"]
+            preview.append({
+                "texto": oracion["texto"],
+                "parts": split_image_sentence_template(plantilla, sustantivos),
+            })
+        return preview
 
     def serialize_image_sentences(material) -> list[dict[str, object]]:
         """Robot-facing view of every sentence: the full text, the template with
@@ -3635,9 +3788,8 @@ def create_app(test_config: dict | None = None):
         if not rel:
             return jsonify({"error": "Esta oración se guardó sin imágenes."}), 404
 
-        base_dir = posixpath.dirname(str(material.path_preguntas or ""))
         try:
-            abs_path = uploads_abspath(posixpath.join(base_dir, rel))
+            abs_path = uploads_abspath(_material_image_stored_path(material, rel))
         except ValueError:
             return jsonify({"error": "Imagen de oración no encontrada."}), 404
         if not os.path.isfile(abs_path):

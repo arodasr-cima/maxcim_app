@@ -422,6 +422,63 @@ def test_tema_filter_infers_its_own_periodo(app, client, urls):
     assert "Pregunta del tema B" not in html
 
 
+def _material_select_block(html):
+    """Recorta el <select> de material del historial de un alumno, para
+    revisar sus opciones sin depender de dónde más aparezca el nombre de un
+    material en la página (también sale en la tabla de interacciones)."""
+    start = html.index('id="materialSelect"')
+    return html[start:html.index("</select>", start)]
+
+
+def test_material_filter_narrows_to_one_material_within_its_tema(app, client, urls):
+    """`?material=<id>` acota un nivel más allá del tema elegido: dos
+    materiales del mismo tema, cada uno con su propia interacción, deben
+    poder verse por separado -y el desplegable debe listar ambos, ya
+    acotados a ese tema (ver resolve_material_filter)."""
+    with app.app_context():
+        periodo_id, tema_id = _periodo_con_tema()
+        material_1 = add_material("DOC-TEST-1", "Cuento de la granja")
+        material_1.id_periodo = periodo_id
+        material_1.id_tema = tema_id
+        material_2 = add_material("DOC-TEST-1", "Cuento del bosque")
+        material_2.id_periodo = periodo_id
+        material_2.id_tema = tema_id
+        db.session.commit()
+        add_interaction(material_1, "ALU-TEST-1", correct=True,
+                         question="Pregunta de la granja", answer="r", appraisal="ap")
+        add_interaction(material_2, "ALU-TEST-1", correct=True,
+                         question="Pregunta del bosque", answer="r", appraisal="ap")
+        db.session.commit()
+        material_1_id = material_1.id
+
+    html = client.get(f"{urls.student('AULA-REAL-1', 'ALU-TEST-1')}?tema={tema_id}").get_data(as_text=True)
+    select_block = _material_select_block(html)
+    assert "disabled" not in select_block
+    assert "Cuento de la granja" in select_block
+    assert "Cuento del bosque" in select_block
+    assert "Pregunta de la granja" in html
+    assert "Pregunta del bosque" in html
+
+    filtered = client.get(
+        f"{urls.student('AULA-REAL-1', 'ALU-TEST-1')}?tema={tema_id}&material={material_1_id}"
+    ).get_data(as_text=True)
+    assert "Pregunta de la granja" in filtered
+    assert "Pregunta del bosque" not in filtered
+
+
+def test_material_select_stays_empty_and_disabled_without_a_tema(app, client, urls):
+    """Sin tema elegido no hay de dónde listar materiales -el desplegable
+    queda deshabilitado y sin más opción que "Todos los materiales", aunque
+    la docente sí tenga materiales en otros temas."""
+    with app.app_context():
+        _seed_periodos_y_temas_para_filtro()
+
+    html = client.get(f"{urls.student('AULA-REAL-1', 'ALU-TEST-1')}?periodo=&tema=").get_data(as_text=True)
+    select_block = _material_select_block(html)
+    assert "disabled" in select_block
+    assert select_block.count('<option value="') == 1  # solo "Todos los materiales"
+
+
 def _stored_upload(app, stored_path):
     """Ruta en disco de un archivo de material (path guardado con prefijo
     histórico `uploads/`, ahora relativo a UPLOADS_ROOT)."""

@@ -386,6 +386,40 @@ def test_demo_image_sentence_design_flow_generates_and_exposes_images(
     # El staging se limpió al guardar.
     assert demo_client.get(first_img_url).status_code == 404
 
+    # El listado de materiales de la consola también arma la vista previa
+    # compuesta (texto + imágenes intercaladas), no solo el robot.
+    page = demo_client.get("/material").get_data(as_text=True)
+    assert page.count('class="material-card__slide-img"') == 4
+    assert "Ese " in page and " ama la " in page
+    assert "La niña dibuja una casa." not in page  # el texto plano ya no aparece tal cual
+
+
+def test_material_list_preview_falls_back_to_text_without_images(
+    app, client, periodo_tema
+):
+    """Un material "oracion_imagen" guardado sin imágenes (cliente antiguo,
+    sin `staging_token`) no tiene plantilla: la vista previa cae al texto
+    completo de la oración, igual que antes de agregar la vista con
+    imágenes."""
+    periodo_id, tema_id = periodo_tema()
+    saved = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion_imagen",
+            "title": "Oraciones con imágenes",
+            "sentences_json": json.dumps(
+                [{"texto": "Un gato duerme en el sofá.", "sustantivos": ["gato", "sofá"]}]
+            ),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert saved.status_code == 200
+
+    page = client.get("/material").get_data(as_text=True)
+    assert "Un gato duerme en el sofá." in page
+    assert 'class="material-card__slide-img"' not in page
+
 
 def _tiny_png(color) -> bytes:
     from PIL import Image
@@ -492,6 +526,76 @@ def test_image_sentence_upload_own_image_names_file_after_the_word(
     assert (img_dir / "pollo-2.png").is_file()
     # Son imágenes distintas: no se pisaron una a la otra.
     assert (img_dir / "pollo.png").read_bytes() != (img_dir / "pollo-2.png").read_bytes()
+
+
+def test_image_sentence_manual_editor_saves_uploaded_images_without_staging(
+    app, client, periodo_tema, tmp_path, monkeypatch
+):
+    """"Modo editor": sin `staging_token` (nunca pasó por el diseño con
+    IA), la docente manda sus propias imágenes junto con el resto del
+    formulario -un archivo "imagen_<staging_index>_<sustantivo>" por cada
+    sustantivo. Mismo nombrado final ("pollo.png", con el "-2" para no
+    pisar el segundo "pollo") que el flujo con staging (ver
+    test_image_sentence_upload_own_image_names_file_after_the_word)."""
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
+    periodo_id, tema_id = periodo_tema()
+    sentences = [
+        {"texto": "El pollo come maíz.", "sustantivos": ["pollo", "maíz"], "staging_index": 0},
+        {"texto": "Otro pollo duerme en el nido.", "sustantivos": ["pollo", "nido"], "staging_index": 1},
+    ]
+
+    saved = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion_imagen",
+            "title": "Oraciones con imágenes",
+            "sentences_json": json.dumps(sentences),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+            # Nombre y formato del archivo arbitrarios, igual que al subir
+            # una imagen durante el diseño con IA.
+            "imagen_0_0": (io.BytesIO(_tiny_png((255, 0, 0))), "cualquier_cosa.jpg"),
+            "imagen_0_1": (io.BytesIO(_tiny_png((0, 255, 0))), "maiz.png"),
+            "imagen_1_0": (io.BytesIO(_tiny_png((0, 0, 255))), "pollo2.png"),
+            "imagen_1_1": (io.BytesIO(_tiny_png((255, 255, 0))), "nido.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert saved.status_code == 200
+    material_id = saved.get_json()["material_id"]
+
+    with app.app_context():
+        material = db.session.get(Material, material_id)
+        oraciones_path = tmp_path / material.path_preguntas.removeprefix("uploads/")
+    oraciones = json.loads(oraciones_path.read_text(encoding="utf-8"))
+
+    assert oraciones[0]["sustantivos"][0]["imagen"] == "img/pollo.png"
+    assert oraciones[1]["sustantivos"][0]["imagen"] == "img/pollo-2.png"
+    img_dir = oraciones_path.parent / "img"
+    assert (img_dir / "pollo.png").is_file()
+    assert (img_dir / "pollo-2.png").is_file()
+    assert (img_dir / "pollo.png").read_bytes() != (img_dir / "pollo-2.png").read_bytes()
+
+
+def test_image_sentence_manual_editor_requires_every_image(client, periodo_tema):
+    """Falta la imagen del segundo sustantivo: se rechaza en vez de guardar
+    el material a medias."""
+    periodo_id, tema_id = periodo_tema()
+    response = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "oracion_imagen",
+            "title": "Oraciones con imágenes",
+            "sentences_json": json.dumps([
+                {"texto": "El pollo come maíz.", "sustantivos": ["pollo", "maíz"], "staging_index": 0},
+            ]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+            "imagen_0_0": (io.BytesIO(_tiny_png((255, 0, 0))), "pollo.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
 
 
 def test_image_sentence_save_rejects_items_without_two_nouns(client, periodo_tema):

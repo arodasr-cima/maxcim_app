@@ -23,6 +23,41 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  // Vista previa de "oraciones con imágenes": tarjetas horizontales, una por
+  // oración, con flechas para deslizar (ver .material-card__slider* en
+  // dashboard.css). Cada material de ese tipo tiene su propio slider.
+  function wireImageSentenceSliders() {
+    document.querySelectorAll("[data-slider]").forEach((slider) => {
+      const track = slider.querySelector("[data-slider-track]");
+      const prevBtn = slider.querySelector("[data-slider-prev]");
+      const nextBtn = slider.querySelector("[data-slider-next]");
+      if (!track || !prevBtn || !nextBtn) return;
+
+      function slideBy(direction) {
+        const slide = track.querySelector(".material-card__slide");
+        const step = slide ? slide.getBoundingClientRect().width + 10 : track.clientWidth;
+        track.scrollBy({ left: direction * step, behavior: "smooth" });
+      }
+
+      function updateNav() {
+        const maxScroll = track.scrollWidth - track.clientWidth;
+        prevBtn.disabled = track.scrollLeft <= 1;
+        nextBtn.disabled = maxScroll <= 1 || track.scrollLeft >= maxScroll - 1;
+      }
+
+      prevBtn.addEventListener("click", () => slideBy(-1));
+      nextBtn.addEventListener("click", () => slideBy(1));
+      track.addEventListener("scroll", updateNav);
+      // El track empieza oculto (la tarjeta de material recién se despliega
+      // al tocarla) y clientWidth/scrollWidth valen 0 mientras tanto -sin
+      // esto, "Siguiente" quedaría deshabilitado para siempre. ResizeObserver
+      // recalcula en cuanto el contenedor pasa a tener tamaño real.
+      new ResizeObserver(updateNav).observe(track);
+    });
+  }
+
+  wireImageSentenceSliders();
+
   function applyFilters() {
     const query = search.value.trim().toLowerCase();
     const tipo = typeFilter.value;
@@ -152,6 +187,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const imageDesignBackBtn = document.getElementById("imageDesignBackBtn");
   const imageDesignDiscardBtn = document.getElementById("imageDesignDiscardBtn");
   const imageDesignSaveBtn = document.getElementById("imageDesignSaveBtn");
+  const classifyOverlay = document.getElementById("classifyOverlay");
+  const classifyMaterialTitle = document.getElementById("classifyMaterialTitle");
+  const classifyBackBtn = document.getElementById("classifyBackBtn");
+  const classifySaveBtn = document.getElementById("classifySaveBtn");
 
   let selectedFile = null;
   let currentStoryType = "cuento";
@@ -164,10 +203,21 @@ document.addEventListener("DOMContentLoaded", () => {
   // "Modo editor": la docente escribe las oraciones a mano, sin documento ni
   // IA. `manualEntryMode` es válido para "oracion" y "oracion_imagen";
   // `manualImageEntryMode` además activa, solo para esta última, las 2
-  // imágenes por oración que sube ella misma (ver appendImageSentenceItem)
-  // -diseño únicamente por ahora, sin guardado todavía.
+  // imágenes por oración que sube ella misma (ver appendImageSentenceItem),
+  // que se envían junto con el resto al guardar (ver saveManualImageSentenceMaterial).
   let manualEntryMode = false;
   let manualImageEntryMode = false;
+  // Identificador propio de cada fila de "oracion_imagen", para poder
+  // relacionar sus 2 imágenes con la oración correcta al guardar (ver
+  // getImageSentencesData y saveManualImageSentenceMaterial) incluso si el
+  // servidor descarta alguna fila duplicada al normalizar.
+  let imageSentenceRowSeq = 0;
+  // El contenido (cuento, oraciones, oraciones con imágenes...) ya quedó
+  // aprobado y solo falta clasificarlo: guarda qué función ejecutar y a qué
+  // modal volver si la docente se arrepiente (ver openClassifyModal, más
+  // abajo del todo). Sin esto no hay nada que hacer si tocan "Guardar
+  // material" en classifyOverlay.
+  let pendingSave = null;
   let currentMaterialTitle = "";
   let audioFullReady = false;
   let audioSummaryReady = false;
@@ -200,19 +250,16 @@ document.addEventListener("DOMContentLoaded", () => {
   filterUploadTemas();
   uploadPeriodoSelect.addEventListener("change", () => {
     filterUploadTemas();
-    updateDoneButtonState();
-    updateDesignNav();
+    updateClassifySaveState();
   });
   // period_filter.js restablece Periodo al cambiar Año. Este segundo
   // listener se ejecuta después y mantiene Tema sincronizado con ese reset.
   uploadPeriodoYearSelect.addEventListener("change", () => {
     filterUploadTemas();
-    updateDoneButtonState();
-    updateDesignNav();
+    updateClassifySaveState();
   });
   uploadTemaSelect.addEventListener("change", () => {
-    updateDoneButtonState();
-    updateDesignNav();
+    updateClassifySaveState();
   });
 
   const uploadTypeButtons = [uploadTypeCuentoBtn, uploadTypeOracionBtn, uploadTypeOracionImagenBtn];
@@ -272,9 +319,7 @@ document.addEventListener("DOMContentLoaded", () => {
       : "Corrige cada oración; usa ✕ para quitar la que no quieras guardar.";
     resultDoneBtn.textContent = isImageSentence
       ? "Siguiente: diseñar imágenes"
-      : isOracion
-        ? "Aprobar y guardar oraciones"
-        : "Aprobar y guardar";
+      : "Continuar";
   }
 
   function updateUploadButtonState() {
@@ -304,8 +349,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // oraciones ella misma. Reutiliza la misma pantalla de revisión que ya
   // usan la extracción y la generación con IA (mismo botón "+ Agregar
   // oración", mismo guardado para "oracion"); para "oracion_imagen" activa
-  // además los cuadros de subir imagen de appendImageSentenceItem. Todavía
-  // sin guardado propio para "oracion_imagen": eso es el siguiente paso.
+  // además los cuadros de subir imagen de appendImageSentenceItem y guarda
+  // directo con ellas, sin pasar por el diseño con IA (ver
+  // saveManualImageSentenceMaterial).
   function openManualEditor(type) {
     // Si no escribió un nombre en el modal de arriba, arranca con uno
     // genérico -el título ahora también se edita aquí mismo (ver
@@ -322,7 +368,7 @@ document.addEventListener("DOMContentLoaded", () => {
       renderImageSentenceRows([]);
       appendImageSentenceItem({}, { focus: true });
       resultSubtitle.textContent = "Modo editor - escribe cada oración, sus dos palabras y sube tú misma las imágenes que las reemplazarán";
-      resultDoneBtn.textContent = "Continuar (próximamente)";
+      resultDoneBtn.textContent = "Continuar";
     } else {
       lastSentenceContext = { topic: currentMaterialTitle, grade_level: "" };
       renderSentences([]);
@@ -423,6 +469,68 @@ document.addEventListener("DOMContentLoaded", () => {
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.error || "No se pudieron guardar las oraciones con imágenes.");
+    }
+    return data;
+  }
+
+  // Modo editor de "oracion_imagen": a diferencia de saveDesignedImageSentenceMaterial
+  // (que aprueba un diseño ya generado en el servidor, identificado por
+  // staging_token), aquí las imágenes nunca pasaron por el servidor -viven
+  // solo como File en cada fila (ver buildNounImagePicker)- así que se
+  // envían junto con el resto en el mismo POST. `rowIndex` viaja como
+  // "staging_index" -mismo nombre que ya lee /api/material/save para
+  // volver a relacionar cada oración con sus imágenes aunque el servidor
+  // descarte alguna fila duplicada al normalizar.
+  async function saveManualImageSentenceMaterial(items) {
+    const formData = new FormData();
+    formData.append("tipo_material", "oracion_imagen");
+    formData.append("title", currentMaterialTitle);
+    formData.append("sentences_json", JSON.stringify(items.map((item) => ({
+      texto: item.texto,
+      sustantivos: item.sustantivos,
+      staging_index: item.rowIndex,
+    }))));
+    formData.append("id_periodo", uploadPeriodoSelect.value);
+    formData.append("id_tema", uploadTemaSelect.value);
+    items.forEach((item) => {
+      item.files.forEach((file, nounIndex) => {
+        formData.append(`imagen_${item.rowIndex}_${nounIndex}`, file, file.name);
+      });
+    });
+
+    const response = await authorizedFetch("/api/material/save", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "No se pudieron guardar las oraciones con imágenes.");
+    }
+    return data;
+  }
+
+  async function saveStoryMaterial(transcribedText, summaryText, questionsData) {
+    const formData = new FormData();
+    formData.append("tipo_material", "cuento");
+    formData.append("title", currentMaterialTitle);
+    formData.append("transcribed_text", transcribedText);
+    formData.append("summary_text", summaryText);
+    formData.append("questions_json", JSON.stringify(questionsData));
+    formData.append("audio_full", audioFullBlob, "audio.wav");
+    formData.append("audio_summary", audioSummaryBlob, "audio_resumen.wav");
+    formData.append("id_periodo", uploadPeriodoSelect.value);
+    formData.append("id_tema", uploadTemaSelect.value);
+    if (currentTargetDurationMinutes !== null) {
+      formData.append("target_duration_minutes", String(currentTargetDurationMinutes));
+    }
+
+    const response = await authorizedFetch("/api/material/save", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "No se pudo guardar el material.");
     }
     return data;
   }
@@ -528,6 +636,29 @@ document.addEventListener("DOMContentLoaded", () => {
   resultCancelBtn.addEventListener("click", () => {
     resultOverlay.classList.remove("is-open");
     resetResultState();
+  });
+
+  classifyBackBtn.addEventListener("click", () => {
+    classifyOverlay.classList.remove("is-open");
+    pendingSave?.backOverlay.classList.add("is-open");
+  });
+
+  classifySaveBtn.addEventListener("click", async () => {
+    if (!pendingSave || classifySaveBtn.disabled) return;
+    const originalLabel = classifySaveBtn.textContent;
+    classifySaveBtn.disabled = true;
+    classifyBackBtn.disabled = true;
+    classifySaveBtn.textContent = "Guardando...";
+    try {
+      await pendingSave.run();
+      classifyOverlay.classList.remove("is-open");
+      window.location.reload();
+    } catch (error) {
+      alert(error.message || "No se pudo guardar el material.");
+      classifySaveBtn.disabled = false;
+      classifyBackBtn.disabled = false;
+      classifySaveBtn.textContent = originalLabel;
+    }
   });
 
   // El nombre del material se puede corregir aquí mismo, no solo en el
@@ -768,6 +899,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // El contenido en sí ya queda aprobado aquí -el guardado real (con
+  // periodo y tema) pasa a classifyOverlay (ver openClassifyModal), un paso
+  // aparte que se abre en vez de guardar directo.
   resultDoneBtn.addEventListener("click", async () => {
     if (currentResultType === "oracion_imagen") {
       const items = getImageSentencesData();
@@ -776,9 +910,9 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       if (manualImageEntryMode) {
-        // Diseño únicamente por ahora: el modo editor todavía no guarda
-        // -falta enviar las imágenes que subió la docente junto al material.
-        alert("El guardado del modo editor todavía no está disponible.");
+        // Modo editor: nada de diseño con IA -las imágenes ya las subió la
+        // docente en la misma revisión (ver getImageSentencesData).
+        openClassifyModal(resultOverlay, () => saveManualImageSentenceMaterial(items));
         return;
       }
       if (items.length > 20) {
@@ -805,23 +939,11 @@ document.addEventListener("DOMContentLoaded", () => {
         alert("No hay oraciones para guardar.");
         return;
       }
-      const originalLabel = resultDoneBtn.textContent;
-      resultDoneBtn.disabled = true;
-      resultDoneBtn.textContent = "Guardando...";
-      try {
-        await saveSentenceMaterial(sentences);
-        resultOverlay.classList.remove("is-open");
-        window.location.reload();
-      } catch (error) {
-        alert(error.message || "No se pudieron guardar las oraciones.");
-        resultDoneBtn.disabled = false;
-        resultDoneBtn.textContent = originalLabel;
-      }
+      openClassifyModal(resultOverlay, () => saveSentenceMaterial(sentences));
       return;
     }
 
     const transcribedText = resultTranscribedText.textContent.trim();
-
     const summaryText = resultSummaryText.textContent.trim();
     const questionsData = getQuestionsData();
 
@@ -842,43 +964,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const originalLabel = resultDoneBtn.textContent;
-    resultDoneBtn.disabled = true;
-    resultDoneBtn.textContent = "Guardando...";
-
-    try {
-      const formData = new FormData();
-      formData.append("tipo_material", "cuento");
-      formData.append("title", currentMaterialTitle);
-      formData.append("transcribed_text", transcribedText);
-      formData.append("summary_text", summaryText);
-      formData.append("questions_json", JSON.stringify(questionsData));
-      formData.append("audio_full", audioFullBlob, "audio.wav");
-      formData.append("audio_summary", audioSummaryBlob, "audio_resumen.wav");
-      formData.append("id_periodo", uploadPeriodoSelect.value);
-      formData.append("id_tema", uploadTemaSelect.value);
-      if (currentTargetDurationMinutes !== null) {
-        formData.append("target_duration_minutes", String(currentTargetDurationMinutes));
-      }
-
-      const response = await authorizedFetch("/api/material/save", {
-        method: "POST",
-        body: formData,
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "No se pudo guardar el material.");
-      }
-
-      resultOverlay.classList.remove("is-open");
-      window.location.reload();
-    } catch (error) {
-      alert(error.message || "No se pudo guardar el material.");
-    } finally {
-      resultDoneBtn.disabled = false;
-      resultDoneBtn.textContent = originalLabel;
-    }
+    openClassifyModal(resultOverlay, () => saveStoryMaterial(transcribedText, summaryText, questionsData));
   });
 
   // Text-to-speech: send the (possibly edited) text and play back the result
@@ -999,10 +1085,10 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  // El periodo y el tema ya no se eligen aquí -eso pasó a classifyOverlay,
+  // un paso posterior (ver openClassifyModal)- así que este botón solo
+  // depende de que el contenido en sí esté listo.
   function updateDoneButtonState() {
-    // Todo material se guarda con un tema (y su periodo). Sin tema elegido no
-    // se puede aprobar, sea cuento u oraciones.
-    const temaChosen = Boolean(uploadTemaSelect.value);
     let contentReady;
     if (currentResultType === "oracion_imagen") {
       // getImageSentencesData() también marca en rojo las filas incompletas
@@ -1016,7 +1102,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       contentReady = audioFullReady && audioSummaryReady && questionsReady;
     }
-    resultDoneBtn.disabled = !(contentReady && temaChosen);
+    resultDoneBtn.disabled = !contentReady;
   }
 
   function resetResultState() {
@@ -1045,8 +1131,30 @@ document.addEventListener("DOMContentLoaded", () => {
     // El tema se elige de nuevo para cada material; parte sin selección y con
     // las opciones acotadas al periodo vigente.
     filterUploadTemas(true);
+    classifyOverlay.classList.remove("is-open");
+    pendingSave = null;
 
     updateDoneButtonState();
+  }
+
+  // Último paso antes de guardar de verdad: contenido ya aprobado (cuento,
+  // oraciones, oraciones con imágenes -generadas o del modo editor-), solo
+  // falta el periodo y el tema. `run` hace el guardado en sí (uno de los
+  // saveXxxMaterial de más arriba); `backOverlay` es a dónde volver si la
+  // docente toca "Volver" en vez de "Guardar material" (ver
+  // classifyBackBtn/classifySaveBtn, más abajo).
+  function openClassifyModal(backOverlay, run) {
+    pendingSave = { backOverlay, run };
+    classifyMaterialTitle.textContent = currentMaterialTitle;
+    classifySaveBtn.textContent = "Guardar material";
+    classifyBackBtn.disabled = false;
+    updateClassifySaveState();
+    backOverlay.classList.remove("is-open");
+    classifyOverlay.classList.add("is-open");
+  }
+
+  function updateClassifySaveState() {
+    classifySaveBtn.disabled = !uploadTemaSelect.value;
   }
 
   // Sentence review: one editable line per sentence. The teacher can fix
@@ -1118,10 +1226,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Cuadro para subir, a mano, la imagen que reemplazará a un sustantivo
-  // (modo editor). Solo diseño por ahora: el archivo elegido se previsualiza
-  // aquí mismo (URL.createObjectURL) pero todavía no se envía a ningún lado
-  // -eso llega junto con el guardado de "oraciones con imágenes" manuales.
-  function buildNounImagePicker(index) {
+  // (modo editor). El archivo elegido se previsualiza aquí mismo
+  // (URL.createObjectURL) y recién se envía al guardar el material -junto
+  // con el resto de la oración- por eso `onChange` avisa a la fila para que
+  // se revalide (ver appendImageSentenceItem).
+  function buildNounImagePicker(index, onChange) {
     const wrap = document.createElement("div");
     wrap.className = "sentences-review__image-picker";
 
@@ -1154,6 +1263,8 @@ document.addEventListener("DOMContentLoaded", () => {
       preview.hidden = false;
       text.textContent = file.name;
       dropLabel.classList.add("has-image");
+      dropLabel.setAttribute("aria-invalid", "false");
+      onChange();
     });
 
     dropLabel.append(icon, text, fileInput);
@@ -1164,6 +1275,8 @@ document.addEventListener("DOMContentLoaded", () => {
   function appendImageSentenceItem(item = {}, { focus = false } = {}) {
     const row = document.createElement("li");
     row.className = "sentences-review__item sentences-review__item--image";
+    // Único dentro de esta revisión: ver el comentario de imageSentenceRowSeq.
+    row.dataset.rowIndex = String(imageSentenceRowSeq++);
 
     const content = document.createElement("div");
     content.className = "sentences-review__image-content";
@@ -1206,7 +1319,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // la imagen que la reemplazará -sin esto, la imagen se genera después
       // con IA en el paso de diseño (image-sentences/prepare).
       if (manualImageEntryMode) {
-        field.appendChild(buildNounImagePicker(index));
+        field.appendChild(buildNounImagePicker(index, handleFieldChange));
       }
       nounFields.appendChild(field);
       return input;
@@ -1261,9 +1374,20 @@ document.addEventListener("DOMContentLoaded", () => {
     updateDoneButtonState();
   }
 
+  // Fila a fila, los 2 File elegidos en los cuadros de subir imagen (modo
+  // editor); [] si no está en ese modo, o si a alguno todavía le falta el
+  // archivo (undefined en su lugar).
+  function getImageSentenceFiles(row) {
+    if (!manualImageEntryMode) return [];
+    return Array.from(row.querySelectorAll("[data-image-sentence-file]"))
+      .map((input) => input.files && input.files[0]);
+  }
+
   // Como sentenceRowsAreValid(), pero para "oracion_imagen": exige texto +
   // 2 sustantivos en cada fila, sin deduplicar (a diferencia de
   // getImageSentencesData, que sí deduplica porque arma el payload a enviar).
+  // En modo editor también exige las 2 imágenes que sube la docente -sin
+  // eso no hay nada que guardar todavía.
   function allImageSentenceRowsComplete() {
     const rows = Array.from(resultSentencesList.querySelectorAll(".sentences-review__item--image"));
     if (!rows.length) return false;
@@ -1272,14 +1396,20 @@ document.addEventListener("DOMContentLoaded", () => {
         ?.textContent.replace(/\s+/g, " ").trim() || "";
       const nouns = Array.from(row.querySelectorAll("[data-image-sentence-noun]"))
         .map((input) => input.value.replace(/\s+/g, " ").trim());
-      return Boolean(text) && nouns.length === 2 && nouns.every(Boolean);
+      if (!(Boolean(text) && nouns.length === 2 && nouns.every(Boolean))) return false;
+      if (!manualImageEntryMode) return true;
+      const files = getImageSentenceFiles(row);
+      return files.length === 2 && files.every(Boolean);
     });
   }
 
   // Una oración con imágenes tampoco puede quedar en blanco ni incompleta:
-  // hace falta el texto Y sus 2 sustantivos, sea que la fila venga de un
-  // documento, de la IA o se haya escrito a mano. Igual que en las oraciones
-  // planas, solo se marca inválida una vez "tocada" (ver appendImageSentenceItem).
+  // hace falta el texto Y sus 2 sustantivos (y, en modo editor, sus 2
+  // imágenes), sea que la fila venga de un documento, de la IA o se haya
+  // escrito a mano. Igual que en las oraciones planas, solo se marca
+  // inválida una vez "tocada" (ver appendImageSentenceItem). En modo editor
+  // cada item también lleva `rowIndex` y `files`, que es lo que
+  // saveManualImageSentenceMaterial necesita para guardar.
   function getImageSentencesData() {
     const seen = new Set();
     const items = [];
@@ -1288,18 +1418,29 @@ document.addEventListener("DOMContentLoaded", () => {
         ?.textContent.replace(/\s+/g, " ").trim() || "";
       const nounInputs = Array.from(row.querySelectorAll("[data-image-sentence-noun]"));
       const nouns = nounInputs.map((input) => input.value.replace(/\s+/g, " ").trim());
-      const complete = Boolean(text) && nouns.length === 2 && nouns.every(Boolean);
+      const files = getImageSentenceFiles(row);
+      const imagesComplete = !manualImageEntryMode || (files.length === 2 && files.every(Boolean));
+      const complete = Boolean(text) && nouns.length === 2 && nouns.every(Boolean) && imagesComplete;
       const touched = row.dataset.touched === "true";
 
       row.classList.toggle("sentences-review__item--invalid", touched && !complete);
       nounInputs.forEach((input) => {
         input.setAttribute("aria-invalid", String(touched && !complete && !input.value.trim()));
       });
+      if (manualImageEntryMode) {
+        row.querySelectorAll(".sentences-review__image-dropzone").forEach((dropzone, index) => {
+          dropzone.setAttribute("aria-invalid", String(touched && !files[index]));
+        });
+      }
 
       const key = text.toLocaleLowerCase("es");
       if (complete && !seen.has(key) && items.length < 120) {
         seen.add(key);
-        items.push({ texto: text, sustantivos: nouns });
+        items.push({
+          texto: text,
+          sustantivos: nouns,
+          ...(manualImageEntryMode ? { rowIndex: row.dataset.rowIndex, files } : {}),
+        });
       }
     });
     return items;
@@ -1320,7 +1461,7 @@ document.addEventListener("DOMContentLoaded", () => {
     imageDesignNextBtn.disabled = true;
     imageDesignRemoveBtn.disabled = true;
     imageDesignSaveBtn.disabled = true;
-    imageDesignSaveBtn.textContent = "Aprobar y guardar";
+    imageDesignSaveBtn.textContent = "Continuar";
   }
 
   function updateDesignNav() {
@@ -1331,7 +1472,7 @@ document.addEventListener("DOMContentLoaded", () => {
     imageDesignPrevBtn.disabled = imageDesignBusy || !count || currentDesignIndex === 0;
     imageDesignNextBtn.disabled = imageDesignBusy || !count || currentDesignIndex >= count - 1;
     imageDesignRemoveBtn.disabled = imageDesignBusy || !count;
-    imageDesignSaveBtn.disabled = imageDesignBusy || !count || !uploadTemaSelect.value;
+    imageDesignSaveBtn.disabled = imageDesignBusy || !count;
     imageDesignNounControls.querySelectorAll("input, button").forEach((control) => {
       control.disabled = imageDesignBusy;
     });
@@ -1586,6 +1727,7 @@ document.addEventListener("DOMContentLoaded", () => {
   imageDesignDiscardBtn.addEventListener("click", () => {
     imageDesignOverlay.classList.remove("is-open");
     resultOverlay.classList.remove("is-open");
+    classifyOverlay.classList.remove("is-open");
     loadingOverlay.classList.remove("is-open");
     uploadOverlay.classList.remove("is-open");
     storyOverlay.classList.remove("is-open");
@@ -1599,28 +1741,12 @@ document.addEventListener("DOMContentLoaded", () => {
     lastSentenceContext = { topic: "", grade_level: "" };
   });
 
-  imageDesignSaveBtn.addEventListener("click", async () => {
+  imageDesignSaveBtn.addEventListener("click", () => {
     if (!designSentences.length) {
       alert("No hay oraciones con imágenes para guardar.");
       return;
     }
-    if (!uploadTemaSelect.value) {
-      alert("Selecciona un tema antes de guardar.");
-      return;
-    }
-
-    imageDesignSaveBtn.disabled = true;
-    imageDesignSaveBtn.textContent = "Guardando";
-    try {
-      await saveDesignedImageSentenceMaterial();
-      imageDesignOverlay.classList.remove("is-open");
-      resultOverlay.classList.remove("is-open");
-      window.location.reload();
-    } catch (error) {
-      alert(error.message || "No se pudieron guardar las oraciones con imágenes.");
-      imageDesignSaveBtn.textContent = "Aprobar y guardar";
-      updateDesignNav();
-    }
+    openClassifyModal(imageDesignOverlay, () => saveDesignedImageSentenceMaterial());
   });
 
   addSentenceBtn?.addEventListener("click", () => {
