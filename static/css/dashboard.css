@@ -3349,13 +3349,18 @@ body {
 }
 
 .material-card__slide {
+  /* ponytail: sin flex a propósito. El contenido es texto suelto mezclado
+     con <img>/<mark> (ver material.html); con display:flex cada trozo de
+     texto se vuelve un ítem flex anónimo que se encoge y corta palabras a
+     la mitad. Como flujo inline normal, texto e imágenes envuelven juntos
+     por palabra, solo cuando hace falta. La altura mínima ya no centra
+     verticalmente el contenido corto; si hace falta, se retoma con un
+     wrapper dedicado en la plantilla. */
   flex: 0 0 auto;
   width: 340px;
   min-height: 160px;
   scroll-snap-align: start;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   border: 1px solid #e6eaf1;
   border-radius: 12px;
   padding: 20px 22px;
@@ -3364,7 +3369,7 @@ body {
   font-size: 19px;
   line-height: 2.3;
   text-align: center;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
 }
 
 .material-card__slide-img {
