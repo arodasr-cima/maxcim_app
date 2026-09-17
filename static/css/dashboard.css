@@ -837,6 +837,14 @@ body {
   max-width: 90vw;
 }
 
+/* "Nuevo material" (subida normal): con 4 pestañas de tipo en vez de 3, el
+   ancho base de .upload-modal se queda corto y "Con imágenes"/"Bits"
+   terminan encimándose. Solo este modal necesita más ancho -el de borrado y
+   el de periodo/tema quedan igual con el ancho base. */
+#uploadOverlay .upload-modal {
+  width: 520px;
+}
+
 .story-modal {
   width: 680px;
   max-width: 100%;
@@ -925,15 +933,15 @@ body {
 }
 
 .upload-modal__type-btn {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   min-width: 0;
   border: none;
-  background: transparent;
+  background: #e4e9f1;
   border-radius: 8px;
-  padding: 9px 8px;
+  padding: 9px 12px;
   font-size: 12px;
   font-weight: 700;
-  color: #6b7280;
+  color: #5b6472;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1684,6 +1692,29 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-top: 16px;
+}
+
+/* Diseño de "bits": una sola palabra + una imagen por tarjeta, a diferencia
+   de una oración con 2 sustantivos. La imagen se muestra grande y centrada
+   (no como texto en línea, ver .image-design__img) y su único control de
+   palabra no necesita las 2 columnas del grid de arriba. */
+.image-design__bit-img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: 220px;
+  margin: 0 auto 16px;
+  border-radius: 12px;
+  object-fit: contain;
+  background: #fffefb;
+  border: 1px solid #e6eaf1;
+}
+
+.image-design__noun-controls--single {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 360px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .image-design__noun-control {
@@ -3349,33 +3380,40 @@ body {
 }
 
 .material-card__slide {
-  /* ponytail: sin flex a propósito. El contenido es texto suelto mezclado
-     con <img>/<mark> (ver material.html); con display:flex cada trozo de
-     texto se vuelve un ítem flex anónimo que se encoge y corta palabras a
-     la mitad. Como flujo inline normal, texto e imágenes envuelven juntos
-     por palabra, solo cuando hace falta. La altura mínima ya no centra
-     verticalmente el contenido corto; si hace falta, se retoma con un
-     wrapper dedicado en la plantilla. */
+  /* El contenido (texto suelto mezclado con <img>/<mark>, ver material.html)
+     vive en .material-card__slide-inner, no directamente aquí: así el flex
+     de esta tarjeta solo centra ese bloque -horizontal y verticalmente-
+     sin volverse el contenedor flex del texto/imágenes mezclados, que
+     partiría palabras a la mitad. */
   flex: 0 0 auto;
   width: 340px;
   min-height: 160px;
   scroll-snap-align: start;
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid #e6eaf1;
   border-radius: 12px;
-  padding: 20px 22px;
+  padding: 20px 18px;
   background: #f8fafc;
   color: #3d485c;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.material-card__slide-inner {
+  flex: 0 0 auto;
+  max-width: 100%;
+  white-space: nowrap;
   font-size: 19px;
-  line-height: 2.3;
+  line-height: 1.3;
   text-align: center;
-  overflow-wrap: normal;
 }
 
 .material-card__slide-img {
   width: auto;
   height: 3.2em;
-  max-width: 48%;
+  max-width: 160px;
   margin: 0 0.15em;
   border-radius: 9px;
   object-fit: contain;

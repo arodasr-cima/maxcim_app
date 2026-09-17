@@ -625,6 +625,313 @@ def test_image_sentence_save_rejects_items_without_two_nouns(client, periodo_tem
     assert empty.status_code == 400
 
 
+def test_demo_bits_draft_has_word_each(demo_client):
+    enter_demo(demo_client)
+    draft = demo_client.post("/api/bits/generate", json={
+        "silabas": "ma, me, mi, mo, mu",
+        "cantidad_silabas": 2,
+        "grade_level": "primero de primaria",
+        "count": 6,
+    })
+    assert draft.status_code == 200
+    data = draft.get_json()
+    assert data["title"].startswith("Bits: sílabas")
+    assert len(data["items"]) == 6
+    for item in data["items"]:
+        assert item["palabra"].strip()
+
+
+def test_demo_bits_design_flow_generates_and_exposes_images(
+    demo_app, demo_client, tmp_path, monkeypatch
+):
+    monkeypatch.setitem(demo_app.config, "UPLOADS_ROOT", str(tmp_path))
+    enter_demo(demo_client)
+
+    with demo_app.app_context():
+        periodo = Periodo(
+            nombre="I BIMESTRE", anio=date.today().year,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=1),
+        )
+        db.session.add(periodo)
+        db.session.commit()
+        tema = Tema(nombre="Fonética", fk_user="DOC-DEMO-01", id_periodo=periodo.id)
+        db.session.add(tema)
+        db.session.commit()
+        periodo_id, tema_id = periodo.id, tema.id
+
+    verified = [{"palabra": "mano"}, {"palabra": "mapa"}]
+
+    prepared = demo_client.post(
+        "/api/bits/prepare",
+        json={"title": "Bits: sílabas ma", "items": verified},
+    )
+    assert prepared.status_code == 200
+    body = prepared.get_json()
+    token = body["token"]
+    assert body["items"][0]["palabra"] == "mano"
+    first_img_url = body["items"][0]["imagen_url"]
+
+    # La imagen en revisión se sirve como PNG.
+    img = demo_client.get(first_img_url)
+    assert img.status_code == 200
+    assert img.data.startswith(b"\x89PNG\r\n\x1a\n")
+
+    # Regenerar una sola imagen devuelve una URL nueva (cache-busted).
+    regen = demo_client.post(
+        "/api/bits/regenerate",
+        json={"token": token, "item_index": 1},
+    )
+    assert regen.status_code == 200
+    assert "?v=" in regen.get_json()["imagen_url"]
+
+    saved = demo_client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits",
+            "title": "Bits: sílabas ma",
+            "staging_token": token,
+            "bits_json": json.dumps([
+                {"palabra": "mano", "staging_index": 0},
+                {"palabra": "mapa", "staging_index": 1},
+            ]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert saved.status_code == 200
+    material_id = saved.get_json()["material_id"]
+
+    robot_view = demo_client.get(
+        f"/api/materials/{material_id}?teacher_id=DOC-DEMO-01"
+    ).get_json()
+    assert robot_view["tipo_material"] == "bits"
+    bits = robot_view["bits"]
+    assert [b["palabra"] for b in bits] == ["mano", "mapa"]
+    img_url = bits[0]["imagen_url"]
+    assert img_url and "/bit-imagen/0" in img_url
+
+    got = demo_client.get(
+        f"/api/materials/{material_id}/bit-imagen/0?teacher_id=DOC-DEMO-01"
+    )
+    assert got.status_code == 200
+    assert got.data.startswith(b"\x89PNG\r\n\x1a\n")
+
+    resource = demo_client.get(
+        f"/api/materials/{material_id}/bits?teacher_id=DOC-DEMO-01"
+    ).get_json()
+    assert resource["bits"] == bits
+
+    only_bits = demo_client.get(
+        "/api/materials?teacher_id=DOC-DEMO-01&tipo=bits"
+    ).get_json()
+    assert [m["id"] for m in only_bits] == [material_id]
+
+    # El staging se limpió al guardar.
+    assert demo_client.get(first_img_url).status_code == 404
+
+    page = demo_client.get("/material").get_data(as_text=True)
+    assert page.count('class="material-card__slide-img"') >= 2
+    assert "mano" in page and "mapa" in page
+
+
+def test_bits_upload_own_image_names_file_after_the_word(
+    demo_app, demo_client, tmp_path, monkeypatch
+):
+    """Misma idea que test_image_sentence_upload_own_image_names_file_after_the_word
+    pero para bits. A diferencia de oracion_imagen (donde la clave única es el
+    texto de la oración, así que dos oraciones distintas pueden compartir un
+    mismo sustantivo), en bits la palabra ES la clave del item -dos bits no
+    pueden compartir literalmente la misma palabra con imágenes distintas
+    (¿cuál de las dos mostraría "mano"?). La colisión de nombre de archivo que
+    sí puede pasar legítimamente es entre dos palabras DISTINTAS que
+    _slugify_noun normaliza igual, p.ej. "papá" y "papa" (misma base ASCII
+    "papa" al quitarle el acento) -la segunda cae a "papa-2.png"."""
+    monkeypatch.setitem(demo_app.config, "UPLOADS_ROOT", str(tmp_path))
+    enter_demo(demo_client)
+
+    with demo_app.app_context():
+        periodo = Periodo(
+            nombre="I BIMESTRE", anio=date.today().year,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=1),
+        )
+        db.session.add(periodo)
+        db.session.commit()
+        tema = Tema(nombre="Fonética", fk_user="DOC-DEMO-01", id_periodo=periodo.id)
+        db.session.add(tema)
+        db.session.commit()
+        periodo_id, tema_id = periodo.id, tema.id
+
+    verified = [{"palabra": "papá"}, {"palabra": "papa"}]
+    prepared = demo_client.post(
+        "/api/bits/prepare",
+        json={"title": "Bits", "items": verified},
+    )
+    assert prepared.status_code == 200
+    token = prepared.get_json()["token"]
+
+    upload = demo_client.post(
+        "/api/bits/upload-image",
+        data={
+            "token": token,
+            "item_index": "0",
+            "imagen": (io.BytesIO(_tiny_png((255, 0, 0))), "cualquier_cosa.jpg"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert upload.status_code == 200
+    assert upload.get_json()["fuente"] == "manual"
+
+    bad_upload = demo_client.post(
+        "/api/bits/upload-image",
+        data={
+            "token": token,
+            "item_index": "1",
+            "imagen": (io.BytesIO(b"esto no es una imagen"), "papa.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert bad_upload.status_code == 400
+
+    saved = demo_client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits",
+            "title": "Bits",
+            "staging_token": token,
+            "bits_json": json.dumps([
+                {"palabra": "papá", "staging_index": 0},
+                {"palabra": "papa", "staging_index": 1},
+            ]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert saved.status_code == 200
+    material_id = saved.get_json()["material_id"]
+
+    with demo_app.app_context():
+        material = db.session.get(Material, material_id)
+        bits_path = tmp_path / material.path_preguntas.removeprefix("uploads/")
+    bits = json.loads(bits_path.read_text(encoding="utf-8"))
+
+    assert bits[0]["imagen"] == "img/papa.png"
+    assert bits[1]["imagen"] == "img/papa-2.png"
+    img_dir = bits_path.parent / "img"
+    assert (img_dir / "papa.png").is_file()
+    assert (img_dir / "papa-2.png").is_file()
+    assert (img_dir / "papa.png").read_bytes() != (img_dir / "papa-2.png").read_bytes()
+
+
+def test_bits_manual_editor_saves_uploaded_images_without_staging(
+    app, client, periodo_tema, tmp_path, monkeypatch
+):
+    """"Modo editor" para bits: sin `staging_token`, la docente manda su
+    propia imagen junto con el resto del formulario -un archivo
+    "imagen_<staging_index>" por palabra (sin sufijo de sustantivo, a
+    diferencia de oracion_imagen, ya que cada bit tiene una sola imagen)."""
+    monkeypatch.setitem(app.config, "UPLOADS_ROOT", str(tmp_path))
+    periodo_id, tema_id = periodo_tema()
+    items = [
+        {"palabra": "mano", "staging_index": 0},
+        {"palabra": "mapa", "staging_index": 1},
+    ]
+
+    saved = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits",
+            "title": "Bits",
+            "bits_json": json.dumps(items),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+            "imagen_0": (io.BytesIO(_tiny_png((255, 0, 0))), "cualquier_cosa.jpg"),
+            "imagen_1": (io.BytesIO(_tiny_png((0, 255, 0))), "mapa.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert saved.status_code == 200
+    material_id = saved.get_json()["material_id"]
+
+    with app.app_context():
+        material = db.session.get(Material, material_id)
+        bits_path = tmp_path / material.path_preguntas.removeprefix("uploads/")
+    bits = json.loads(bits_path.read_text(encoding="utf-8"))
+
+    assert bits[0]["imagen"] == "img/mano.png"
+    assert bits[1]["imagen"] == "img/mapa.png"
+    img_dir = bits_path.parent / "img"
+    assert (img_dir / "mano.png").is_file()
+    assert (img_dir / "mapa.png").is_file()
+
+
+def test_bits_manual_editor_requires_every_image(client, periodo_tema):
+    """Falta la imagen de la segunda palabra: se rechaza en vez de guardar
+    el material a medias."""
+    periodo_id, tema_id = periodo_tema()
+    response = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits",
+            "title": "Bits",
+            "bits_json": json.dumps([
+                {"palabra": "mano", "staging_index": 0},
+                {"palabra": "mapa", "staging_index": 1},
+            ]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+            "imagen_0": (io.BytesIO(_tiny_png((255, 0, 0))), "mano.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+
+
+def test_bits_save_requires_image_for_every_item(client, periodo_tema):
+    """A diferencia de oracion_imagen, bits no tiene un camino "solo texto":
+    guardar sin `staging_token` ni ningún archivo `imagen_*` se rechaza."""
+    periodo_id, tema_id = periodo_tema()
+    response = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits",
+            "title": "Bits",
+            "bits_json": json.dumps([{"palabra": "mano"}]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_bits_save_rejects_items_without_word(client, periodo_tema):
+    periodo_id, tema_id = periodo_tema()
+    empty = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits",
+            "title": "Bits",
+            "bits_json": json.dumps([{"palabra": ""}]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert empty.status_code == 400
+
+    bad_json = client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits",
+            "title": "Bits",
+            "bits_json": "not-json",
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert bad_json.status_code == 400
+
+
 def test_demo_can_register_and_list_interactions(demo_app, demo_client):
     enter_demo(demo_client)
     with demo_app.app_context():

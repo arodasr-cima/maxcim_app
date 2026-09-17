@@ -11,6 +11,7 @@
     <option value="cuento">Cuentos</option>
     <option value="oracion">Oraciones</option>
     <option value="oracion_imagen">Oraciones con imágenes</option>
+    <option value="bits">Bits</option>
   </select>
   <input type="text" class="material__search" id="materialSearch" placeholder="Buscar material...">
   <div class="material__toolbar-actions">
@@ -30,6 +31,7 @@
       <button type="button" class="upload-modal__type-btn is-active" id="storyTypeCuentoBtn" data-type="cuento" role="tab" aria-selected="true">📖 Cuento</button>
       <button type="button" class="upload-modal__type-btn" id="storyTypeOracionBtn" data-type="oracion" role="tab" aria-selected="false">✏️ Oraciones</button>
       <button type="button" class="upload-modal__type-btn" id="storyTypeOracionImagenBtn" data-type="oracion_imagen" role="tab" aria-selected="false">🖼️ Oraciones con imágenes</button>
+      <button type="button" class="upload-modal__type-btn" id="storyTypeBitsBtn" data-type="bits" role="tab" aria-selected="false">📇 Bits</button>
     </div>
 
     <div class="story-modal__grid" id="storyCuentoFields">
@@ -98,6 +100,29 @@
       </label>
     </div>
 
+    <div class="story-modal__grid" id="storyBitsFields" hidden>
+      <label class="story-field story-field--wide">
+        <span>Sílabas a trabajar</span>
+        <input type="text" id="bitsSyllables" required maxlength="160" placeholder="Ej.: ma, me, mi, mo, mu">
+      </label>
+      <label class="story-field">
+        <span>Cantidad de sílabas por palabra</span>
+        <input type="number" id="bitsSyllableCount" required min="1" max="10" step="1" value="2" inputmode="numeric">
+      </label>
+      <label class="story-field">
+        <span>Nivel o grado</span>
+        <input type="text" id="bitsGrade" required maxlength="100" placeholder="Ej.: 1.° de primaria">
+      </label>
+      <label class="story-field">
+        <span>Cantidad de palabras</span>
+        <input type="number" id="bitsCount" required min="1" max="20" step="1" value="8" inputmode="numeric">
+      </label>
+      <label class="story-field story-field--wide">
+        <span>Detalles opcionales</span>
+        <textarea id="bitsDetails" maxlength="1000" placeholder="Vocabulario a evitar, contexto, tema de las palabras…"></textarea>
+      </label>
+    </div>
+
     <div class="upload-modal__actions">
       <button type="button" class="btn btn--ghost" id="storyCancelBtn">Cancelar</button>
       <button type="submit" class="btn btn--primary" id="storyGenerateBtn">Generar borrador</button>
@@ -113,6 +138,7 @@
       <button type="button" class="upload-modal__type-btn is-active" id="uploadTypeCuentoBtn" data-type="cuento" role="tab" aria-selected="true">📖 Cuento</button>
       <button type="button" class="upload-modal__type-btn" id="uploadTypeOracionBtn" data-type="oracion" role="tab" aria-selected="false">✏️ Oraciones</button>
       <button type="button" class="upload-modal__type-btn" id="uploadTypeOracionImagenBtn" data-type="oracion_imagen" role="tab" aria-selected="false">🖼️ Con imágenes</button>
+      <button type="button" class="upload-modal__type-btn" id="uploadTypeBitsBtn" data-type="bits" role="tab" aria-selected="false">📇 Bits</button>
     </div>
 
     <label class="dropzone" id="dropzone" for="uploadFileInput">
@@ -251,6 +277,32 @@
   </div>
 </div>
 
+<div class="overlay" id="bitsDesignOverlay">
+  <div class="upload-modal image-design" role="dialog" aria-modal="true" aria-labelledby="bitsDesignTitle">
+    <div class="upload-modal__title editable-title" id="bitsDesignTitle" contenteditable="true" spellcheck="false" role="textbox" aria-label="Nombre del material" title="Toca para editar el nombre del material">Diseño de los bits</div>
+    <p class="upload-modal__hint image-design__intro">Revisa cada palabra, ajusta su imagen y elige si quieres regenerarla o subir la tuya.</p>
+
+    <div class="image-design__nav" aria-label="Navegación entre bits">
+      <button type="button" class="btn btn--ghost" id="bitsDesignPrevBtn">Anterior</button>
+      <span class="image-design__counter" id="bitsDesignCounter" aria-live="polite">Bit 0 de 0</span>
+      <button type="button" class="btn btn--ghost" id="bitsDesignNextBtn">Siguiente</button>
+    </div>
+
+    <div class="image-design__stage" id="bitsDesignStage" hidden>
+      <img class="image-design__bit-img" id="bitsDesignImage" alt="">
+      <div class="image-design__noun-controls image-design__noun-controls--single" id="bitsDesignNounControls"></div>
+      <button type="button" class="image-design__remove" id="bitsDesignRemoveBtn">Quitar este bit</button>
+    </div>
+    <p class="image-design__empty" id="bitsDesignEmpty" hidden>No quedan bits en el diseño. Vuelve para agregar otro antes de guardar.</p>
+
+    <div class="image-design__footer">
+      <button type="button" class="btn btn--ghost" id="bitsDesignBackBtn">Volver</button>
+      <button type="button" class="btn btn--ghost image-design__discard" id="bitsDesignDiscardBtn">Descartar</button>
+      <button type="button" class="btn btn--primary" id="bitsDesignSaveBtn" disabled>Continuar</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="classifyOverlay">
   <div class="upload-modal" role="dialog" aria-modal="true" aria-labelledby="classifyModalTitle">
     <div class="upload-modal__title" id="classifyModalTitle">Periodo y tema del material</div>
@@ -306,11 +358,11 @@
   {% for m in materials %}
   <div class="material-card" data-title="{{ m.nombre_material|lower }}" data-tipo="{{ m.tipo_material }}">
     <button type="button" class="material-card__header">
-      <div class="material-card__icon" style="background: #eaf0fd; color: #2f5bcf">{{ '🖼️' if m.es_oracion_imagen else ('✏️' if m.es_oracion else '📖') }}</div>
+      <div class="material-card__icon" style="background: #eaf0fd; color: #2f5bcf">{{ '📇' if m.es_bits else ('🖼️' if m.es_oracion_imagen else ('✏️' if m.es_oracion else '📖')) }}</div>
       <div class="material-card__meta">
         <div class="material-card__name">{{ m.nombre_material }}</div>
         <div class="material-card__sub">
-          {{ 'Oraciones con imágenes' if m.es_oracion_imagen else ('Oraciones' if m.es_oracion else 'Cuento') }} · Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}
+          {{ 'Bits' if m.es_bits else ('Oraciones con imágenes' if m.es_oracion_imagen else ('Oraciones' if m.es_oracion else 'Cuento')) }} · Subido {{ m.fecha_subido.strftime('%d/%m/%Y') }}
           {% if m.duracion_objetivo_minutos %} · Objetivo {{ m.duracion_objetivo_minutos }} min{% endif %}
           {% if m.duracion_audio_segundos %} · Audio {{ '%.1f'|format((m.duracion_audio_segundos|float) / 60) }} min{% endif %}
         </div>
@@ -336,13 +388,15 @@
         <ol class="material-card__slider-track" data-slider-track>
           {% for oracion in image_sentences_by_material.get(m.id, []) %}
           <li class="material-card__slide">
-            {% for part in oracion.parts %}
-              {% if part.type == "image" and part.imagen_url %}
-              <img class="material-card__slide-img" src="{{ part.imagen_url }}" alt="{{ part.palabra }}">
-              {% elif part.type == "image" %}
-              <mark>{{ part.palabra }}</mark>
-              {% else %}{{ part.value }}{% endif %}
-            {% endfor %}
+            <div class="material-card__slide-inner">
+              {% for part in oracion.parts %}
+                {% if part.type == "image" and part.imagen_url %}
+                <img class="material-card__slide-img" src="{{ part.imagen_url }}" alt="{{ part.palabra }}">
+                {% elif part.type == "image" %}
+                <mark>{{ part.palabra }}</mark>
+                {% else %}{{ part.value }}{% endif %}
+              {% endfor %}
+            </div>
           </li>
           {% endfor %}
         </ol>
@@ -357,6 +411,26 @@
       {% endif %}
       <div class="material-card__actions">
         <span class="material-card__sentence-count">{{ sentences|length }} {{ 'oraciones' if sentences|length != 1 else 'oración' }}</span>
+        <button type="button" class="material-card__delete" data-material-id="{{ m.id }}" data-material-name="{{ m.nombre_material }}">🗑 Eliminar</button>
+      </div>
+      {% elif m.es_bits %}
+      {% set bits_items = bits_by_material.get(m.id, []) %}
+      <div class="material-card__slider" data-slider>
+        <button type="button" class="material-card__slider-nav material-card__slider-nav--prev" data-slider-prev aria-label="Bit anterior">‹</button>
+        <ol class="material-card__slider-track" data-slider-track>
+          {% for bit in bits_items %}
+          <li class="material-card__slide">
+            <div class="material-card__slide-inner">
+              {% if bit.imagen_url %}<img class="material-card__slide-img" src="{{ bit.imagen_url }}" alt="{{ bit.palabra }}">{% endif %}
+              <div>{{ bit.palabra }}</div>
+            </div>
+          </li>
+          {% endfor %}
+        </ol>
+        <button type="button" class="material-card__slider-nav material-card__slider-nav--next" data-slider-next aria-label="Siguiente bit">›</button>
+      </div>
+      <div class="material-card__actions">
+        <span class="material-card__sentence-count">{{ bits_items|length }} {{ 'bits' if bits_items|length != 1 else 'bit' }}</span>
         <button type="button" class="material-card__delete" data-material-id="{{ m.id }}" data-material-name="{{ m.nombre_material }}">🗑 Eliminar</button>
       </div>
       {% else %}

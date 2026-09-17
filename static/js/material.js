@@ -157,12 +157,20 @@ document.addEventListener("DOMContentLoaded", () => {
   const storyTypeCuentoBtn = document.getElementById("storyTypeCuentoBtn");
   const storyTypeOracionBtn = document.getElementById("storyTypeOracionBtn");
   const storyTypeOracionImagenBtn = document.getElementById("storyTypeOracionImagenBtn");
+  const storyTypeBitsBtn = document.getElementById("storyTypeBitsBtn");
   const storyCuentoFields = document.getElementById("storyCuentoFields");
   const storySentenceFields = document.getElementById("storySentenceFields");
   const storyImageFields = document.getElementById("storyImageFields");
+  const storyBitsFields = document.getElementById("storyBitsFields");
+  const bitsSyllablesInput = document.getElementById("bitsSyllables");
+  const bitsSyllableCountInput = document.getElementById("bitsSyllableCount");
+  const bitsGradeInput = document.getElementById("bitsGrade");
+  const bitsCountInput = document.getElementById("bitsCount");
+  const bitsDetailsInput = document.getElementById("bitsDetails");
   const uploadTypeCuentoBtn = document.getElementById("uploadTypeCuentoBtn");
   const uploadTypeOracionBtn = document.getElementById("uploadTypeOracionBtn");
   const uploadTypeOracionImagenBtn = document.getElementById("uploadTypeOracionImagenBtn");
+  const uploadTypeBitsBtn = document.getElementById("uploadTypeBitsBtn");
   const resultTranscribedLabel = document.getElementById("resultTranscribedLabel");
   const resultTranscribedBlock = document.getElementById("resultTranscribedBlock");
   const resultSummaryBlock = document.getElementById("resultSummaryBlock");
@@ -187,6 +195,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const imageDesignBackBtn = document.getElementById("imageDesignBackBtn");
   const imageDesignDiscardBtn = document.getElementById("imageDesignDiscardBtn");
   const imageDesignSaveBtn = document.getElementById("imageDesignSaveBtn");
+  const bitsDesignOverlay = document.getElementById("bitsDesignOverlay");
+  const bitsDesignTitle = document.getElementById("bitsDesignTitle");
+  const bitsDesignPrevBtn = document.getElementById("bitsDesignPrevBtn");
+  const bitsDesignNextBtn = document.getElementById("bitsDesignNextBtn");
+  const bitsDesignCounter = document.getElementById("bitsDesignCounter");
+  const bitsDesignStage = document.getElementById("bitsDesignStage");
+  const bitsDesignImage = document.getElementById("bitsDesignImage");
+  const bitsDesignNounControls = document.getElementById("bitsDesignNounControls");
+  const bitsDesignRemoveBtn = document.getElementById("bitsDesignRemoveBtn");
+  const bitsDesignEmpty = document.getElementById("bitsDesignEmpty");
+  const bitsDesignBackBtn = document.getElementById("bitsDesignBackBtn");
+  const bitsDesignDiscardBtn = document.getElementById("bitsDesignDiscardBtn");
+  const bitsDesignSaveBtn = document.getElementById("bitsDesignSaveBtn");
   const classifyOverlay = document.getElementById("classifyOverlay");
   const classifyMaterialTitle = document.getElementById("classifyMaterialTitle");
   const classifyBackBtn = document.getElementById("classifyBackBtn");
@@ -207,11 +228,19 @@ document.addEventListener("DOMContentLoaded", () => {
   // que se envían junto con el resto al guardar (ver saveManualImageSentenceMaterial).
   let manualEntryMode = false;
   let manualImageEntryMode = false;
+  // "bits": mismo concepto que manualImageEntryMode pero para una sola
+  // imagen por fila (ver appendBitsItem/saveManualBitsMaterial). Independiente
+  // de manualImageEntryMode para no cruzar estado entre los dos flujos si
+  // la docente cambia de tipo sin cerrar el modal.
+  let manualBitsEntryMode = false;
   // Identificador propio de cada fila de "oracion_imagen", para poder
   // relacionar sus 2 imágenes con la oración correcta al guardar (ver
   // getImageSentencesData y saveManualImageSentenceMaterial) incluso si el
   // servidor descarta alguna fila duplicada al normalizar.
   let imageSentenceRowSeq = 0;
+  // Mismo propósito que imageSentenceRowSeq, pero para las filas de "bits"
+  // (ver getBitsData/saveManualBitsMaterial).
+  let bitRowSeq = 0;
   // El contenido (cuento, oraciones, oraciones con imágenes...) ya quedó
   // aprobado y solo falta clasificarlo: guarda qué función ejecutar y a qué
   // modal volver si la docente se arrepiente (ver openClassifyModal, más
@@ -231,6 +260,14 @@ document.addEventListener("DOMContentLoaded", () => {
   let designSentences = [];
   let currentDesignIndex = 0;
   let imageDesignBusy = false;
+  // Mismo esquema que imageDesignToken/designSentences/currentDesignIndex/
+  // imageDesignBusy, pero para el diseño de "bits" (bitsDesignOverlay) -
+  // estado separado a propósito, para que descartar un diseño no deje
+  // basura en el otro flujo.
+  let bitsDesignToken = "";
+  let designBits = [];
+  let currentBitsDesignIndex = 0;
+  let bitsDesignBusy = false;
 
   const uploadTemaOptions = Array.from(uploadTemaSelect.options).filter((option) => option.value);
 
@@ -262,7 +299,7 @@ document.addEventListener("DOMContentLoaded", () => {
     updateClassifySaveState();
   });
 
-  const uploadTypeButtons = [uploadTypeCuentoBtn, uploadTypeOracionBtn, uploadTypeOracionImagenBtn];
+  const uploadTypeButtons = [uploadTypeCuentoBtn, uploadTypeOracionBtn, uploadTypeOracionImagenBtn, uploadTypeBitsBtn];
 
   function setUploadType(type) {
     currentUploadType = type;
@@ -275,13 +312,20 @@ document.addEventListener("DOMContentLoaded", () => {
       ? "Título del cuento"
       : type === "oracion_imagen"
         ? "Título de las oraciones con imágenes"
-        : "Título del material";
+        : type === "bits"
+          ? "Título de los bits"
+          : "Título del material";
     dropzoneHint.textContent = type === "oracion_imagen"
       ? "DOC, TXT o PDF con una oración por línea - máx. 50 MB"
-      : "DOC, TXT o PDF · máx. 50 MB";
-    // El modo editor (escribir las oraciones a mano, sin documento) solo
-    // tiene sentido para los tipos que son listas de oraciones.
+      : type === "bits"
+        ? "DOC, TXT o PDF con una palabra por línea - máx. 50 MB"
+        : "DOC, TXT o PDF · máx. 50 MB";
+    // El modo editor (escribir el material a mano, sin documento) no aplica
+    // a "cuento".
     uploadManualOption.hidden = type === "cuento";
+    manualEditorOpenBtn.textContent = type === "bits"
+      ? "✏️ Modo editor: crear los bits a mano"
+      : "✏️ Modo editor: escribir las oraciones a mano";
     updateUploadButtonState();
   }
 
@@ -295,6 +339,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // siempre en modo revisión normal.
     manualEntryMode = false;
     manualImageEntryMode = false;
+    manualBitsEntryMode = false;
     // El nombre del material también se puede editar aquí mismo (ver el
     // listener "input" de resultModalTitle): se muestra el que ya se
     // escribió al inicio -o el de la IA/el documento- en vez de un rótulo
@@ -303,21 +348,29 @@ document.addEventListener("DOMContentLoaded", () => {
     resultSentencesNote.hidden = false;
     const isOracion = type === "oracion";
     const isImageSentence = type === "oracion_imagen";
-    const isSentenceType = isOracion || isImageSentence;
+    const isBits = type === "bits";
+    const isSentenceType = isOracion || isImageSentence || isBits;
     resultTranscribedLabel.textContent = "Texto completo";
     resultTranscribedBlock.hidden = isSentenceType;
     resultSummaryBlock.hidden = isSentenceType;
     resultSentencesBlock.hidden = !isSentenceType;
     resultAudioColumn.hidden = isSentenceType;
     resultQuestionsColumn.hidden = isSentenceType;
-    generateMoreSentencesBtn.hidden = isImageSentence;
-    resultSentencesLabel.textContent = isImageSentence
-      ? "Oraciones con imágenes para revisar"
-      : "Oraciones para revisar";
-    resultSentencesNote.textContent = isImageSentence
-      ? "Corrige cada oración y sus dos sustantivos; usa ✕ para quitar la que no quieras guardar."
-      : "Corrige cada oración; usa ✕ para quitar la que no quieras guardar.";
-    resultDoneBtn.textContent = isImageSentence
+    generateMoreSentencesBtn.hidden = isImageSentence || isBits;
+    resultSentencesLabel.textContent = isBits
+      ? "Palabras para revisar"
+      : isImageSentence
+        ? "Oraciones con imágenes para revisar"
+        : "Oraciones para revisar";
+    resultSentencesNote.textContent = isBits
+      ? "Corrige cada palabra; usa ✕ para quitar la que no quieras guardar."
+      : isImageSentence
+        ? "Corrige cada oración y sus dos sustantivos; usa ✕ para quitar la que no quieras guardar."
+        : "Corrige cada oración; usa ✕ para quitar la que no quieras guardar.";
+    if (addSentenceBtn) {
+      addSentenceBtn.textContent = isBits ? "+ Agregar palabra" : "+ Agregar oración";
+    }
+    resultDoneBtn.textContent = (isImageSentence || isBits)
       ? "Siguiente: diseñar imágenes"
       : "Continuar";
   }
@@ -328,6 +381,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function resetUploadForm() {
     resetImageDesignState();
+    resetBitsDesignState();
     selectedFile = null;
     uploadTitleInput.value = "";
     filterUploadTemas();
@@ -368,6 +422,12 @@ document.addEventListener("DOMContentLoaded", () => {
       renderImageSentenceRows([]);
       appendImageSentenceItem({}, { focus: true });
       resultSubtitle.textContent = "Modo editor - escribe cada oración, sus dos palabras y sube tú misma las imágenes que las reemplazarán";
+      resultDoneBtn.textContent = "Continuar";
+    } else if (type === "bits") {
+      manualBitsEntryMode = true;
+      renderBitsRows([]);
+      appendBitsItem({}, { focus: true });
+      resultSubtitle.textContent = "Modo editor - escribe cada palabra y sube tú misma la imagen que la representará";
       resultDoneBtn.textContent = "Continuar";
     } else {
       lastSentenceContext = { topic: currentMaterialTitle, grade_level: "" };
@@ -576,6 +636,94 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function saveDesignedBitsMaterial() {
+    const formData = new FormData();
+    formData.append("tipo_material", "bits");
+    formData.append("title", currentMaterialTitle);
+    formData.append("staging_token", bitsDesignToken);
+    formData.append("bits_json", JSON.stringify(designBits.map((bit) => ({
+      palabra: bit.palabra,
+      staging_index: bit.staging_index,
+    }))));
+    formData.append("id_periodo", uploadPeriodoSelect.value);
+    formData.append("id_tema", uploadTemaSelect.value);
+
+    const response = await authorizedFetch("/api/material/save", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "No se pudieron guardar los bits.");
+    }
+    return data;
+  }
+
+  // Modo editor de "bits": mismo principio que saveManualImageSentenceMaterial
+  // pero con una sola imagen por fila (sin sufijo de sustantivo en el nombre
+  // del campo).
+  async function saveManualBitsMaterial(items) {
+    const formData = new FormData();
+    formData.append("tipo_material", "bits");
+    formData.append("title", currentMaterialTitle);
+    formData.append("bits_json", JSON.stringify(items.map((item) => ({
+      palabra: item.palabra,
+      staging_index: item.rowIndex,
+    }))));
+    formData.append("id_periodo", uploadPeriodoSelect.value);
+    formData.append("id_tema", uploadTemaSelect.value);
+    items.forEach((item) => {
+      if (item.file) {
+        formData.append(`imagen_${item.rowIndex}`, item.file, item.file.name);
+      }
+    });
+
+    const response = await authorizedFetch("/api/material/save", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "No se pudieron guardar los bits.");
+    }
+    return data;
+  }
+
+  async function prepareBitsDesign(items) {
+    resetBitsDesignState();
+    resultOverlay.classList.remove("is-open");
+    showLoading("Generando las imágenes con IA, puede tardar un momento");
+
+    try {
+      const response = await authorizedFetch("/api/bits/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: currentMaterialTitle, items }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudieron generar las imágenes.");
+      }
+
+      bitsDesignToken = typeof data.token === "string" ? data.token : "";
+      designBits = (Array.isArray(data.items) ? data.items : []).map((item) => ({ ...item, staging_index: item.index }));
+      if (!bitsDesignToken || !designBits.length) {
+        throw new Error("No se recibió un diseño válido para los bits.");
+      }
+
+      currentBitsDesignIndex = 0;
+      renderBitsDesignItem();
+      bitsDesignTitle.textContent = currentMaterialTitle;
+      bitsDesignOverlay.classList.add("is-open");
+    } catch (error) {
+      resetBitsDesignState();
+      resultOverlay.classList.add("is-open");
+      throw error;
+    } finally {
+      loadingOverlay.classList.remove("is-open");
+    }
+  }
+
   uploadStartBtn.addEventListener("click", async () => {
     if (!selectedFile) return;
 
@@ -592,7 +740,9 @@ document.addEventListener("DOMContentLoaded", () => {
       ? "Identificando las oraciones con imagenes con IA..."
       : uploadType === "oracion"
         ? "Identificando las oraciones con IA..."
-        : undefined);
+        : uploadType === "bits"
+          ? "Identificando las palabras con IA..."
+          : undefined);
 
     try {
       const response = await authorizedFetch("/api/material/process", {
@@ -612,6 +762,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (uploadType === "oracion_imagen") {
         renderImageSentenceRows(data.items || []);
         resultSubtitle.textContent = "A partir del documento original - revisa las oraciones y sus dos sustantivos antes de aprobar";
+      } else if (uploadType === "bits") {
+        renderBitsRows(data.items || []);
+        resultSubtitle.textContent = "A partir del documento original - revisa las palabras antes de aprobar";
       } else if (uploadType === "oracion") {
         lastSentenceContext = { topic: currentMaterialTitle, grade_level: "" };
         renderSentences(data.sentences || []);
@@ -679,11 +832,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // "Crear con IA" genera un cuento o un set de oraciones. Ambos borradores
   // caen en la misma pantalla de revisión/edición antes de crear el material.
-  const storyTypeButtons = [storyTypeCuentoBtn, storyTypeOracionBtn, storyTypeOracionImagenBtn];
+  const storyTypeButtons = [storyTypeCuentoBtn, storyTypeOracionBtn, storyTypeOracionImagenBtn, storyTypeBitsBtn];
   const storyFieldGroups = {
     cuento: storyCuentoFields,
     oracion: storySentenceFields,
     oracion_imagen: storyImageFields,
+    bits: storyBitsFields,
   };
   const storyCopy = {
     cuento: [
@@ -697,6 +851,11 @@ document.addEventListener("DOMContentLoaded", () => {
     oracion_imagen: [
       "Crear oraciones con imágenes con IA",
       "Indica el tema y el nivel. La IA prepara un borrador de oraciones con una imagen para cada una, para revisar antes de crear el material.",
+    ],
+    // TODO: título/descripción reales cuando se implemente la generación de bits.
+    bits: [
+      "Crear bits con IA",
+      "Pendiente de definir.",
     ],
   };
 
@@ -724,6 +883,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   storyOpenBtn.addEventListener("click", () => {
     resetImageDesignState();
+    resetBitsDesignState();
     storyForm.reset();
     setStoryType("cuento");
     storyOverlay.classList.add("is-open");
@@ -856,6 +1016,48 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    if (currentStoryType === "bits") {
+      const bitsPayload = {
+        silabas: bitsSyllablesInput.value.trim(),
+        cantidad_silabas: Number.parseInt(bitsSyllableCountInput.value, 10),
+        grade_level: bitsGradeInput.value.trim(),
+        count: Number.parseInt(bitsCountInput.value, 10),
+        extra_details: bitsDetailsInput.value.trim(),
+      };
+
+      storyGenerateBtn.disabled = true;
+      storyGenerateBtn.textContent = "Creando…";
+      storyOverlay.classList.remove("is-open");
+      showLoading();
+      loadingText.textContent = "Generando palabras con IA…";
+
+      try {
+        const response = await authorizedFetch("/api/bits/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(bitsPayload),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "No se pudieron generar las palabras.");
+        }
+        currentMaterialTitle = data.title;
+        currentTargetDurationMinutes = null;
+        configureResultModalForType("bits");
+        resetResultState();
+        renderBitsRows(data.items || []);
+        resultSubtitle.textContent = "Borrador generado por IA - revisa las palabras antes de crear el material";
+        loadingOverlay.classList.remove("is-open");
+        resultOverlay.classList.add("is-open");
+      } catch (error) {
+        showLoadingError(error.message || "No se pudieron generar las palabras.");
+      } finally {
+        storyGenerateBtn.disabled = false;
+        storyGenerateBtn.textContent = "Generar borrador";
+      }
+      return;
+    }
+
     const payload = {
       character: document.getElementById("storyCharacter").value.trim(),
       setting: document.getElementById("storySetting").value.trim(),
@@ -924,6 +1126,36 @@ document.addEventListener("DOMContentLoaded", () => {
       resultDoneBtn.textContent = "Generando imágenes...";
       try {
         await prepareImageSentenceDesign(items);
+      } catch (error) {
+        alert(error.message || "No se pudieron generar las imágenes.");
+      } finally {
+        resultDoneBtn.textContent = originalLabel;
+        updateDoneButtonState();
+      }
+      return;
+    }
+
+    if (currentResultType === "bits") {
+      const items = getBitsData();
+      if (!items.length) {
+        alert("Agrega al menos una palabra.");
+        return;
+      }
+      if (manualBitsEntryMode) {
+        // Modo editor: nada de diseño con IA -las imágenes ya las subió la
+        // docente en la misma revisión (ver getBitsData).
+        openClassifyModal(resultOverlay, () => saveManualBitsMaterial(items));
+        return;
+      }
+      if (items.length > 20) {
+        alert("Puedes diseñar un máximo de 20 bits a la vez.");
+        return;
+      }
+      const originalLabel = resultDoneBtn.textContent;
+      resultDoneBtn.disabled = true;
+      resultDoneBtn.textContent = "Generando imágenes...";
+      try {
+        await prepareBitsDesign(items);
       } catch (error) {
         alert(error.message || "No se pudieron generar las imágenes.");
       } finally {
@@ -1097,6 +1329,12 @@ document.addEventListener("DOMContentLoaded", () => {
       // completas con el mismo texto no deberían bloquear el guardado.
       getImageSentencesData();
       contentReady = allImageSentenceRowsComplete();
+    } else if (currentResultType === "bits") {
+      // Mismo motivo que oracion_imagen: marca en rojo las filas incompletas
+      // como efecto secundario, y no usa la cantidad devuelta (dedupe por
+      // palabra) para decidir si ya se puede guardar.
+      getBitsData();
+      contentReady = allBitsRowsComplete();
     } else if (currentResultType === "oracion") {
       contentReady = sentenceRowsAreValid();
     } else {
@@ -1107,6 +1345,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function resetResultState() {
     resetImageDesignState();
+    resetBitsDesignState();
     audioFullReady = false;
     audioSummaryReady = false;
     questionsReady = false;
@@ -1446,6 +1685,120 @@ document.addEventListener("DOMContentLoaded", () => {
     return items;
   }
 
+  // "Bits": una sola palabra + una imagen por fila (a diferencia de
+  // "oracion_imagen", que tiene texto + 2 sustantivos). Reusa el mismo
+  // esqueleto de fila (.sentences-review__item--image, .sentences-review__
+  // editable, buildNounImagePicker) pero sin preview de sustantivos
+  // resaltados ni grid de 2 columnas -no hace falta, es una sola palabra.
+  function appendBitsItem(item = {}, { focus = false } = {}) {
+    const row = document.createElement("li");
+    row.className = "sentences-review__item sentences-review__item--image sentences-review__item--bit";
+    // Único dentro de esta revisión: mismo propósito que imageSentenceRowSeq.
+    row.dataset.rowIndex = String(bitRowSeq++);
+
+    const content = document.createElement("div");
+    content.className = "sentences-review__image-content";
+
+    const editable = document.createElement("div");
+    editable.className = "sentences-review__editable";
+    editable.contentEditable = "true";
+    editable.spellcheck = true;
+    editable.dataset.bitWord = "";
+    editable.textContent = typeof item.palabra === "string" ? item.palabra : "";
+
+    // Recién creada, la fila no se marca inválida todavía aunque esté
+    // incompleta (mismo criterio que appendImageSentenceItem).
+    function handleFieldChange() {
+      row.dataset.touched = "true";
+      updateDoneButtonState();
+    }
+
+    editable.addEventListener("input", handleFieldChange);
+    editable.addEventListener("blur", handleFieldChange);
+
+    content.appendChild(editable);
+
+    // Solo en modo editor: la palabra ya trae su propio cuadro para subir la
+    // imagen que la representará -sin esto, la imagen se genera después con
+    // IA en el paso de diseño (/api/bits/prepare).
+    if (manualBitsEntryMode) {
+      content.appendChild(buildNounImagePicker(0, handleFieldChange));
+    }
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "sentences-review__remove";
+    remove.title = "Quitar esta palabra";
+    remove.setAttribute("aria-label", "Quitar esta palabra");
+    remove.textContent = "✕";
+    remove.addEventListener("click", () => {
+      row.remove();
+      updateDoneButtonState();
+    });
+
+    row.append(content, remove);
+    resultSentencesList.appendChild(row);
+    if (focus) editable.focus();
+  }
+
+  function renderBitsRows(items) {
+    resultSentencesList.innerHTML = "";
+    (items || []).forEach((item) => appendBitsItem(item));
+    updateDoneButtonState();
+  }
+
+  // El File elegido en el cuadro de subir imagen (modo editor); null si no
+  // está en ese modo, o si todavía no eligió archivo.
+  function getBitsFile(row) {
+    if (!manualBitsEntryMode) return null;
+    const input = row.querySelector("[data-image-sentence-file]");
+    return (input && input.files && input.files[0]) || null;
+  }
+
+  // Como allImageSentenceRowsComplete(), pero para "bits": exige la palabra
+  // (y, en modo editor, su imagen) en cada fila, sin deduplicar.
+  function allBitsRowsComplete() {
+    const rows = Array.from(resultSentencesList.querySelectorAll(".sentences-review__item--bit"));
+    if (!rows.length) return false;
+    return rows.every((row) => {
+      const word = row.querySelector("[data-bit-word]")?.textContent.replace(/\s+/g, " ").trim() || "";
+      if (!word) return false;
+      if (!manualBitsEntryMode) return true;
+      return Boolean(getBitsFile(row));
+    });
+  }
+
+  // Como getImageSentencesData(), pero para "bits": arma el payload a enviar
+  // (deduplicado por palabra). En modo editor cada item también lleva
+  // `rowIndex` y `file`, que es lo que saveManualBitsMaterial necesita.
+  function getBitsData() {
+    const seen = new Set();
+    const items = [];
+    Array.from(resultSentencesList.querySelectorAll(".sentences-review__item--bit")).forEach((row) => {
+      const word = row.querySelector("[data-bit-word]")?.textContent.replace(/\s+/g, " ").trim() || "";
+      const file = getBitsFile(row);
+      const imageComplete = !manualBitsEntryMode || Boolean(file);
+      const complete = Boolean(word) && imageComplete;
+      const touched = row.dataset.touched === "true";
+
+      row.classList.toggle("sentences-review__item--invalid", touched && !complete);
+      if (manualBitsEntryMode) {
+        row.querySelector(".sentences-review__image-dropzone")
+          ?.setAttribute("aria-invalid", String(touched && !file));
+      }
+
+      const key = word.toLocaleLowerCase("es");
+      if (complete && !seen.has(key) && items.length < 120) {
+        seen.add(key);
+        items.push({
+          palabra: word,
+          ...(manualBitsEntryMode ? { rowIndex: row.dataset.rowIndex, file } : {}),
+        });
+      }
+    });
+    return items;
+  }
+
   function resetImageDesignState() {
     imageDesignToken = "";
     designSentences = [];
@@ -1724,8 +2077,12 @@ document.addEventListener("DOMContentLoaded", () => {
     updateDoneButtonState();
   });
 
-  imageDesignDiscardBtn.addEventListener("click", () => {
+  // "Descartar" desde cualquiera de los dos overlays de diseño (oraciones
+  // con imágenes o bits) vuelve todo el flujo al inicio, sin importar en
+  // cuál de los dos estaba la docente.
+  function discardEverything() {
     imageDesignOverlay.classList.remove("is-open");
+    bitsDesignOverlay.classList.remove("is-open");
     resultOverlay.classList.remove("is-open");
     classifyOverlay.classList.remove("is-open");
     loadingOverlay.classList.remove("is-open");
@@ -1739,7 +2096,9 @@ document.addEventListener("DOMContentLoaded", () => {
     currentMaterialTitle = "";
     currentTargetDurationMinutes = null;
     lastSentenceContext = { topic: "", grade_level: "" };
-  });
+  }
+
+  imageDesignDiscardBtn.addEventListener("click", discardEverything);
 
   imageDesignSaveBtn.addEventListener("click", () => {
     if (!designSentences.length) {
@@ -1749,9 +2108,259 @@ document.addEventListener("DOMContentLoaded", () => {
     openClassifyModal(imageDesignOverlay, () => saveDesignedImageSentenceMaterial());
   });
 
+  // --- Diseño de "bits": mismo patrón que el diseño de oraciones con
+  // imágenes de arriba (resetImageDesignState/updateDesignNav/
+  // renderDesignSentence/regenerateDesignNoun/uploadDesignNounImage), pero
+  // una sola imagen por bit -sin plantilla, sin mixed-line, un solo control.
+
+  function resetBitsDesignState() {
+    bitsDesignToken = "";
+    designBits = [];
+    currentBitsDesignIndex = 0;
+    bitsDesignBusy = false;
+    bitsDesignOverlay.classList.remove("is-open");
+    bitsDesignImage.removeAttribute("src");
+    bitsDesignNounControls.replaceChildren();
+    bitsDesignStage.hidden = true;
+    bitsDesignEmpty.hidden = true;
+    bitsDesignCounter.textContent = "Bit 0 de 0";
+    bitsDesignPrevBtn.disabled = true;
+    bitsDesignNextBtn.disabled = true;
+    bitsDesignRemoveBtn.disabled = true;
+    bitsDesignSaveBtn.disabled = true;
+    bitsDesignSaveBtn.textContent = "Continuar";
+  }
+
+  function updateBitsDesignNav() {
+    const count = designBits.length;
+    bitsDesignCounter.textContent = count
+      ? `Bit ${currentBitsDesignIndex + 1} de ${count}`
+      : "Bit 0 de 0";
+    bitsDesignPrevBtn.disabled = bitsDesignBusy || !count || currentBitsDesignIndex === 0;
+    bitsDesignNextBtn.disabled = bitsDesignBusy || !count || currentBitsDesignIndex >= count - 1;
+    bitsDesignRemoveBtn.disabled = bitsDesignBusy || !count;
+    bitsDesignSaveBtn.disabled = bitsDesignBusy || !count;
+    bitsDesignNounControls.querySelectorAll("input, button").forEach((control) => {
+      control.disabled = bitsDesignBusy;
+    });
+  }
+
+  async function regenerateBitsDesignImage(bit, input, button) {
+    const proposedWord = input.value.replace(/\s+/g, " ").trim();
+    if (!proposedWord) {
+      alert("Escribe la palabra antes de regenerar la imagen.");
+      return;
+    }
+
+    const payload = { token: bitsDesignToken, item_index: bit.staging_index };
+    if (proposedWord !== bit.palabra) {
+      payload.palabra = proposedWord;
+    }
+
+    const originalLabel = button.textContent;
+    bitsDesignBusy = true;
+    button.textContent = "Generando…";
+    updateBitsDesignNav();
+    try {
+      const response = await authorizedFetch("/api/bits/regenerate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo regenerar la imagen.");
+      }
+
+      bit.palabra = data.palabra;
+      bit.imagen_url = data.imagen_url;
+      bit.fuente = data.fuente === "manual" ? "manual" : "ia";
+      if (designBits[currentBitsDesignIndex] === bit) {
+        renderBitsDesignItem();
+      }
+    } catch (error) {
+      alert(error.message || "No se pudo regenerar la imagen.");
+    } finally {
+      bitsDesignBusy = false;
+      button.textContent = originalLabel;
+      updateBitsDesignNav();
+    }
+  }
+
+  async function uploadBitsDesignImage(bit, input, fileInput, button) {
+    const file = fileInput.files?.[0];
+    if (!file || bitsDesignBusy) {
+      fileInput.value = "";
+      return;
+    }
+
+    const proposedWord = input.value.replace(/\s+/g, " ").trim();
+    if (!proposedWord) {
+      fileInput.value = "";
+      alert("Escribe la palabra antes de subir la imagen.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("token", bitsDesignToken);
+    formData.append("item_index", bit.staging_index);
+    if (proposedWord !== bit.palabra) {
+      formData.append("palabra", proposedWord);
+    }
+    formData.append("imagen", file);
+
+    const originalLabel = button.textContent;
+    bitsDesignBusy = true;
+    button.textContent = "Subiendo…";
+    updateBitsDesignNav();
+    try {
+      const response = await authorizedFetch("/api/bits/upload-image", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo subir la imagen.");
+      }
+
+      bit.palabra = data.palabra;
+      bit.imagen_url = data.imagen_url;
+      bit.fuente = data.fuente === "ia" ? "ia" : "manual";
+      if (designBits[currentBitsDesignIndex] === bit) {
+        renderBitsDesignItem();
+      }
+    } catch (error) {
+      alert(error.message || "No se pudo subir la imagen.");
+    } finally {
+      bitsDesignBusy = false;
+      fileInput.value = "";
+      button.textContent = originalLabel;
+      updateBitsDesignNav();
+    }
+  }
+
+  function renderBitsDesignItem() {
+    const count = designBits.length;
+    if (!count) {
+      currentBitsDesignIndex = 0;
+      bitsDesignStage.hidden = true;
+      bitsDesignEmpty.hidden = false;
+      bitsDesignImage.removeAttribute("src");
+      bitsDesignNounControls.replaceChildren();
+      updateBitsDesignNav();
+      return;
+    }
+
+    currentBitsDesignIndex = Math.min(Math.max(currentBitsDesignIndex, 0), count - 1);
+    const bit = designBits[currentBitsDesignIndex];
+    bitsDesignStage.hidden = false;
+    bitsDesignEmpty.hidden = true;
+    bitsDesignImage.src = bit.imagen_url;
+    bitsDesignImage.alt = bit.palabra;
+    bitsDesignNounControls.replaceChildren();
+
+    const group = document.createElement("div");
+    group.className = "image-design__noun-control";
+
+    const label = document.createElement("label");
+    label.className = "image-design__noun-label";
+    const heading = document.createElement("span");
+    heading.className = "image-design__noun-heading";
+    const caption = document.createElement("span");
+    caption.textContent = "Palabra";
+    const source = document.createElement("span");
+    const isManual = bit.fuente === "manual";
+    source.className = `image-design__source image-design__source--${isManual ? "manual" : "ia"}`;
+    source.textContent = isManual ? "Subida por ti" : "Generada por IA";
+    heading.append(caption, source);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "image-design__noun-input";
+    input.maxLength = 60;
+    input.autocomplete = "off";
+    input.value = bit.palabra;
+    label.append(heading, input);
+
+    const actions = document.createElement("div");
+    actions.className = "image-design__noun-actions";
+
+    const regenerate = document.createElement("button");
+    regenerate.type = "button";
+    regenerate.className = "btn btn--accent image-design__regenerate";
+    regenerate.textContent = "Regenerar";
+    regenerate.addEventListener("click", () => {
+      regenerateBitsDesignImage(bit, input, regenerate);
+    });
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.className = "image-design__file-input";
+    fileInput.accept = "image/*";
+    fileInput.hidden = true;
+
+    const upload = document.createElement("button");
+    upload.type = "button";
+    upload.className = "btn btn--ghost image-design__upload";
+    upload.textContent = "Subir imagen";
+    upload.addEventListener("click", () => {
+      fileInput.click();
+    });
+    fileInput.addEventListener("change", () => {
+      uploadBitsDesignImage(bit, input, fileInput, upload);
+    });
+
+    actions.append(regenerate, fileInput, upload);
+    group.append(label, actions);
+    bitsDesignNounControls.appendChild(group);
+    updateBitsDesignNav();
+  }
+
+  bitsDesignPrevBtn.addEventListener("click", () => {
+    if (currentBitsDesignIndex <= 0) return;
+    currentBitsDesignIndex -= 1;
+    renderBitsDesignItem();
+  });
+
+  bitsDesignNextBtn.addEventListener("click", () => {
+    if (currentBitsDesignIndex >= designBits.length - 1) return;
+    currentBitsDesignIndex += 1;
+    renderBitsDesignItem();
+  });
+
+  bitsDesignRemoveBtn.addEventListener("click", () => {
+    if (!designBits.length) return;
+    designBits.splice(currentBitsDesignIndex, 1);
+    if (currentBitsDesignIndex >= designBits.length) {
+      currentBitsDesignIndex = Math.max(0, designBits.length - 1);
+    }
+    renderBitsDesignItem();
+  });
+
+  bitsDesignBackBtn.addEventListener("click", () => {
+    resetBitsDesignState();
+    resultOverlay.classList.add("is-open");
+    updateDoneButtonState();
+  });
+
+  bitsDesignDiscardBtn.addEventListener("click", discardEverything);
+
+  bitsDesignSaveBtn.addEventListener("click", () => {
+    if (!designBits.length) {
+      alert("No hay bits para guardar.");
+      return;
+    }
+    openClassifyModal(bitsDesignOverlay, () => saveDesignedBitsMaterial());
+  });
+
+  bitsDesignTitle.addEventListener("input", () => {
+    currentMaterialTitle = bitsDesignTitle.textContent.replace(/\s+/g, " ").trim();
+  });
+
   addSentenceBtn?.addEventListener("click", () => {
     if (currentResultType === "oracion_imagen") {
       appendImageSentenceItem({}, { focus: true });
+    } else if (currentResultType === "bits") {
+      appendBitsItem({}, { focus: true });
     } else {
       appendSentenceItem("", { focus: true });
     }

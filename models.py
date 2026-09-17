@@ -23,7 +23,14 @@ TIPO_ORACION = "oracion"
 # guarda como una lista JSON de objetos {texto, sustantivos:[a, b]} en
 # uploads/<id>/oraciones.json (una `oracion` guarda ahí una lista de strings).
 TIPO_ORACION_IMAGEN = "oracion_imagen"
-TIPOS_MATERIAL = (TIPO_CUENTO, TIPO_ORACION, TIPO_ORACION_IMAGEN)
+# "Bits" (bits de inteligencia): tarjetas palabra+imagen para practicar
+# fonética por sílabas objetivo y cantidad de sílabas por palabra (criterios
+# solo de generación con IA, no se guardan por palabra). Se guarda como una
+# lista JSON de objetos {palabra, imagen} en uploads/<id>/bits.json — sin
+# plantilla ni texto: a diferencia de oracion_imagen no hay una oración en la
+# que intercalar imágenes, cada bit es una sola palabra con una sola imagen.
+TIPO_BITS = "bits"
+TIPOS_MATERIAL = (TIPO_CUENTO, TIPO_ORACION, TIPO_ORACION_IMAGEN, TIPO_BITS)
 
 
 class Periodo(db.Model):
@@ -175,6 +182,10 @@ class Material(db.Model):
     @property
     def es_cuento(self) -> bool:
         return self.tipo_material == TIPO_CUENTO
+
+    @property
+    def es_bits(self) -> bool:
+        return self.tipo_material == TIPO_BITS
 
 
 class Interaccion(db.Model):

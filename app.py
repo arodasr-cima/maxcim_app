@@ -48,16 +48,19 @@ from models import (
     TIPO_CUENTO,
     TIPO_ORACION,
     TIPO_ORACION_IMAGEN,
+    TIPO_BITS,
     TIPOS_MATERIAL,
 )
 from services.demo import (
     DemoInstitutionalClient,
+    create_demo_bits_words,
     create_demo_image_sentences,
     create_demo_noun_image,
     create_demo_questions,
     create_demo_sentences,
     create_demo_story,
     create_demo_wav,
+    extract_demo_bits_words,
     extract_demo_image_sentences,
     extract_demo_sentences,
     process_demo_document,
@@ -254,14 +257,23 @@ MAX_IMAGE_DESIGN_SENTENCES = 20
 # Prompt corto a propósito: una caricatura educativa (estilo libro infantil),
 # UN solo objeto por sustantivo (nunca la oración entera), grande y centrado,
 # quieto y sin hacer la acción de la oración, sobre fondo blanco y sin texto.
-# La oración solo sirve para desambiguar qué dibujar.
+# La oración (cuando hay una, ver `oracion` en generate_noun_image) solo sirve
+# para desambiguar qué dibujar. Para "bits" no hay oración -son palabras
+# sueltas- así que la fidelidad al significado más común de la palabra
+# depende enteramente de esta instrucción explícita: sin ella, un modelo de
+# imágenes puede confundir la palabra pedida con otra parecida o con un
+# sentido raro/técnico (p.ej. "mesa" -> dibuja una "meseta").
 NOUN_IMAGE_STYLE_PROMPT = (
     "Educational cartoon of a single «{palabra}», friendly children's book "
     "illustration style: clean lines, soft flat color, polished — not a crude "
     "emoji or doodle. Just the one object, calm and still (not doing any "
     "action), large and centered, filling most of the frame on a plain white "
     "background. No text, no other objects, no scenery, no ground shadow. "
-    "Use the sentence «{contexto}» only as a hint for what «{palabra}» means."
+    "«{palabra}» is an exact Spanish word: draw ONLY that word's single most "
+    "common, everyday, concrete meaning (a specific object, animal, person, "
+    "or food) that a young child would recognize — never a rare, technical, "
+    "or geographic sense, and never a different word that merely looks or "
+    "sounds similar.{contexto_clause}"
 )
 # Imágenes en revisión (aún sin material) mientras la docente aprueba el
 # diseño. Viven bajo UPLOADS_ROOT/_previews/<token>/ y se limpian al guardar
@@ -277,6 +289,51 @@ PREVIEW_STAGING_MAX_AGE_SECONDS = 6 * 3600
 # imagen y limita su tamaño en memoria.
 MAX_NOUN_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024
 NOUN_IMAGE_MAX_DIMENSION = 1024
+
+# "Bits" (bits de inteligencia): tarjetas de una sola palabra + una imagen,
+# para practicar fonética por sílabas. Más simple que "oraciones con
+# imágenes": no hay oración ni plantilla que intercalar, cada bit es
+# {palabra, imagen}. Las sílabas objetivo y la cantidad de sílabas por
+# palabra son solo criterio de generación con IA, no se guardan por palabra.
+MAX_BITS_PER_REQUEST = 20
+# Tope por material al guardar (un documento puede traer más palabras que las
+# que se generan/diseñan de una tacada). Igual criterio que
+# MAX_IMAGE_SENTENCES_PER_MATERIAL.
+MAX_BITS_PER_MATERIAL = 120
+# Paso de diseño: una imagen por palabra, mismo tope que MAX_IMAGE_DESIGN_SENTENCES.
+MAX_BITS_DESIGN_ITEMS = 20
+MAX_BIT_WORD_CHARS = 60
+MAX_BITS_CHARS = 8_000
+
+BITS_GENERATE_PROMPT = (
+    "Genera palabras en español, reales y de uso común, para que estudiantes "
+    "de {nivel} practiquen fonética. Cada palabra DEBE EMPEZAR con una de "
+    "estas sílabas objetivo -tiene que ser la primera sílaba de la palabra, "
+    "no basta con que la sílaba aparezca en cualquier otra posición-: "
+    "{silabas}. Cada palabra DEBE tener EXACTAMENTE {cantidad_silabas} "
+    "sílabas. Objetivo o detalles: {detalles}. Elige palabras concretas y "
+    "fáciles de representar con un dibujo inequívoco (evita palabras "
+    "abstractas, difíciles, nombres propios, o palabras con varios "
+    "significados donde el más común no sea justamente ese objeto/animal/"
+    "persona/alimento). No repitas palabras. Escribe exactamente {cantidad} "
+    'palabras. Responde únicamente con un JSON de la forma {{"palabras": '
+    '["mano", "mapa"]}} y sin texto fuera del JSON.'
+)
+
+# Extracción de palabras para "bits" desde un documento que subió la docente:
+# el modelo NO inventa palabras, solo identifica las que ya están escritas ahí
+# (mismo criterio que IMAGE_SENTENCES_EXTRACT_PROMPT para oraciones, pero sin
+# filtrar por sustantivos concretos: la docente ya curó su propia lista).
+BITS_EXTRACT_PROMPT = (
+    "Este documento contiene una lista de palabras que una docente quiere "
+    "usar como material de fonética con imágenes para niños de corta edad "
+    "(una palabra por línea, o separadas por comas o viñetas). Identifica "
+    "cada palabra tal como está escrita: no inventes palabras nuevas ni la "
+    "reformules, solo corrige errores evidentes de espaciado. Ignora "
+    "títulos, numeración y encabezados que no sean palabras del ejercicio. "
+    'Responde únicamente con un JSON de la forma {"palabras": ["mano", '
+    '"lupa"]}, en el mismo orden del documento y sin texto fuera del JSON.'
+)
 
 QUESTION_TYPES = ["literales", "inferenciales", "criticas"]
 QUESTION_TYPE_DESCRIPTIONS = {
@@ -613,10 +670,17 @@ def normalize_uploaded_noun_image(file_storage) -> bytes:
 
 def generate_noun_image(palabra: str, *, oracion: str = "") -> bytes:
     """Genera con Gemini un PNG del sustantivo `palabra` para que ocupe su
-    hueco en una "oración con imágenes". Devuelve los bytes de la imagen."""
+    hueco en una "oración con imágenes", o la imagen de una palabra suelta de
+    "bits" (ahí `oracion` llega vacío: no hay oración que dé contexto).
+    Devuelve los bytes de la imagen."""
+    contexto = " ".join(str(oracion or "").split())
+    contexto_clause = (
+        f' Use the sentence «{contexto}» only as a further hint for what '
+        f'«{palabra}» means.' if contexto else ""
+    )
     prompt = NOUN_IMAGE_STYLE_PROMPT.format(
         palabra=" ".join(str(palabra or "").split()),
-        contexto=" ".join(str(oracion or "").split()) or "—",
+        contexto_clause=contexto_clause,
     )
     try:
         response = gemini_client.models.generate_content(
@@ -792,6 +856,90 @@ def generate_image_sentences(
     data = json.loads(response.text)
     raw_items = data.get("oraciones") if isinstance(data, dict) else data
     return normalize_image_sentences(raw_items if isinstance(raw_items, list) else [])
+
+
+def normalize_bits_words(
+    raw_items, *, limit: int = MAX_BITS_PER_REQUEST
+) -> list[dict[str, object]]:
+    """Keeps only well-formed {palabra} entries: accepts either bare strings
+    (Gemini's {"palabras": [...]} shape) or {palabra, ...} dicts (frontend
+    payloads, which also carry staging_index). Trims, length-caps, de-dupes
+    by casefold, caps the count at `limit`. Mirrors normalize_image_sentences,
+    simplified to a single word instead of {texto, sustantivos}."""
+    seen: set[str] = set()
+    items: list[dict[str, object]] = []
+    for raw in raw_items or []:
+        palabra = raw.get("palabra") if isinstance(raw, dict) else raw
+        palabra = " ".join(str(palabra or "").split()).strip()[:MAX_BIT_WORD_CHARS]
+        if not palabra:
+            continue
+        key = palabra.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({"palabra": palabra})
+        if len(items) >= limit:
+            break
+    return items
+
+
+def extract_bits_words(file_storage) -> list[dict[str, object]]:
+    """Uploads the teacher's document to Gemini and asks it to pick out the
+    words already written there. Mirrors extract_image_sentences; returns
+    [{palabra}]."""
+    filename = file_storage.filename or "documento"
+    mime_type = file_storage.mimetype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    suffix = os.path.splitext(filename)[1]
+
+    tmp_path = None
+    uploaded_file = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            file_storage.save(tmp)
+            tmp_path = tmp.name
+
+        uploaded_file = gemini_client.files.upload(
+            file=tmp_path,
+            config={"mime_type": mime_type, "display_name": filename},
+        )
+
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[uploaded_file, BITS_EXTRACT_PROMPT],
+            config=types.GenerateContentConfig(response_mime_type="application/json"),
+        )
+        data = json.loads(response.text)
+        raw_items = data.get("palabras") if isinstance(data, dict) else data
+        return normalize_bits_words(raw_items if isinstance(raw_items, list) else [])
+    finally:
+        if uploaded_file is not None:
+            try:
+                gemini_client.files.delete(name=uploaded_file.name)
+            except Exception:
+                pass
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def generate_bits_words(
+    silabas: str, cantidad_silabas: int, grade_level: str, count: int, extra_details: str,
+) -> list[dict[str, object]]:
+    """Asks Gemini for words matching the target syllables and syllable count
+    (later paired with an image each). Returns [{palabra}]."""
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=BITS_GENERATE_PROMPT.format(
+            nivel=grade_level or "primaria",
+            silabas=silabas,
+            cantidad_silabas=cantidad_silabas,
+            detalles=extra_details or "Sin detalles adicionales.",
+            cantidad=count,
+        ),
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    data = json.loads(response.text)
+    raw_items = data.get("palabras") if isinstance(data, dict) else data
+    return normalize_bits_words(raw_items if isinstance(raw_items, list) else [])
 
 
 def generate_story(
@@ -2120,6 +2268,11 @@ def create_app(test_config: dict | None = None):
             for m in materials
             if m.es_oracion_imagen
         }
+        bits_by_material = {
+            m.id: material_bits_preview(m)
+            for m in materials
+            if m.es_bits
+        }
         return render_template(
             "material.html",
             active_nav="material",
@@ -2127,6 +2280,7 @@ def create_app(test_config: dict | None = None):
             materials=materials,
             sentences_by_material=sentences_by_material,
             image_sentences_by_material=image_sentences_by_material,
+            bits_by_material=bits_by_material,
             skills=MATERIAL_SKILLS,
             question_configuration=QUESTION_CONFIGURATION,
             periodos=available_periodos,
@@ -2334,6 +2488,20 @@ def create_app(test_config: dict | None = None):
                 return jsonify({
                     "error": "No se encontró ninguna oración con dos sustantivos aptos en el documento."
                 }), 422
+            return jsonify({"items": items})
+
+        if material_type == TIPO_BITS:
+            if not gemini_client and app.config.get("DEMO_MODE"):
+                return jsonify({"items": extract_demo_bits_words(uploaded)})
+            if not gemini_client:
+                return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+            try:
+                items = extract_bits_words(uploaded)
+            except Exception:
+                app.logger.exception("No se pudieron identificar las palabras con Gemini")
+                return jsonify({"error": "No se pudieron identificar las palabras con Gemini."}), 502
+            if not items:
+                return jsonify({"error": "No se encontró ninguna palabra apta en el documento."}), 422
             return jsonify({"items": items})
 
         if not gemini_client and app.config.get("DEMO_MODE"):
@@ -2597,6 +2765,57 @@ def create_app(test_config: dict | None = None):
 
         if not items:
             return jsonify({"error": "La IA no devolvió oraciones con dos sustantivos."}), 502
+
+        return jsonify({"title": title, "items": items})
+
+    @app.route("/api/bits/generate", methods=["POST"])
+    @login_required
+    def bits_generate():
+        """Borrador de palabras para "bits": cada palabra contiene al menos una
+        de las sílabas objetivo y tiene la cantidad de sílabas pedida. Solo
+        genera y devuelve las palabras para que la docente las revise; la
+        generación de imágenes es el paso de diseño (/api/bits/prepare)."""
+        payload = request.get_json(silent=True) or {}
+        silabas = str(payload.get("silabas") or "").strip()
+        grade_level = str(payload.get("grade_level") or "").strip()
+        extra_details = str(payload.get("extra_details") or "").strip()
+
+        if not silabas:
+            return jsonify({"error": "Falta indicar: sílabas a trabajar."}), 400
+        try:
+            cantidad_silabas = int(payload.get("cantidad_silabas"))
+        except (TypeError, ValueError):
+            cantidad_silabas = 0
+        if not 1 <= cantidad_silabas <= 10:
+            return jsonify({"error": "La cantidad de sílabas debe estar entre 1 y 10."}), 400
+        try:
+            count = int(payload.get("count"))
+        except (TypeError, ValueError):
+            count = 0
+        if not 1 <= count <= MAX_BITS_PER_REQUEST:
+            return jsonify({
+                "error": f"La cantidad debe estar entre 1 y {MAX_BITS_PER_REQUEST} palabras."
+            }), 400
+        field_limits = {"sílabas": (silabas, 160), "nivel del aula": (grade_level, 100),
+                        "detalles adicionales": (extra_details, 1_000)}
+        too_long = [label for label, (value, limit) in field_limits.items() if len(value) > limit]
+        if too_long:
+            return jsonify({"error": f"Excede el límite permitido: {', '.join(too_long)}."}), 413
+
+        title = f"Bits: sílabas {silabas} · {cantidad_silabas} sílabas"[:120]
+        if not gemini_client and app.config.get("DEMO_MODE"):
+            items = create_demo_bits_words(silabas, cantidad_silabas, count)
+        elif not gemini_client:
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+        else:
+            try:
+                items = generate_bits_words(silabas, cantidad_silabas, grade_level, count, extra_details)
+            except Exception:
+                app.logger.exception("No se pudieron generar las palabras con Gemini")
+                return jsonify({"error": "No se pudieron generar las palabras con Gemini."}), 502
+
+        if not items:
+            return jsonify({"error": "La IA no devolvió palabras."}), 502
 
         return jsonify({"title": title, "items": items})
 
@@ -2893,6 +3112,211 @@ def create_app(test_config: dict | None = None):
             # Se lee a memoria (en vez de send_file) para no dejar el archivo
             # abierto: /api/material/save borra este directorio justo después
             # de aprobar el diseño y un handle vivo lo impediría en Windows.
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            return jsonify({"error": "Imagen no encontrada."}), 404
+        response = Response(data, mimetype="image/png")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    # --- "Bits": diseño (generar y aprobar las imágenes) -----------------------
+    # Mismo esquema que "oraciones con imágenes" arriba (staging por token bajo
+    # `_previews/<token>/`), pero una sola imagen por palabra (no hay sentido
+    # ni sustantivos que enumerar): _staging_dir/_sweep_stale_previews/
+    # _make_noun_image/_image_sentences_ready se reutilizan tal cual.
+
+    def _staging_bit_image_name(item_index: int) -> str:
+        return f"{item_index}.png"
+
+    def _apply_bit_word_change(meta: dict, staging: str, item: dict, nueva_palabra: str) -> None:
+        """Si `nueva_palabra` viene y difiere de la actual, la aplica y
+        persiste meta.json. Compartido por /regenerate y /upload-image.
+        Más simple que _apply_noun_word_change: no hay plantilla que
+        recalcular ni "la palabra no aparece en la oración" que validar."""
+        if not nueva_palabra or nueva_palabra == item["palabra"]:
+            return
+        item["palabra"] = nueva_palabra
+        with open(os.path.join(staging, "meta.json"), "wb") as f:
+            f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+
+    def _staged_bits_preview_payload(token: str, meta: dict) -> list[dict]:
+        return [
+            {
+                "index": index,
+                "palabra": item.get("palabra", ""),
+                "fuente": item.get("fuente", "ia"),
+                "imagen_url": url_for("bit_preview_image", token=token, i=index),
+            }
+            for index, item in enumerate(meta.get("items", []))
+        ]
+
+    @app.route("/api/bits/prepare", methods=["POST"])
+    @login_required
+    def bits_prepare():
+        """Genera una imagen por palabra y las deja en revisión. Cuerpo JSON:
+        {title, items:[{palabra}]}."""
+        payload = request.get_json(silent=True) or {}
+        raw_items = payload.get("items")
+        items = normalize_bits_words(
+            raw_items if isinstance(raw_items, list) else [],
+            limit=MAX_BITS_DESIGN_ITEMS,
+        )
+        if not items:
+            return jsonify({"error": "Cada bit debe tener su palabra."}), 400
+
+        bits = [{"palabra": item["palabra"], "fuente": "ia"} for item in items]
+
+        if not _image_sentences_ready():
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+
+        _sweep_stale_previews()
+        token = uuid.uuid4().hex
+        staging = _staging_dir(token)
+        os.makedirs(staging, exist_ok=True)
+        try:
+            for item_index, item in enumerate(bits):
+                data = _make_noun_image(item["palabra"], "")
+                with open(
+                    os.path.join(staging, _staging_bit_image_name(item_index)), "wb"
+                ) as f:
+                    f.write(data)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            app.logger.exception("No se pudieron generar las imágenes de los bits")
+            return jsonify({"error": "No se pudieron generar las imágenes con Gemini."}), 502
+
+        meta = {
+            "created_at": utc_now().isoformat(),
+            "title": (payload.get("title") or "").strip(),
+            "items": bits,
+        }
+        with open(os.path.join(staging, "meta.json"), "wb") as f:
+            f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+
+        return jsonify({"token": token, "items": _staged_bits_preview_payload(token, meta)})
+
+    @app.route("/api/bits/regenerate", methods=["POST"])
+    @login_required
+    def bits_regenerate():
+        """Regenera una sola imagen del diseño en revisión. Cuerpo JSON:
+        {token, item_index, palabra?}."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            staging = _staging_dir(payload.get("token"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        try:
+            with open(os.path.join(staging, "meta.json"), "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            return jsonify({
+                "error": "La previsualización expiró. Vuelve a generar el diseño."
+            }), 404
+
+        items = meta.get("items", [])
+        try:
+            item_index = int(payload.get("item_index"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Índice de bit inválido."}), 400
+        if not (0 <= item_index < len(items)):
+            return jsonify({"error": "Índice de bit inválido."}), 400
+
+        if not _image_sentences_ready():
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+
+        item = items[item_index]
+        nueva_palabra = " ".join(str(payload.get("palabra") or "").split())
+        _apply_bit_word_change(meta, staging, item, nueva_palabra)
+
+        palabra = item["palabra"]
+        try:
+            data = _make_noun_image(palabra, "")
+        except Exception:
+            app.logger.exception("No se pudo regenerar la imagen del bit")
+            return jsonify({"error": "No se pudo regenerar la imagen con Gemini."}), 502
+        with open(
+            os.path.join(staging, _staging_bit_image_name(item_index)), "wb"
+        ) as f:
+            f.write(data)
+        item["fuente"] = "ia"
+        with open(os.path.join(staging, "meta.json"), "wb") as f:
+            f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+
+        return jsonify({
+            "palabra": palabra,
+            "fuente": "ia",
+            "imagen_url": url_for(
+                "bit_preview_image", token=payload.get("token"), i=item_index,
+            ) + f"?v={secrets.token_hex(4)}",
+        })
+
+    @app.route("/api/bits/upload-image", methods=["POST"])
+    @login_required
+    def bits_upload_image():
+        """Reemplaza, con una imagen que sube la docente, la de un bit del
+        diseño en revisión. Cuerpo multipart/form-data: token, item_index,
+        palabra? (igual que regenerate) y el archivo en el campo `imagen`."""
+        try:
+            staging = _staging_dir(request.form.get("token"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        try:
+            with open(os.path.join(staging, "meta.json"), "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            return jsonify({
+                "error": "La previsualización expiró. Vuelve a generar el diseño."
+            }), 404
+
+        items = meta.get("items", [])
+        try:
+            item_index = int(request.form.get("item_index"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Índice de bit inválido."}), 400
+        if not (0 <= item_index < len(items)):
+            return jsonify({"error": "Índice de bit inválido."}), 400
+
+        uploaded = request.files.get("imagen")
+        if not uploaded or not (uploaded.filename or "").strip():
+            return jsonify({"error": "Selecciona un archivo de imagen."}), 400
+        try:
+            data = normalize_uploaded_noun_image(uploaded)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        item = items[item_index]
+        nueva_palabra = " ".join(str(request.form.get("palabra") or "").split())
+        _apply_bit_word_change(meta, staging, item, nueva_palabra)
+
+        with open(
+            os.path.join(staging, _staging_bit_image_name(item_index)), "wb"
+        ) as f:
+            f.write(data)
+        item["fuente"] = "manual"
+        with open(os.path.join(staging, "meta.json"), "wb") as f:
+            f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+
+        return jsonify({
+            "palabra": item["palabra"],
+            "fuente": "manual",
+            "imagen_url": url_for(
+                "bit_preview_image", token=request.form.get("token"), i=item_index,
+            ) + f"?v={secrets.token_hex(4)}",
+        })
+
+    @app.route("/api/bits/preview/<token>/<int:i>", methods=["GET"])
+    @login_required
+    def bit_preview_image(token, i):
+        try:
+            staging = _staging_dir(token)
+        except ValueError:
+            return jsonify({"error": "Imagen no encontrada."}), 404
+        path = os.path.join(staging, _staging_bit_image_name(i))
+        try:
+            # Se lee a memoria (en vez de send_file) por la misma razón que
+            # image_sentence_preview_image: /api/material/save borra este
+            # directorio justo después de aprobar el diseño.
             with open(path, "rb") as f:
                 data = f.read()
         except OSError:
@@ -3209,6 +3633,156 @@ def create_app(test_config: dict | None = None):
                 shutil.rmtree(staging, ignore_errors=True)
             return jsonify({"material_id": material.id})
 
+        if material_type == TIPO_BITS:
+            bits_json_raw = (request.form.get("bits_json") or "").strip()
+            if not bits_json_raw:
+                return jsonify({"error": "Escribe al menos una palabra."}), 400
+            try:
+                parsed = json.loads(bits_json_raw)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Los bits no tienen un formato JSON válido."}), 400
+            if not isinstance(parsed, list):
+                return jsonify({"error": "Los bits no tienen un formato JSON válido."}), 400
+
+            staging_token = (request.form.get("staging_token") or "").strip()
+
+            # Modo editor: la docente sube su propia imagen junto con el resto
+            # del formulario, sin pasar por el staging de arriba (eso es solo
+            # para el diseño con IA) - un archivo "imagen_<staging_index>" por
+            # bit, con el mismo staging_index que ya manda cada bit (ver
+            # index_by_palabra más abajo). A diferencia de oracion_imagen, no
+            # hay sufijo de sustantivo: cada bit lleva una sola imagen.
+            manual_image_files = {
+                key: value for key, value in request.files.items() if key.startswith("imagen_")
+            }
+
+            # `staging_index` (si viene) apunta al hueco del `_previews/<token>/`
+            # cuyas imágenes usar; permite que la docente haya quitado filas en
+            # el paso de diseño. Se conserva junto al item normalizado.
+            index_by_palabra = {}
+            for raw in parsed if isinstance(parsed, list) else []:
+                if isinstance(raw, dict) and raw.get("palabra"):
+                    key = " ".join(str(raw["palabra"]).split()).casefold()
+                    if "staging_index" in raw:
+                        try:
+                            index_by_palabra[key] = int(raw["staging_index"])
+                        except (TypeError, ValueError):
+                            pass
+
+            # Descarta los que la docente dejó sin palabra (mismo criterio que
+            # la extracción y la generación con IA).
+            items = normalize_bits_words(
+                parsed,
+                limit=(MAX_BITS_DESIGN_ITEMS if staging_token else MAX_BITS_PER_MATERIAL),
+            )
+            if not items:
+                return jsonify({"error": "Cada bit debe tener su palabra."}), 400
+            total_chars = sum(len(item["palabra"]) for item in items)
+            if total_chars > MAX_BITS_CHARS:
+                return jsonify({"error": "Los bits exceden el límite permitido."}), 413
+
+            # A diferencia de oracion_imagen, bits no tiene un tercer camino
+            # "solo texto": no hay datos previos a la función que soportar, así
+            # que un bit sin imagen (ni staging_token ni imagen_* subida) es un
+            # error, no un guardado válido.
+            if not staging_token and not manual_image_files:
+                return jsonify({
+                    "error": "Cada bit necesita su imagen. Genera el diseño con IA o sube "
+                             "las imágenes en el editor manual."
+                }), 400
+
+            staging = None
+            if staging_token:
+                try:
+                    staging = _staging_dir(staging_token)
+                    with open(os.path.join(staging, "meta.json"), "r", encoding="utf-8") as f:
+                        staging_meta = json.load(f)
+                except (ValueError, OSError, json.JSONDecodeError):
+                    return jsonify({
+                        "error": "La previsualización expiró. Vuelve a generar el diseño."
+                    }), 400
+                staged_count = len(staging_meta.get("items", []))
+
+            material_dir_name = uuid.uuid4().hex
+            material_dir = os.path.join(app.config["UPLOADS_ROOT"], material_dir_name)
+            os.makedirs(material_dir, exist_ok=True)
+
+            bits_payload = []
+            img_dir = os.path.join(material_dir, "img")
+            os.makedirs(img_dir, exist_ok=True)
+            used_names: set[str] = set()
+
+            if staging:
+                for position, item in enumerate(items):
+                    key = item["palabra"].casefold()
+                    src_index = index_by_palabra.get(key, position)
+                    if not (0 <= src_index < staged_count):
+                        shutil.rmtree(material_dir, ignore_errors=True)
+                        return jsonify({
+                            "error": f"Falta la imagen del bit {position + 1}. "
+                                     "Vuelve a generar el diseño."
+                        }), 400
+                    src = os.path.join(staging, _staging_bit_image_name(src_index))
+                    if not os.path.isfile(src):
+                        shutil.rmtree(material_dir, ignore_errors=True)
+                        return jsonify({
+                            "error": f"Falta la imagen del bit {position + 1}. "
+                                     "Regénerala antes de aprobar."
+                        }), 400
+                    rel = f"img/{_unique_noun_filename(item['palabra'], position, 0, used_names)}"
+                    shutil.copyfile(src, os.path.join(material_dir, rel))
+                    bits_payload.append({"palabra": item["palabra"], "imagen": rel})
+            else:
+                # Modo editor: sin IA de por medio, la imagen de cada palabra
+                # llega tal cual la subió la docente.
+                for position, item in enumerate(items):
+                    key = item["palabra"].casefold()
+                    src_index = index_by_palabra.get(key, position)
+                    file_storage = manual_image_files.get(f"imagen_{src_index}")
+                    if file_storage is None or not (file_storage.filename or "").strip():
+                        shutil.rmtree(material_dir, ignore_errors=True)
+                        return jsonify({
+                            "error": f"Falta la imagen del bit {position + 1}."
+                        }), 400
+                    try:
+                        data = normalize_uploaded_noun_image(file_storage)
+                    except ValueError as exc:
+                        shutil.rmtree(material_dir, ignore_errors=True)
+                        return jsonify({"error": f"Bit {position + 1}: {exc}"}), 400
+                    rel = f"img/{_unique_noun_filename(item['palabra'], position, 0, used_names)}"
+                    with open(os.path.join(material_dir, rel), "wb") as f:
+                        f.write(data)
+                    bits_payload.append({"palabra": item["palabra"], "imagen": rel})
+
+            with open(os.path.join(material_dir, "bits.json"), "wb") as f:
+                f.write(json.dumps(bits_payload, ensure_ascii=False, indent=2).encode("utf-8"))
+
+            material = Material(
+                nombre_material=title,
+                tipo_material=TIPO_BITS,
+                path_preguntas=f"uploads/{material_dir_name}/bits.json",
+                path_texto=None,
+                path_texto_resumen=None,
+                path_audio=None,
+                path_audio_resumen=None,
+                fk_user=str(teacher["id"]),
+                id_periodo=material_periodo_id,
+                id_tema=material_tema_id,
+                fk_user_name=(str(teacher.get("raw_name") or teacher.get("name") or "").strip() or None),
+            )
+            db.session.add(material)
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                shutil.rmtree(material_dir, ignore_errors=True)
+                return jsonify({
+                    "error": "El periodo o el tema indicado ya no está disponible. Vuelve a intentarlo."
+                }), 409
+            if staging:
+                shutil.rmtree(staging, ignore_errors=True)
+            return jsonify({"material_id": material.id})
+
         transcribed_text = (request.form.get("transcribed_text") or "").strip()
         summary_text = (request.form.get("summary_text") or "").strip()
         questions_json_raw = (request.form.get("questions_json") or "").strip()
@@ -3477,6 +4051,85 @@ def create_app(test_config: dict | None = None):
             return normalize_sentences(data)
         return split_text_into_sentences(material.path_preguntas or "")
 
+    def _material_bits_file(material):
+        """Raw JSON list stored at uploads/<id>/bits.json, or None if
+        path_preguntas doesn't point at a file we wrote."""
+        raw = material.path_preguntas or ""
+        if not stored_as_material_path(raw):
+            return None
+        try:
+            with open(uploads_abspath(raw), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return []
+        return data if isinstance(data, list) else []
+
+    def material_bits_items(material) -> list[dict[str, object]]:
+        """Canonical form for a `bits` material: [{palabra, imagen|None}].
+        `imagen` es la ruta relativa a la carpeta del material (p.ej.
+        "img/mano.png") o None. Mirrors material_image_sentences, simplified
+        to a single word per item instead of {texto, sustantivos}."""
+        rows = _material_bits_file(material) or []
+        seen: set[str] = set()
+        out: list[dict[str, object]] = []
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            palabra = " ".join(str(raw.get("palabra") or "").split()).strip()
+            if not palabra:
+                continue
+            key = palabra.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            imagen = str(raw.get("imagen") or "").strip() or None
+            out.append({"palabra": palabra, "imagen": imagen})
+            if len(out) >= MAX_BITS_PER_MATERIAL:
+                break
+        return out
+
+    def _material_bits_image_url(material, item_index):
+        scheme = "https" if app.config.get("PREFERRED_URL_SCHEME") == "https" else request.scheme
+        return url_for(
+            "download_material_bit_image",
+            material_id=material.id,
+            i=item_index,
+            _external=True,
+            _scheme=scheme,
+        )
+
+    def _material_bits_image_stored_path(material, rel: str) -> str:
+        base_dir = posixpath.dirname(str(material.path_preguntas or ""))
+        return posixpath.join(base_dir, rel)
+
+    def material_bits_preview(material) -> list[dict[str, object]]:
+        """Vista previa de un material "bits" ya guardado, para la tarjeta de
+        la consola: palabra + imagen firmada (o None si por algún motivo no
+        tiene imagen)."""
+        return [
+            {
+                "palabra": item["palabra"],
+                "imagen_url": (
+                    media_url(_material_bits_image_stored_path(material, item["imagen"]))
+                    if item["imagen"] else None
+                ),
+            }
+            for item in material_bits_items(material)
+        ]
+
+    def serialize_bits(material) -> list[dict[str, object]]:
+        """Robot-facing view: cada palabra con la URL autenticada de su
+        imagen."""
+        return [
+            {
+                "palabra": item["palabra"],
+                "imagen_url": (
+                    _material_bits_image_url(material, index) if item["imagen"] else None
+                ),
+            }
+            for index, item in enumerate(material_bits_items(material))
+        ]
+
     def _material_resource_url(material, recurso):
         # Los `*_url` apuntan al endpoint autenticado del robot, no a
         # /static/: bajarlos exige el secreto compartido y el identificador de
@@ -3512,6 +4165,26 @@ def create_app(test_config: dict | None = None):
         }
 
     def serialize_material(material):
+        if material.es_bits:
+            # Puramente presentacional, igual que oracion_imagen: no hay
+            # preguntas/respuestas guardadas para un bit, el robot decide qué
+            # preguntar y evalúa la respuesta por su cuenta.
+            return {
+                "id": material.id,
+                "titulo": material.nombre_material,
+                "tipo_material": material.tipo_material,
+                "fecha_subido": material.fecha_subido.isoformat() if material.fecha_subido else None,
+                "fk_user": material.fk_user,
+                "docente": material.fk_user_name,
+                **_material_classification(material),
+                "bits": serialize_bits(material),
+                "texto_completo_url": None,
+                "texto_resumen_url": None,
+                "audio_completo_url": None,
+                "audio_resumen_url": None,
+                "preguntas_url": None,
+                "preguntas": [],
+            }
         if material.es_oracion or material.es_oracion_imagen:
             is_path = stored_as_material_path(material.path_preguntas or "")
             payload = {
@@ -3741,11 +4414,22 @@ def create_app(test_config: dict | None = None):
                 payload["oraciones_detalle"] = serialize_image_sentences(material)
             return jsonify(payload)
 
+        if recurso == "bits":
+            if not material.es_bits:
+                return jsonify({
+                    "error": "Este material no es de tipo bits; usa 'bits' solo para ese tipo."
+                }), 404
+            return jsonify({"bits": serialize_bits(material)})
+
         if recurso not in MATERIAL_DOWNLOADS:
             return jsonify({"error": "Recurso de material no reconocido."}), 404
         if material.es_oracion or material.es_oracion_imagen:
             return jsonify({
                 "error": "Este material es una oración; solo expone 'oraciones'."
+            }), 404
+        if material.es_bits:
+            return jsonify({
+                "error": "Este material es de bits; solo expone 'bits'."
             }), 404
 
         attr, mimetype, download_name = MATERIAL_DOWNLOADS[recurso]
@@ -3799,6 +4483,39 @@ def create_app(test_config: dict | None = None):
             mimetype="image/png",
             as_attachment=True,
             download_name=f"oracion_{s}_sustantivo_{n}.png",
+        )
+
+    # Robot-side endpoint: descarga la imagen de un bit (`<i>` es el índice
+    # 0-based tal como llega en `bits`). Mismo control de acceso que
+    # download_material_image.
+    @app.route("/api/materials/<int:material_id>/bit-imagen/<int:i>", methods=["GET"])
+    def download_material_bit_image(material_id, i):
+        if not webhook_authorized():
+            return jsonify({"error": "Integración no autorizada."}), 401
+        material, error = robot_material_or_error(material_id, require_identifier=True)
+        if error:
+            return error
+        if not material.es_bits:
+            return jsonify({"error": "Este material no tiene imágenes de bits."}), 404
+
+        items = material_bits_items(material)
+        if not (0 <= i < len(items)):
+            return jsonify({"error": "Imagen de bit no encontrada."}), 404
+        rel = items[i]["imagen"]
+        if not rel:
+            return jsonify({"error": "Este bit se guardó sin imagen."}), 404
+
+        try:
+            abs_path = uploads_abspath(_material_bits_image_stored_path(material, rel))
+        except ValueError:
+            return jsonify({"error": "Imagen de bit no encontrada."}), 404
+        if not os.path.isfile(abs_path):
+            return jsonify({"error": "Imagen de bit no encontrada."}), 404
+        return send_file(
+            abs_path,
+            mimetype="image/png",
+            as_attachment=True,
+            download_name=f"bit_{i}.png",
         )
 
     def parse_optional_bool(value):

@@ -52,8 +52,9 @@ Falta el identificador → `400 {"error": "Falta identificar a la docente (docen
 | `GET /api/temas` | Temas (unidades) de una docente |
 | `GET /api/materials` | Lista de materiales de una docente |
 | `GET /api/materials/{id}` | Metadatos de un material |
-| `GET /api/materials/{id}/{recurso}` | Descargar un recurso del material (texto/audio/preguntas/oraciones) |
+| `GET /api/materials/{id}/{recurso}` | Descargar un recurso del material (texto/audio/preguntas/oraciones/bits) |
 | `GET /api/materials/{id}/imagen/{oracion}/{sustantivo}` | PNG de un sustantivo de una "oración con imágenes" |
+| `GET /api/materials/{id}/bit-imagen/{i}` | PNG de la palabra de un "bit" |
 | `POST /api/interacciones` | Registrar un turno pregunta/respuesta (sube el audio) |
 | `GET /api/interacciones` | Historial de turnos (por material y/o alumno) |
 | `GET /api/interacciones/{id}/audio` | Descargar el audio de un turno ya registrado |
@@ -116,7 +117,7 @@ Lista los materiales de una docente, del más reciente al más antiguo.
 | Param | Obligatorio | Descripción |
 |---|---|---|
 | `teacher_id` **o** `docente` | Sí | Ver §1. |
-| `tipo` | No | `cuento`, `oracion` o `oracion_imagen`. Filtra por tipo. Valor no válido → `400`. |
+| `tipo` | No | `cuento`, `oracion`, `oracion_imagen` o `bits`. Filtra por tipo. Valor no válido → `400`. |
 
 ### Respuesta `200`
 
@@ -128,7 +129,7 @@ Array de objetos material. La forma depende de `tipo_material`.
 |---|---|---|
 | `id` | int | ID del material. |
 | `titulo` | string | |
-| `tipo_material` | string | `cuento` \| `oracion` \| `oracion_imagen`. |
+| `tipo_material` | string | `cuento` \| `oracion` \| `oracion_imagen` \| `bits`. |
 | `fecha_subido` | string (YYYY-MM-DD) \| null | |
 | `fk_user` | string | `idPersona` de la docente dueña. |
 | `docente` | string \| null | Nombre de la docente al crear el material (copia). |
@@ -245,11 +246,50 @@ sustantivos concretos que se muestran como imágenes en los huecos.
   orden en que aparecen los sustantivos en la frase. Si `plantilla` faltara,
   usa `oracion_completa`.
 
+#### `tipo_material: "bits"`
+
+"Bits" (bits de inteligencia): tarjetas de una sola palabra con su imagen, para
+practicar fonética. A diferencia de `oracion_imagen` no hay una oración que
+armar: cada elemento de `bits` es autosuficiente (palabra + imagen). Un bit
+**siempre** tiene imagen — a diferencia de `oracion_imagen`, MAXCIM no permite
+guardar un bit sin ella.
+
+```json
+{
+  "id": 40,
+  "titulo": "Bits: sílabas ma, me, mi, mo, mu · 2 sílabas",
+  "tipo_material": "bits",
+  "fecha_subido": "2026-09-15",
+  "fk_user": "1000001", "docente": "Perez Flores, Ana",
+  "id_periodo": 3, "id_tema": 9,
+  "periodo": { "id": 3, "nombre": "III BIMESTRE" },
+  "tema": { "id": 9, "nombre": "Fonética" },
+
+  "bits": [
+    { "palabra": "mamá", "imagen_url": "https://.../api/materials/40/bit-imagen/0" },
+    { "palabra": "mapa", "imagen_url": "https://.../api/materials/40/bit-imagen/1" }
+  ],
+
+  "texto_completo_url": null, "texto_resumen_url": null,
+  "audio_completo_url": null, "audio_resumen_url": null,
+  "preguntas_url": null, "preguntas": []
+}
+```
+
+**Cómo arma el robot la pantalla de un bit** — por cada elemento de `bits`:
+muestra primero la imagen (descargada de `imagen_url`), y luego la palabra
+(`palabra`). No hay `preguntas`/`respuesta_esperada` guardadas: MAXCIM no sabe
+qué le va a preguntar el robot sobre cada bit ni evalúa la respuesta — eso lo
+decide y lo resuelve el robot por su cuenta (igual que en `oracion_imagen`).
+
 ### Ejemplo
 
 ```bash
 curl -H "X-MAXCIM-Webhook-Secret: $SECRET" \
   "$BASE/api/materials?teacher_id=1000001&tipo=oracion_imagen"
+
+curl -H "X-MAXCIM-Webhook-Secret: $SECRET" \
+  "$BASE/api/materials?teacher_id=1000001&tipo=bits"
 ```
 
 ---
@@ -289,11 +329,13 @@ docente y propiedad (400 / 404 / 403 como en §5).
 | `audio-resumen` | cuento | `audio/wav` | narración del resumen |
 | `preguntas` | cuento | `application/json` | array `[{pregunta, respuesta_esperada}]` |
 | `oraciones` | oracion / oracion_imagen | `application/json` | ver abajo |
+| `bits` | bits | `application/json` | ver abajo |
 
 Las descargas de archivo llegan con `Content-Disposition: attachment`.
 
-- Pedir `texto`/`audio`/… a una `oracion` o `oracion_imagen` → `404`
-  (`"solo expone 'oraciones'"`).
+- Pedir `texto`/`audio`/… a una `oracion`, `oracion_imagen` o `bits` → `404`
+  (`"solo expone 'oraciones'"` / `"solo expone 'bits'"`, según el tipo).
+- Pedir `oraciones` a un `bits` (o `bits` a una `oracion`/`oracion_imagen`) → `404`.
 - Pedir `oraciones` a un `cuento` → `404`.
 - `recurso` desconocido → `404`.
 - El material no tiene ese recurso guardado → `404`.
@@ -310,6 +352,14 @@ Las descargas de archivo llegan con `Content-Disposition: attachment`.
   "oraciones_detalle": [ { "oracion_completa": "...", "plantilla": "...", "sustantivos": [ ... ] } ]
 }
 ```
+
+### `recurso = bits`
+
+```json
+{ "bits": [ { "palabra": "mamá", "imagen_url": "https://.../api/materials/40/bit-imagen/0" } ] }
+```
+
+Mismo contenido que el campo `bits` de §4.
 
 ### Ejemplo
 
@@ -350,7 +400,36 @@ curl -H "X-MAXCIM-Webhook-Secret: $SECRET" \
 
 ---
 
-## 8. `POST /api/interacciones`
+## 8. `GET /api/materials/{id}/bit-imagen/{i}`
+
+PNG de la palabra de un "bit". `{i}` es un **índice 0-based**, tal cual llega
+en `bits` (`bits[i]`).
+
+### Query params
+
+| Param | Obligatorio | Descripción |
+|---|---|---|
+| `teacher_id` **o** `docente` | Sí | |
+
+### Respuestas
+
+- `200` — bytes PNG (`Content-Type: image/png`, `attachment`).
+- `400` / `403` / `404` — como en §5, y también `404` si el material no es
+  `bits`, si el índice está fuera de rango, o si ese bit se guardó sin imagen
+  (no debería pasar: MAXCIM exige imagen para guardar un bit).
+
+La forma cómoda es usar directamente el campo `imagen_url` que ya viene en
+`bits` (es esta misma ruta, absoluta); solo hay que añadirle el header del
+secreto y el `?teacher_id=`.
+
+```bash
+curl -H "X-MAXCIM-Webhook-Secret: $SECRET" \
+  "$BASE/api/materials/40/bit-imagen/0?teacher_id=1000001" -o mama.png
+```
+
+---
+
+## 9. `POST /api/interacciones`
 
 Registra **un turno** de pregunta/respuesta ya resuelto por el robot. El robot
 decide por su cuenta qué alumno tiene enfrente y qué material está usando; MAXCIM
@@ -374,7 +453,7 @@ no gestiona sesiones ni reconocimiento facial.
 
 ### Respuestas
 
-- `201` — objeto interacción creado (ver forma en §9).
+- `201` — objeto interacción creado (ver forma en §10).
 - `400` — faltan campos (`"Faltan campos obligatorios: ..."`), `id_material` /
   `rpta_correcta` mal formados, o el `audio_rpta` no es un WAV válido.
 - `404` — `id_material` no existe.
@@ -397,9 +476,24 @@ curl -X POST "$BASE/api/interacciones" \
   -F "audio_rpta=@respuesta.wav;type=audio/wav"
 ```
 
+Mismo formato para un bit (`pregunta`/`respuesta` los arma y evalúa el robot,
+igual que en `oracion_imagen` — MAXCIM no sabe qué palabra "correcta" espera):
+
+```bash
+curl -X POST "$BASE/api/interacciones" \
+  -H "X-MAXCIM-Webhook-Secret: $SECRET" \
+  -F "id_material=40" \
+  -F "fk_alumno=79398411" \
+  -F "pregunta=¿Qué palabra es esta?" \
+  -F "respuesta=mamá" \
+  -F "apreciacion_robot=Leyó la palabra completa, correcta." \
+  -F "rpta_correcta=true" \
+  -F "audio_rpta=@respuesta.wav;type=audio/wav"
+```
+
 ---
 
-## 9. `GET /api/interacciones`
+## 10. `GET /api/interacciones`
 
 Historial de turnos. **Requiere** identificador de la docente **y** al menos uno
 de `id_material` / `fk_alumno`. Solo devuelve interacciones de materiales de esa
@@ -436,14 +530,14 @@ de la más reciente a la más antigua.
 | Campo | Tipo | Notas |
 |---|---|---|
 | `fecha_hora` | string ISO **en UTC** (sin zona) | Conviértela a hora local para mostrar. |
-| `audio_rpta_url` | string | Absoluta; apunta a §10. |
+| `audio_rpta_url` | string | Absoluta; apunta a §11. |
 | `periodo` | objeto \| null | `null` si la fecha cae fuera de todos los bimestres. |
 
 Sin `id_material` ni `fk_alumno` → `400`.
 
 ---
 
-## 10. `GET /api/interacciones/{id}/audio`
+## 11. `GET /api/interacciones/{id}/audio`
 
 Descarga el WAV que MAXCIM guardó al registrar el turno. **Requiere**
 identificador de la docente y que el material del turno le pertenezca.
@@ -455,7 +549,7 @@ identificador de la docente y que el material del turno le pertenezca.
 
 ---
 
-## 11. Resumen de códigos de error
+## 12. Resumen de códigos de error
 
 | Código | Significado | Cuerpo |
 |---|---|---|
@@ -471,7 +565,7 @@ en logs (no necesariamente para mostrar al alumno).
 
 ---
 
-## 12. Glosario
+## 13. Glosario
 
 | Término | Qué es |
 |---|---|
@@ -479,6 +573,7 @@ en logs (no necesariamente para mostrar al alumno).
 | **alumno** | Estudiante. Se identifica por `fk_alumno` (`idPersona` de CIMA). Tampoco se persiste en MAXCIM. |
 | **periodo** | Bimestre académico (I–IV). MAXCIM lo asigna solo; el robot nunca lo envía. |
 | **tema** | Unidad temática de una docente dentro de un periodo. Cada material tiene `id_tema`. |
-| **material** | Contenido preparado por la docente: `cuento`, `oracion` u `oracion_imagen`. |
+| **material** | Contenido preparado por la docente: `cuento`, `oracion`, `oracion_imagen` o `bits`. |
 | **interacción** | Un turno pregunta→respuesta entre un alumno y MAXCIM. |
 | **plantilla** | Frase de una `oracion_imagen` con `{{0}}` / `{{1}}` donde van las imágenes. |
+| **bit** | Elemento de un material `bits`: una palabra con su imagen, para practicar fonética por sílabas. |

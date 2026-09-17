@@ -16,3 +16,6 @@ SECURITY_AUDIT*.md
 # remoto), así que nunca deben quedar versionados.
 seed_interacciones_remote.py
 seed_periodos_remote.py
+remote_db.py
+seed_periodos.py
+manage_periodos.py

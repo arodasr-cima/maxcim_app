@@ -21,11 +21,15 @@ interacciones con los alumnos. Vive dentro de la misma app Flask
 
 | Método y ruta | Para qué sirve |
 |---|---|
-| `GET /api/materials?teacher_id={id}` (o `docente={nombre}`) | Listar materiales de una docente. Filtro opcional `tipo=cuento\|oracion\|oracion_imagen` |
+| `GET /api/materials?teacher_id={id}` (o `docente={nombre}`) | Listar materiales de una docente. Filtro opcional `tipo=cuento\|oracion\|oracion_imagen\|bits` |
 | `GET /api/temas?teacher_id={id}` (o `docente={nombre}`) | Listar los temas de una docente. Filtro opcional `periodo={id}` |
-| `GET /api/materials/{id}` | Obtener metadatos de un material (cuento, oración u oración con imágenes) |
-| `GET /api/materials/{id}/{recurso}` | Descargar un recurso del material: `texto`, `resumen`, `audio`, `audio-resumen`, `preguntas` (cuentos) u `oraciones` (oraciones y oraciones con imágenes) |
+| `GET /api/materials/{id}` | Obtener metadatos de un material (cuento, oración, oración con imágenes o bits) |
+| `GET /api/materials/{id}/{recurso}` | Descargar un recurso del material: `texto`, `resumen`, `audio`, `audio-resumen`, `preguntas` (cuentos), `oraciones` (oraciones y oraciones con imágenes) o `bits` |
 | `GET /api/materials/{id}/imagen/{oración}/{sustantivo}` | Descargar el PNG de un sustantivo de una "oración con imágenes" (índices 0-based tal como llegan en `oraciones_detalle`) |
+| `GET /api/materials/{id}/bit-imagen/{i}` | Descargar el PNG de la palabra de un "bit" (índice 0-based tal como llega en `bits`) |
+| `POST /api/interacciones` | Registrar un turno de pregunta/respuesta, subiendo el audio de la respuesta |
+| `GET /api/interacciones/{id}/audio` | Descargar el audio de una respuesta ya registrada |
+| `GET /api/interacciones?id_material={id}&fk_alumno={id}` | Consultar historial de interacciones (se exige al menos uno de los dos filtros) |
 
 ### Temas de una docente
 
@@ -73,9 +77,20 @@ El robot arma la pantalla sustituyendo `{{0}}` / `{{1}}` en `plantilla` por la
 imagen de `sustantivos[0]` / `sustantivos[1]`. `imagen_url` es `null` si el
 material se guardó sin imágenes; las URLs de imagen exigen el mismo secreto y
 la identificación de la docente que el resto de la API.
-| `POST /api/interacciones` | Registrar un turno de pregunta/respuesta, subiendo el audio de la respuesta |
-| `GET /api/interacciones/{id}/audio` | Descargar el audio de una respuesta ya registrada |
-| `GET /api/interacciones?id_material={id}&fk_alumno={id}` | Consultar historial de interacciones (se exige al menos uno de los dos filtros) |
+
+### Bits (`tipo_material: "bits"`)
+
+"Bits de inteligencia": tarjetas de una sola palabra con su imagen, sin la
+oración/plantilla de `oracion_imagen`. `GET /api/materials/{id}` y
+`GET /api/materials/{id}/bits` incluyen `bits`, una entrada por palabra:
+
+```json
+{ "palabra": "mamá", "imagen_url": "https://.../api/materials/40/bit-imagen/0" }
+```
+
+El robot muestra primero la imagen (`imagen_url`) y luego la palabra
+(`palabra`). A diferencia de `oracion_imagen`, un bit siempre tiene imagen
+-MAXCIM no permite guardar uno sin ella.
 
 ## Registrar una interacción
 

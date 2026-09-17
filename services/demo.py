@@ -277,6 +277,26 @@ def create_demo_noun_image(palabra: str, oracion: str = "") -> bytes:
     return _solid_png(256, 256, rgb)
 
 
+def create_demo_bits_words(silabas: str, cantidad_silabas: int, count: int) -> list[dict]:
+    """Deterministic {palabra} fixture for DEMO_MODE: cycles a fixed pool of
+    short, common Spanish words, ignoring the real syllable criteria (mirrors
+    create_demo_sentences ignoring the real topic)."""
+    pool = [
+        "mano", "pelota", "gato", "mesa", "sol", "pan", "oso", "luna",
+        "flor", "pato", "casa", "dedo",
+    ]
+    return [{"palabra": pool[index % len(pool)]} for index in range(max(1, count))]
+
+
+def extract_demo_bits_words(file_storage) -> list[dict]:
+    """Deterministic {palabra} fixture for DEMO_MODE: reuses the demo document
+    text to decide how many words to return (mirrors extract_demo_image_sentences)."""
+    text, _summary = process_demo_document(file_storage)
+    words = re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]+", text)
+    count = max(3, min(8, len(words) or 3))
+    return create_demo_bits_words("", 2, count)
+
+
 def extract_demo_image_sentences(file_storage) -> list[dict]:
     """Deterministic {texto, sustantivos:[a, b]} fixture for DEMO_MODE: reuses
     the demo document text to decide how many sentences to return, then pairs

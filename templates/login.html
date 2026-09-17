@@ -44,7 +44,7 @@
         <header class="auth-card__intro">
           <p class="auth-card__eyebrow">{{ 'Acceso docente · Pruebas' if demo_mode else 'Portal docente' }}</p>
           <h2 id="loginTitle">Bienvenido de nuevo</h2>
-          <p>Ingresa con tu cuenta institucional para continuar a MAXCIM.</p>
+          <p>Ingresa con tu cuenta institucional para continuar al sistema.</p>
         </header>
 
         {% if error %}
@@ -74,12 +74,12 @@
         <form method="post" class="auth-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <label class="auth-field" for="institutional_id">
-            <span>Usuario institucional</span>
+            <span>Usuario</span>
             <input id="institutional_id" name="institutional_id" autocomplete="username" required maxlength="50" placeholder="Ej. jperez" {% if demo_mode %}value="DOC-DEMO-01"{% endif %}>
           </label>
           <label class="auth-field" for="credential">
-            <span>Credencial institucional</span>
-            <input id="credential" type="password" name="credential" autocomplete="current-password" required placeholder="Ingresa tu credencial" {% if demo_mode %}value="prueba"{% endif %}>
+            <span>Contraseña</span>
+            <input id="credential" type="password" name="credential" autocomplete="current-password" required placeholder="Ingresa tu contraseña" {% if demo_mode %}value="prueba"{% endif %}>
           </label>
           <button type="submit" class="btn btn--primary" {% if not password_ready %}disabled{% endif %}>
             <span>Ingresar a MAXCIM</span>
