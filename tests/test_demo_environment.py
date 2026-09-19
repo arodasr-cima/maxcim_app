@@ -15,6 +15,7 @@ from services.demo import DEMO_CLASSROOMS, DemoInstitutionalClient
 @pytest.fixture()
 def demo_app(monkeypatch):
     monkeypatch.setattr(app_module, "gemini_client", None)
+    monkeypatch.setattr(app_module, "fish_client", None)
     application = app_module.create_app({
         "TESTING": True,
         "DEMO_MODE": True,
@@ -108,15 +109,13 @@ def test_demo_story_questions_and_audio_work_without_gemini(demo_client):
     assert questions.status_code == 200
     assert len(questions.get_json()["questions"]["literales"]) == 2
 
-    audio = demo_client.post("/api/material/tts", json={
-        "text": story_data["story"],
-        "target_duration_minutes": 1,
-    })
+    audio = demo_client.post("/api/material/tts", json={"text": story_data["story"]})
     assert audio.status_code == 200
     assert audio.headers["X-MAXCIM-Demo-Audio"] == "true"
-    assert audio.headers["X-MAXCIM-Audio-Duration-Seconds"] == "60.00"
+    # El audio de relleno dura según el texto (con tope de 30 s).
+    assert audio.headers["X-MAXCIM-Audio-Duration-Seconds"] == "30.00"
     with wave.open(io.BytesIO(audio.data), "rb") as wav_file:
-        assert wav_file.getnframes() / wav_file.getframerate() == 60
+        assert wav_file.getnframes() / wav_file.getframerate() == 30
 
 
 def test_demo_ai_sentence_draft_generates_without_gemini(demo_client):
@@ -628,17 +627,16 @@ def test_image_sentence_save_rejects_items_without_two_nouns(client, periodo_tem
 def test_demo_bits_draft_has_word_each(demo_client):
     enter_demo(demo_client)
     draft = demo_client.post("/api/bits/generate", json={
-        "silabas": "ma, me, mi, mo, mu",
-        "cantidad_silabas": 2,
-        "grade_level": "primero de primaria",
+        "consonante": "S",
         "count": 6,
     })
     assert draft.status_code == 200
     data = draft.get_json()
-    assert data["title"].startswith("Bits: sílabas")
+    assert data["title"] == "Bits: consonante S"
     assert len(data["items"]) == 6
     for item in data["items"]:
         assert item["palabra"].strip()
+        assert item["palabra"][0].lower() == "s"
 
 
 def test_demo_bits_design_flow_generates_and_exposes_images(
@@ -940,7 +938,6 @@ def test_demo_can_register_and_list_interactions(demo_app, demo_client):
             tipo_material="general",
             path_audio="fixtures/audio.wav",
             path_texto="fixtures/texto.txt",
-            path_audio_resumen="fixtures/resumen.wav",
             path_texto_resumen="fixtures/resumen.txt",
             path_preguntas="fixtures/preguntas.json",
             fk_user="DOC-DEMO-01",

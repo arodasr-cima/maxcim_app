@@ -16,7 +16,6 @@ def seed_material(**overrides):
         tipo_material=TIPO_CUENTO,
         path_audio="fixtures/audio.wav",
         path_texto="fixtures/texto.txt",
-        path_audio_resumen="fixtures/resumen.wav",
         path_texto_resumen="fixtures/resumen.txt",
         path_preguntas="fixtures/preguntas.json",
         fk_user=TEST_TEACHER_ID,
@@ -52,7 +51,6 @@ def test_delete_removes_a_material_owned_by_the_teacher(app, client):
             tipo_material=TIPO_ORACION,
             path_audio=None,
             path_texto=None,
-            path_audio_resumen=None,
             path_texto_resumen=None,
             path_preguntas="Una oración.",
         ).id
@@ -82,7 +80,6 @@ def test_delete_removes_the_cuento_upload_folder(app, client):
             path_texto=f"uploads/{folder_name}/texto.txt",
             path_audio=f"uploads/{folder_name}/audio.wav",
             path_texto_resumen=f"uploads/{folder_name}/resumen.txt",
-            path_audio_resumen=f"uploads/{folder_name}/audio_resumen.wav",
             path_preguntas=f"uploads/{folder_name}/preguntas.json",
         ).id
 
@@ -109,7 +106,6 @@ def test_delete_never_removes_the_uploads_root_from_a_crafted_anchor(app, client
             path_texto="uploads/texto.txt",
             path_audio=None,
             path_texto_resumen=None,
-            path_audio_resumen=None,
             path_preguntas="uploads/preguntas.json",
         ).id
 

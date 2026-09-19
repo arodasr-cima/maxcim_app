@@ -32,7 +32,6 @@ def add_material(owner, name):
         tipo_material=TIPO_CUENTO,
         path_audio="fixtures/audio.wav",
         path_texto="fixtures/texto.txt",
-        path_audio_resumen="fixtures/resumen.wav",
         path_texto_resumen="fixtures/resumen.txt",
         path_preguntas="fixtures/preguntas.json",
         fk_user=owner,
@@ -511,7 +510,6 @@ def test_saving_sentence_material_writes_a_json_list(app, client, tmp_path, monk
         assert material.path_texto is None
         assert material.path_texto_resumen is None
         assert material.path_audio is None
-        assert material.path_audio_resumen is None
 
         with open(_stored_upload(app, material.path_preguntas), "r", encoding="utf-8") as f:
             assert json.load(f) == ["La luna brilla.", "El río canta."]

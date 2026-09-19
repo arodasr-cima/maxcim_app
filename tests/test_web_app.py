@@ -91,37 +91,32 @@ def test_image_sentences_generate_validation_runs_before_gemini(client):
 
 
 def test_bits_generate_validation_runs_before_gemini(client):
-    missing_silabas = client.post("/api/bits/generate", json={"cantidad_silabas": 2, "count": 5})
-    assert missing_silabas.status_code == 400
-    assert "sílabas" in missing_silabas.get_json()["error"]
+    missing_consonant = client.post("/api/bits/generate", json={"count": 5})
+    assert missing_consonant.status_code == 400
+    assert "consonante" in missing_consonant.get_json()["error"]
 
-    bad_syllable_count = client.post("/api/bits/generate", json={
-        "silabas": "ma, me, mi, mo, mu",
-        "cantidad_silabas": 99,
-        "count": 5,
-    })
-    assert bad_syllable_count.status_code == 400
-    assert "entre 1 y 10" in bad_syllable_count.get_json()["error"]
+    # Una sola consonante: una lista (formato anterior), varias letras, vocales
+    # y valores raros se rechazan antes de llegar a Gemini.
+    for invalid in ("", "  ", None, ["M"], ["M", "S"], "MS", "ma", "A", "1", 3):
+        response = client.post("/api/bits/generate", json={"consonante": invalid, "count": 5})
+        assert response.status_code == 400, invalid
 
-    bad_count = client.post("/api/bits/generate", json={
-        "silabas": "ma, me, mi, mo, mu",
-        "cantidad_silabas": 2,
-        "count": 99,
-    })
-    assert bad_count.status_code == 400
-    assert "entre 1 y 20" in bad_count.get_json()["error"]
+    for bad_count in (None, 0, -1, 99, "muchas"):
+        response = client.post("/api/bits/generate", json={"consonante": "M", "count": bad_count})
+        assert response.status_code == 400, bad_count
+        assert "entre 1 y 20" in response.get_json()["error"]
 
-    configured = client.post("/api/bits/generate", json={
-        "silabas": "ma, me, mi, mo, mu",
-        "cantidad_silabas": 2,
-        "grade_level": "primero de primaria",
-        "count": 8,
+    too_long = client.post("/api/bits/generate", json={
+        "consonante": "M", "count": 5, "extra_details": "x" * 1001,
     })
+    assert too_long.status_code == 413
+
+    configured = client.post("/api/bits/generate", json={"consonante": "m", "count": 8})
     assert configured.status_code == 503
     assert "GOOGLE_API_KEY" in configured.get_json()["error"]
 
 
-def test_story_and_tts_duration_validation_run_before_gemini(client):
+def test_story_duration_validation_runs_before_gemini(client):
     invalid_story = client.post("/api/story/generate", json={
         "character": "Luna",
         "setting": "el bosque",
@@ -131,10 +126,3 @@ def test_story_and_tts_duration_validation_run_before_gemini(client):
     })
     assert invalid_story.status_code == 400
     assert "entre 1 y 15 minutos" in invalid_story.get_json()["error"]
-
-    invalid_tts = client.post("/api/material/tts", json={
-        "text": "Un cuento breve.",
-        "target_duration_minutes": 0,
-    })
-    assert invalid_tts.status_code == 400
-    assert "entre 1 y 15 minutos" in invalid_tts.get_json()["error"]

@@ -60,6 +60,7 @@ class FakeInstitutionalClient:
 @pytest.fixture()
 def app(monkeypatch):
     monkeypatch.setattr(app_module, "gemini_client", None)
+    monkeypatch.setattr(app_module, "fish_client", None)
     application = app_module.create_app({
         "TESTING": True,
         "DEMO_MODE": False,

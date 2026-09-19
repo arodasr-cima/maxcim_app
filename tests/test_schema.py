@@ -28,7 +28,6 @@ def test_oracion_material_saves_with_only_path_preguntas(app):
         assert saved.path_texto is None
         assert saved.path_texto_resumen is None
         assert saved.path_audio is None
-        assert saved.path_audio_resumen is None
 
 
 def test_material_type_helpers_express_the_distinction():

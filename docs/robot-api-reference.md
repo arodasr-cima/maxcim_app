@@ -55,6 +55,8 @@ Falta el identificador → `400 {"error": "Falta identificar a la docente (docen
 | `GET /api/materials/{id}/{recurso}` | Descargar un recurso del material (texto/audio/preguntas/oraciones/bits) |
 | `GET /api/materials/{id}/imagen/{oracion}/{sustantivo}` | PNG de un sustantivo de una "oración con imágenes" |
 | `GET /api/materials/{id}/bit-imagen/{i}` | PNG de la palabra de un "bit" |
+| `GET /api/materials/{id}/escena-imagen/{i}` | Imagen de una escena de un cuento |
+| `GET /api/materials/{id}/escena-audio/{i}` | Audio (WAV) de la narración de una escena de un cuento |
 | `POST /api/interacciones` | Registrar un turno pregunta/respuesta (sube el audio) |
 | `GET /api/interacciones` | Historial de turnos (por material y/o alumno) |
 | `GET /api/interacciones/{id}/audio` | Descargar el audio de un turno ya registrado |
@@ -155,10 +157,25 @@ Array de objetos material. La forma depende de `tipo_material`.
   "texto_completo_url":  "https://.../api/materials/12/texto",
   "texto_resumen_url":   "https://.../api/materials/12/resumen",
   "audio_completo_url":  "https://.../api/materials/12/audio",
-  "audio_resumen_url":   "https://.../api/materials/12/audio-resumen",
   "preguntas_url":       "https://.../api/materials/12/preguntas",
   "preguntas": [
     { "pregunta": "¿Quién es el personaje?", "respuesta_esperada": "Una zorrita llamada Luna" }
+  ],
+  "escenas": [
+    {
+      "indice": 0,
+      "texto": "Luna salió al bosque.",
+      "duracion_s": 2.9,
+      "imagen_url": "https://.../api/materials/12/escena-imagen/0",
+      "audio_url":  "https://.../api/materials/12/escena-audio/0"
+    },
+    {
+      "indice": 1,
+      "texto": "Encontró a un búho. Juntos regresaron a casa.",
+      "duracion_s": 5.4,
+      "imagen_url": "https://.../api/materials/12/escena-imagen/1",
+      "audio_url":  "https://.../api/materials/12/escena-audio/1"
+    }
   ]
 }
 ```
@@ -168,6 +185,24 @@ Array de objetos material. La forma depende de `tipo_material`.
   identificador de la docente como query (`?teacher_id=...`).
 - `preguntas` viene embebido además de `preguntas_url` (mismo contenido).
 - Un `*_url` es `null` si ese recurso no existe.
+- `escenas` es la lista, **en orden de lectura**, de las escenas ilustradas y
+  narradas del cuento. La consola las exige al guardar un cuento, así que solo
+  es `[]` en los cuentos guardados antes de esta función: en ese caso el robot
+  usa `audio_completo_url` como siempre.
+
+**Cómo reproduce el robot un cuento con `escenas`** — por cada elemento, en
+orden: descarga `imagen_url` y `audio_url`, muestra la imagen mientras suena el
+audio y, cuando el audio termina, pasa a la siguiente escena. No hay tiempos que
+sincronizar: cada audio ya narra exactamente el fragmento de su imagen. Los
+`texto` de todas las escenas, unidos con un espacio, reproducen el cuento
+completo (`texto_completo_url`, con los saltos de línea reducidos a espacios),
+por lo que sirven también como subtítulo.
+`duracion_s` (segundos) permite precargar o mostrar una barra de progreso, pero
+el fin real de cada escena es el fin de su audio. En un cuento con escenas,
+`audio_completo_url` es simplemente la unión, en orden, de los `audio_url` de
+todas las escenas (MAXCIM la arma al guardar): la misma narración de corrido,
+sin cortes de imagen. Lo esperado es que el robot use `escenas` y deje
+`audio_completo_url` solo para cuentos que no las tengan.
 
 #### `tipo_material: "oracion"`
 
@@ -186,7 +221,7 @@ Array de objetos material. La forma depende de `tipo_material`.
   "oraciones_url": "https://.../api/materials/20/oraciones",
 
   "texto_completo_url": null, "texto_resumen_url": null,
-  "audio_completo_url": null, "audio_resumen_url": null,
+  "audio_completo_url": null,
   "preguntas_url": null, "preguntas": []
 }
 ```
@@ -225,7 +260,7 @@ sustantivos concretos que se muestran como imágenes en los huecos.
   ],
 
   "texto_completo_url": null, "texto_resumen_url": null,
-  "audio_completo_url": null, "audio_resumen_url": null,
+  "audio_completo_url": null,
   "preguntas_url": null, "preguntas": []
 }
 ```
@@ -257,7 +292,7 @@ guardar un bit sin ella.
 ```json
 {
   "id": 40,
-  "titulo": "Bits: sílabas ma, me, mi, mo, mu · 2 sílabas",
+  "titulo": "Bits: consonante M",
   "tipo_material": "bits",
   "fecha_subido": "2026-09-15",
   "fk_user": "1000001", "docente": "Perez Flores, Ana",
@@ -271,7 +306,7 @@ guardar un bit sin ella.
   ],
 
   "texto_completo_url": null, "texto_resumen_url": null,
-  "audio_completo_url": null, "audio_resumen_url": null,
+  "audio_completo_url": null,
   "preguntas_url": null, "preguntas": []
 }
 ```
@@ -326,7 +361,6 @@ docente y propiedad (400 / 404 / 403 como en §5).
 | `texto` | cuento | `text/plain; charset=utf-8` | archivo del texto completo |
 | `resumen` | cuento | `text/plain; charset=utf-8` | archivo del resumen |
 | `audio` | cuento | `audio/wav` | narración del texto completo |
-| `audio-resumen` | cuento | `audio/wav` | narración del resumen |
 | `preguntas` | cuento | `application/json` | array `[{pregunta, respuesta_esperada}]` |
 | `oraciones` | oracion / oracion_imagen | `application/json` | ver abajo |
 | `bits` | bits | `application/json` | ver abajo |
@@ -425,6 +459,49 @@ secreto y el `?teacher_id=`.
 ```bash
 curl -H "X-MAXCIM-Webhook-Secret: $SECRET" \
   "$BASE/api/materials/40/bit-imagen/0?teacher_id=1000001" -o mama.png
+```
+
+---
+
+## 8.1. `GET /api/materials/{id}/escena-imagen/{i}`
+
+Imagen de una escena de un `cuento`. `{i}` es un **índice 0-based**, tal cual
+llega en `escenas` (`escenas[i].indice`).
+
+### Query params
+
+| Param | Obligatorio | Descripción |
+|---|---|---|
+| `teacher_id` **o** `docente` | Sí | |
+
+### Respuestas
+
+- `200` — bytes de la imagen (`attachment`). El `Content-Type` es `image/png`
+  en la práctica, pero puede ser `image/jpeg` o `image/webp`: usa el header, no
+  la extensión.
+- `400` / `401` / `403` / `404` — como en §5, y también `404` si el material no
+  es un cuento con escenas o si el índice está fuera de rango.
+
+La forma cómoda es usar directamente `imagen_url` de `escenas` (es esta misma
+ruta, absoluta) añadiéndole el header del secreto y el `?teacher_id=`.
+
+```bash
+curl -H "X-MAXCIM-Webhook-Secret: $SECRET" \
+  "$BASE/api/materials/12/escena-imagen/0?teacher_id=1000001" -o escena_0.png
+```
+
+---
+
+## 8.2. `GET /api/materials/{id}/escena-audio/{i}`
+
+Narración de una escena de un `cuento`, en WAV. Mismos parámetros y códigos de
+error que §8.1.
+
+- `200` — bytes WAV (`Content-Type: audio/wav`, `attachment`).
+
+```bash
+curl -H "X-MAXCIM-Webhook-Secret: $SECRET" \
+  "$BASE/api/materials/12/escena-audio/0?teacher_id=1000001" -o escena_0.wav
 ```
 
 ---
@@ -576,4 +653,4 @@ en logs (no necesariamente para mostrar al alumno).
 | **material** | Contenido preparado por la docente: `cuento`, `oracion`, `oracion_imagen` o `bits`. |
 | **interacción** | Un turno pregunta→respuesta entre un alumno y MAXCIM. |
 | **plantilla** | Frase de una `oracion_imagen` con `{{0}}` / `{{1}}` donde van las imágenes. |
-| **bit** | Elemento de un material `bits`: una palabra con su imagen, para practicar fonética por sílabas. |
+| **bit** | Elemento de un material `bits`: una palabra con su imagen, para practicar fonética con una consonante. |

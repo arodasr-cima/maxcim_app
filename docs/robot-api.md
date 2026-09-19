@@ -24,7 +24,7 @@ interacciones con los alumnos. Vive dentro de la misma app Flask
 | `GET /api/materials?teacher_id={id}` (o `docente={nombre}`) | Listar materiales de una docente. Filtro opcional `tipo=cuento\|oracion\|oracion_imagen\|bits` |
 | `GET /api/temas?teacher_id={id}` (o `docente={nombre}`) | Listar los temas de una docente. Filtro opcional `periodo={id}` |
 | `GET /api/materials/{id}` | Obtener metadatos de un material (cuento, oración, oración con imágenes o bits) |
-| `GET /api/materials/{id}/{recurso}` | Descargar un recurso del material: `texto`, `resumen`, `audio`, `audio-resumen`, `preguntas` (cuentos), `oraciones` (oraciones y oraciones con imágenes) o `bits` |
+| `GET /api/materials/{id}/{recurso}` | Descargar un recurso del material: `texto`, `resumen`, `audio`, `preguntas` (cuentos), `oraciones` (oraciones y oraciones con imágenes) o `bits` |
 | `GET /api/materials/{id}/imagen/{oración}/{sustantivo}` | Descargar el PNG de un sustantivo de una "oración con imágenes" (índices 0-based tal como llegan en `oraciones_detalle`) |
 | `GET /api/materials/{id}/bit-imagen/{i}` | Descargar el PNG de la palabra de un "bit" (índice 0-based tal como llega en `bits`) |
 | `POST /api/interacciones` | Registrar un turno de pregunta/respuesta, subiendo el audio de la respuesta |

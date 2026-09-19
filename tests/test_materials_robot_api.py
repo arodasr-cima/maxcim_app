@@ -19,7 +19,6 @@ def add_oracion(owner_id=TEACHER, *, title="Oraciones de práctica", nombre=DOCE
         path_texto=None,
         path_texto_resumen=None,
         path_audio=None,
-        path_audio_resumen=None,
         fk_user=owner_id,
         fk_user_name=nombre,
     )
@@ -34,7 +33,6 @@ def make_cuento_on_disk(app, tmp_path, *, owner_id=TEACHER, nombre=DOCENTE, titl
     (material_dir / "texto.txt").write_text("Texto completo del cuento.", encoding="utf-8")
     (material_dir / "resumen.txt").write_text("Resumen del cuento.", encoding="utf-8")
     (material_dir / "audio.wav").write_bytes(b"RIFFfake-full-wav")
-    (material_dir / "audio_resumen.wav").write_bytes(b"RIFFfake-summary-wav")
     questions = [{"pregunta": "¿Quién es el personaje?", "respuesta_esperada": "Luna"}]
     (material_dir / "preguntas.json").write_text(
         json.dumps(questions, ensure_ascii=False), encoding="utf-8"
@@ -46,7 +44,6 @@ def make_cuento_on_disk(app, tmp_path, *, owner_id=TEACHER, nombre=DOCENTE, titl
             path_texto="material/texto.txt",
             path_texto_resumen="material/resumen.txt",
             path_audio="material/audio.wav",
-            path_audio_resumen="material/audio_resumen.wav",
             path_preguntas="material/preguntas.json",
             fk_user=owner_id,
             fk_user_name=nombre,
@@ -147,7 +144,6 @@ def test_get_material_requires_a_matching_teacher(app, client, static_tmp):
         ("texto", "text/plain", b"Texto completo del cuento."),
         ("resumen", "text/plain", b"Resumen del cuento."),
         ("audio", "audio/wav", b"RIFFfake-full-wav"),
-        ("audio-resumen", "audio/wav", b"RIFFfake-summary-wav"),
         ("preguntas", "application/json", b'"respuesta_esperada"'),
     ],
 )

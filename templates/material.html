@@ -101,21 +101,24 @@
     </div>
 
     <div class="story-modal__grid" id="storyBitsFields" hidden>
-      <label class="story-field story-field--wide">
-        <span>Sílabas a trabajar</span>
-        <input type="text" id="bitsSyllables" required maxlength="160" placeholder="Ej.: ma, me, mi, mo, mu">
-      </label>
-      <label class="story-field">
-        <span>Cantidad de sílabas por palabra</span>
-        <input type="number" id="bitsSyllableCount" required min="1" max="10" step="1" value="2" inputmode="numeric">
-      </label>
-      <label class="story-field">
-        <span>Nivel o grado</span>
-        <input type="text" id="bitsGrade" required maxlength="100" placeholder="Ej.: 1.° de primaria">
-      </label>
+      <div class="story-field story-field--wide consonant-field">
+        <span id="bitsConsonantsLabel">Consonante a trabajar</span>
+        <div class="consonant-picker" role="radiogroup" aria-labelledby="bitsConsonantsLabel">
+          {% for row in bits_consonant_rows %}
+          <div class="consonant-picker__row">
+            {% for letter in row %}
+            <button type="button" class="consonant-btn" role="radio" data-consonant="{{ letter }}" aria-checked="false" tabindex="-1" aria-label="Consonante {{ letter }}">{{ letter }}</button>
+            {% endfor %}
+          </div>
+          {% endfor %}
+        </div>
+        <small id="bitsConsonantsSummary" aria-live="polite">Elige una consonante: las palabras empezarán con ella.</small>
+        <p class="story-field__error" id="bitsConsonantsError" role="alert" hidden>Elige una consonante.</p>
+      </div>
       <label class="story-field">
         <span>Cantidad de palabras</span>
-        <input type="number" id="bitsCount" required min="1" max="20" step="1" value="8" inputmode="numeric">
+        <input type="number" id="bitsCount" required min="1" max="20" step="1" value="{{ bits_default_words }}" inputmode="numeric">
+        <small>Entre 1 y 20. Casi todas de 2 sílabas y algunas de 3.</small>
       </label>
       <label class="story-field story-field--wide">
         <span>Detalles opcionales</span>
@@ -184,71 +187,124 @@
 </div>
 
 <div class="overlay" id="resultOverlay">
-  <div class="result-modal">
+  <div class="result-modal" role="dialog" aria-modal="true" aria-label="Revisar material">
     <div class="result-modal__title editable-title" id="resultModalTitle" contenteditable="true" spellcheck="false" role="textbox" aria-label="Nombre del material" title="Toca para editar el nombre del material">Contenido generado</div>
     <div class="result-modal__subtitle" id="resultSubtitle">A partir del documento original</div>
 
+    <ol class="review-stepper" id="reviewStepper" aria-label="Pasos para revisar el cuento" hidden>
+      <li class="review-stepper__item" data-stepper="text"><span class="review-stepper__num" aria-hidden="true">1</span><span class="review-stepper__label">Texto</span></li>
+      <li class="review-stepper__item" data-stepper="scenes"><span class="review-stepper__num" aria-hidden="true">2</span><span class="review-stepper__label">Escenas</span></li>
+      <li class="review-stepper__item" data-stepper="questions"><span class="review-stepper__num" aria-hidden="true">3</span><span class="review-stepper__label">Preguntas</span></li>
+    </ol>
+    <h3 class="review-stepper__heading" id="reviewStepHeading" aria-live="polite" hidden></h3>
+
     <div class="result-modal__columns">
-      <div class="result-col result-col--border">
-        <div class="result-col__title">Textos</div>
-        <div class="result-block" id="resultTranscribedBlock">
-          <div class="result-block__label" id="resultTranscribedLabel">Texto completo</div>
-          <div class="result-block__box" id="resultTranscribedText" contenteditable="true" spellcheck="false"></div>
-        </div>
-        <div class="result-block result-block--divider" id="resultSummaryBlock">
-          <div class="result-block__label">Resumen del texto</div>
-          <div class="result-block__box result-block__box--short" id="resultSummaryText" contenteditable="true" spellcheck="false"></div>
-        </div>
-        <div class="result-block" id="resultSentencesBlock" hidden>
-          <div class="result-block__label" id="resultSentencesLabel">Oraciones para revisar</div>
-          <p class="questions-review-note" id="resultSentencesNote">Corrige cada oración; deja vacías las que no quieras guardar.</p>
-          <ol class="sentences-review" id="resultSentencesList"></ol>
-          <div class="sentences-review__actions">
-            <button type="button" class="btn btn--ghost" id="addSentenceBtn">+ Agregar oración</button>
-            <button type="button" class="btn btn--accent" id="generateMoreSentencesBtn">✨ Generar 5 con IA</button>
+      <details class="review-step" data-review-step="text" open>
+        <summary class="review-step__summary">
+          <span class="review-step__title">1. Revisar texto</span>
+          <span class="step-badge" data-review-status="text">Editable</span>
+        </summary>
+        <div class="result-col">
+          <div class="result-block" id="resultTranscribedBlock">
+            <div class="result-block__label" id="resultTranscribedLabel">Texto completo</div>
+            <div class="result-block__box" id="resultTranscribedText" contenteditable="true" spellcheck="false"></div>
+          </div>
+          <div class="result-block result-block--divider" id="resultSummaryBlock">
+            <div class="result-block__label">Resumen del texto</div>
+            <div class="result-block__box result-block__box--short" id="resultSummaryText" contenteditable="true" spellcheck="false"></div>
+          </div>
+          <div class="result-block" id="resultSentencesBlock" hidden>
+            <div class="result-block__label" id="resultSentencesLabel">Oraciones para revisar</div>
+            <p class="questions-review-note" id="resultSentencesNote">Corrige cada oración; deja vacías las que no quieras guardar.</p>
+            <ol class="sentences-review" id="resultSentencesList"></ol>
+            <div class="sentences-review__actions">
+              <button type="button" class="btn btn--ghost" id="addSentenceBtn">+ Agregar oración</button>
+              <button type="button" class="btn btn--accent" id="generateMoreSentencesBtn">✨ Generar 5 con IA</button>
+            </div>
           </div>
         </div>
-      </div>
+      </details>
 
-      <div class="result-col result-col--border" id="resultAudioColumn">
-        <div class="result-col__title">Audios</div>
-        <div class="result-audio-row">
-          <div class="result-audio-row__top">
-            <div class="result-audio-row__label">Audio completo</div>
-            <button type="button" class="btn btn--accent" id="generateAudioFullBtn">✨ Generar</button>
+      <details class="review-step" id="resultScenesBlock" data-review-step="scenes" hidden>
+        <summary class="review-step__summary">
+          <span class="review-step__title">2. Ilustrar y narrar escenas</span>
+          <span class="step-badge" data-review-status="scenes">Pendiente</span>
+        </summary>
+        <div class="result-scenes">
+          <div class="result-scenes__head">
+            <div class="result-scenes__hint" id="resultScenesHint">La IA divide el cuento en escenas, dibuja cada una con el mismo personaje y narra cada una con su propio audio. El robot cambia de imagen al terminar cada audio. Es necesario para guardar el cuento.</div>
+            <button type="button" class="btn btn--accent" id="generateScenesBtn">✨ Generar escenas</button>
           </div>
-          <audio controls id="resultAudioFull"></audio>
-          <div class="result-audio-row__meta" id="resultAudioFullMeta"></div>
-        </div>
-        <div class="result-audio-row result-audio-row--divider">
-          <div class="result-audio-row__top">
-            <div class="result-audio-row__label">Audio resumen</div>
-            <button type="button" class="btn btn--accent" id="generateAudioSummaryBtn">✨ Generar</button>
+          <div class="scenes-tone">
+            <label class="scenes-tone__label" for="scenesTone">Tono de las imágenes</label>
+            <select class="scenes-tone__select" id="scenesTone">
+              <option value="auto" data-hint="La IA elige el tono que mejor encaja con el cuento.">Automático (según el cuento)</option>
+              {% for tone in scene_tones %}
+              <option value="{{ tone.key }}" data-hint="{{ tone.hint }}">{{ tone.label }}</option>
+              {% endfor %}
+            </select>
+            <span class="scenes-tone__hint" id="scenesToneHint" aria-live="polite"></span>
           </div>
-          <audio controls id="resultAudioSummary"></audio>
-          <div class="result-audio-row__meta" id="resultAudioSummaryMeta"></div>
+          <div class="scenes-progress" id="scenesProgress" hidden>
+            <div class="scenes-progress__label">
+              <span id="scenesProgressText" aria-live="polite">Analizando el cuento…</span>
+              <span class="scenes-progress__count" id="scenesProgressCount"></span>
+            </div>
+            <div class="scenes-progress__track" id="scenesProgressTrack" role="progressbar" aria-label="Progreso de las escenas" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div class="scenes-progress__fill" id="scenesProgressFill"></div>
+            </div>
+          </div>
+          <p class="questions-review-note" id="scenesStale" hidden>Cambiaste el texto después de crear las escenas. Vuelve a generarlas para que coincidan con el cuento.</p>
+          <ol class="scenes-grid" id="scenesGrid"></ol>
         </div>
-      </div>
+      </details>
 
-      <div class="result-col" id="resultQuestionsColumn">
-        <div class="result-col__title">Preguntas y respuestas esperadas</div>
-        <p class="questions-review-note">Gemini propone. Revisa y modifica lo que necesites antes de aprobar.</p>
-        {% for q in question_configuration %}
-        <div class="question-row question-row--{{ q.key }}">
-          <div class="question-row__label">{{ q.label }}</div>
-          <input type="number" min="0" max="15" value="{{ q.default }}" class="question-row__input" data-question-type="{{ q.key }}">
+      <details class="review-step" id="resultQuestionsColumn" data-review-step="questions">
+        <summary class="review-step__summary">
+          <span class="review-step__title">3. Generar preguntas</span>
+          <span class="step-badge" data-review-status="questions">Pendiente</span>
+        </summary>
+        <div class="result-col">
+          <p class="questions-review-note">Gemini propone. Revisa y modifica lo que necesites antes de aprobar.</p>
+          {% for q in question_configuration %}
+          <div class="question-row question-row--{{ q.key }}">
+            <label class="question-row__label" for="questionCount-{{ q.key }}">{{ q.label }}</label>
+            <input type="number" id="questionCount-{{ q.key }}" min="0" max="15" value="{{ q.default }}" class="question-row__input" data-question-type="{{ q.key }}">
+          </div>
+          {% endfor %}
+          <button type="button" class="btn btn--accent btn--block" id="generateQuestionsBtn">✨ Generar preguntas</button>
+          <div class="questions-result" id="questionsResult"></div>
         </div>
-        {% endfor %}
-        <button type="button" class="btn btn--accent btn--block" id="generateQuestionsBtn">✨ Generar preguntas</button>
-        <div class="questions-result" id="questionsResult"></div>
-      </div>
+      </details>
     </div>
 
     <div class="result-modal__footer">
+      <p class="result-modal__requirements" id="reviewRequirements" role="status" aria-atomic="true"></p>
       <button type="button" class="btn btn--ghost" id="resultCancelBtn">Cancelar</button>
-      <button type="button" class="btn btn--primary" id="resultDoneBtn" disabled>Continuar</button>
+      <button type="button" class="btn btn--ghost" id="resultBackBtn" hidden>Atrás</button>
+      <button type="button" class="btn btn--primary" id="resultDoneBtn" aria-describedby="reviewRequirements" disabled>Continuar</button>
     </div>
   </div>
+</div>
+
+<div class="overlay overlay--top" id="sceneEditOverlay">
+  <form class="scene-edit" id="sceneEditForm" role="dialog" aria-modal="true" aria-labelledby="sceneEditTitle">
+    <div class="upload-modal__title" id="sceneEditTitle">Editar imagen</div>
+    <div class="scene-edit__preview">
+      <img id="sceneEditImage" alt="">
+    </div>
+    <p class="scene-edit__context" id="sceneEditContext"></p>
+    <label class="story-field scene-edit__field">
+      <span>¿Qué quieres cambiar de la imagen?</span>
+      <textarea id="sceneEditInstruction" required maxlength="500" rows="3" placeholder="Ej.: que la zorrita lleve una bufanda roja y que el cielo sea de atardecer"></textarea>
+      <small>La IA cambia solo lo que pidas y mantiene el resto de la imagen.</small>
+    </label>
+    <p class="scene-edit__error" id="sceneEditError" role="alert" hidden></p>
+    <div class="upload-modal__actions">
+      <button type="button" class="btn btn--ghost" id="sceneEditCancelBtn">Cancelar</button>
+      <button type="submit" class="btn btn--primary" id="sceneEditApplyBtn">Aplicar cambios</button>
+    </div>
+  </form>
 </div>
 
 <div class="overlay" id="imageDesignOverlay">
@@ -437,10 +493,6 @@
       <div class="material-card__audio-row">
         <div class="material-card__audio-label">Audio completo</div>
         <audio controls src="{{ media_url(m.path_audio) }}"></audio>
-      </div>
-      <div class="material-card__audio-row">
-        <div class="material-card__audio-label">Audio resumen</div>
-        <audio controls src="{{ media_url(m.path_audio_resumen) }}"></audio>
       </div>
       <div class="material-card__actions">
         <div class="material-card__links">

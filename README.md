@@ -40,8 +40,8 @@ flowchart TD
 
 `material.tipo_material` admite exactamente dos valores:
 
-- **`cuento`**: guarda rutas de archivos en `path_texto`, `path_texto_resumen`, `path_audio`, `path_audio_resumen` y `path_preguntas`. Esta última apunta al JSON de preguntas aprobadas por la docente.
-- **`oracion`**: guarda las oraciones como texto plano completo en `path_preguntas`. Deja `path_texto`, `path_texto_resumen`, `path_audio` y `path_audio_resumen` en `NULL`.
+- **`cuento`**: guarda rutas de archivos en `path_texto`, `path_texto_resumen`, `path_audio` y `path_preguntas`. Esta última apunta al JSON de preguntas aprobadas por la docente.
+- **`oracion`**: guarda las oraciones como texto plano completo en `path_preguntas`. Deja `path_texto`, `path_texto_resumen` y `path_audio` en `NULL`.
 
 ## Separación del entorno real
 
@@ -123,7 +123,9 @@ en este repositorio.
 | `DEMO_DATABASE_URL` | SQLite local usado cuando no existe `DATABASE_URL` |
 | `DATABASE_URL` | Base MySQL opcional y persistente del entorno de pruebas |
 | `MYSQL_*` | Compatibilidad cuando `DEMO_MODE=false`; no reemplazan SQLite en pruebas |
-| `GOOGLE_API_KEY` | Opcional; activa Gemini real para cuentos, preguntas y TTS |
+| `GOOGLE_API_KEY` | Opcional; activa Gemini real para cuentos, preguntas e imágenes |
+| `FISH_API_KEY` | Opcional; activa la narración real con Fish Audio (sin ella, `DEMO_MODE` genera un audio de relleno) |
+| `FISH_AUDIO_MODEL` / `FISH_AUDIO_REFERENCE_ID` / `FISH_AUDIO_SPEED` | Modelo (`s2.1-pro-free` por defecto), ID de la voz y velocidad (0.5–2.0) de Fish Audio |
 
 Las variables institucionales, Google OAuth y secretos del robot no son necesarias para recorrer la prueba. No copies aquí credenciales privadas de producción.
 
@@ -174,7 +176,7 @@ El contrato completo de solicitudes, respuestas y variantes provisionales de la 
 
 ## Base de datos
 
-La base aislada guarda cuatro tablas — ver [bd_app_mysql.sql](bd_app_mysql.sql) para el DDL completo (import único, ya incluye las migraciones `migrations/001..005`):
+La base aislada guarda cuatro tablas — ver [bd_app_mysql.sql](bd_app_mysql.sql) para el DDL completo (import único, ya incluye las migraciones `migrations/001..007`):
 
 - **`periodo`**: bimestres académicos del año escolar; clasifica materiales e interacciones por fecha.
 - **`tema`**: unidad temática de una docente dentro de un periodo; no se comparte entre docentes ni periodos.

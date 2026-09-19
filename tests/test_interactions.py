@@ -28,7 +28,6 @@ def seed_material(**overrides):
         tipo_material=TIPO_CUENTO,
         path_audio="fixtures/audio.wav",
         path_texto="fixtures/texto.txt",
-        path_audio_resumen="fixtures/resumen.wav",
         path_texto_resumen="fixtures/resumen.txt",
         path_preguntas="fixtures/preguntas.json",
         fk_user=TEST_TEACHER_ID,
@@ -341,7 +340,6 @@ def test_get_cuento_material_round_trips_through_robot_api(
             path_texto="material/texto.txt",
             path_texto_resumen="material/resumen.txt",
             path_audio="material/audio.wav",
-            path_audio_resumen="material/audio_resumen.wav",
             path_preguntas="material/preguntas.json",
         )
         material_id = material.id
@@ -365,9 +363,10 @@ def test_get_cuento_material_round_trips_through_robot_api(
         "texto_completo_url": f"{base}/texto",
         "texto_resumen_url": f"{base}/resumen",
         "audio_completo_url": f"{base}/audio",
-        "audio_resumen_url": f"{base}/audio-resumen",
         "preguntas_url": f"{base}/preguntas",
         "preguntas": questions,
+        # Un cuento sin escenas ilustradas/narradas las expone vacías.
+        "escenas": [],
     }
 
 
@@ -382,7 +381,6 @@ def test_get_oracion_material_round_trips_through_robot_api(app, client):
             path_texto=None,
             path_texto_resumen=None,
             path_audio=None,
-            path_audio_resumen=None,
         )
         material_id = material.id
         fecha_subido = material.fecha_subido.isoformat()
@@ -405,7 +403,6 @@ def test_get_oracion_material_round_trips_through_robot_api(app, client):
         "texto_completo_url": None,
         "texto_resumen_url": None,
         "audio_completo_url": None,
-        "audio_resumen_url": None,
         "preguntas_url": None,
         "preguntas": [],
     }

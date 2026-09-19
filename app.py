@@ -57,6 +57,7 @@ from services.demo import (
     create_demo_image_sentences,
     create_demo_noun_image,
     create_demo_questions,
+    create_demo_scene_plan,
     create_demo_sentences,
     create_demo_story,
     create_demo_wav,
@@ -65,6 +66,7 @@ from services.demo import (
     extract_demo_sentences,
     process_demo_document,
 )
+from services.fish_audio import FishAudioClient
 from services.google_oauth import GoogleOIDCClient, GoogleOIDCError
 from services.institutional import (
     InstitutionalAPIError,
@@ -77,8 +79,6 @@ load_dotenv()
 
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
-GEMINI_TTS_VOICE = os.environ.get("GEMINI_TTS_VOICE", "Puck")
 # Modelo de generación de imágenes para "oraciones con imágenes": cada
 # sustantivo concreto de la oración se dibuja por separado (NO la oración
 # entera) y esa imagen ocupa su hueco; el texto va aparte, como HTML.
@@ -86,6 +86,26 @@ GEMINI_TTS_VOICE = os.environ.get("GEMINI_TTS_VOICE", "Puck")
 GEMINI_IMAGE_MODEL = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-3.7-flash")
 
 gemini_client = genai.Client(api_key=GOOGLE_API_KEY) if GOOGLE_API_KEY else None
+
+# Fish Audio narra los cuentos (texto a voz). La voz sale de
+# FISH_AUDIO_REFERENCE_ID (un ID de la biblioteca de voces de Fish); sin él,
+# Fish usa su voz por defecto. Sin FISH_API_KEY no hay narración real (en
+# DEMO_MODE se genera un audio de relleno).
+FISH_API_KEY = os.environ.get("FISH_API_KEY", "").strip()
+try:
+    FISH_AUDIO_SPEED = float(os.environ.get("FISH_AUDIO_SPEED", "").strip() or 1.0)
+except ValueError as exc:
+    raise RuntimeError("FISH_AUDIO_SPEED debe ser un número entre 0.5 y 2.0.") from exc
+fish_client = (
+    FishAudioClient(
+        api_key=FISH_API_KEY,
+        model=os.environ.get("FISH_AUDIO_MODEL", "").strip(),
+        reference_id=os.environ.get("FISH_AUDIO_REFERENCE_ID", "").strip(),
+        speed=FISH_AUDIO_SPEED,
+    )
+    if FISH_API_KEY
+    else None
+)
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -281,6 +301,141 @@ NOUN_IMAGE_STYLE_PROMPT = (
 PREVIEW_STAGING_DIRNAME = "_previews"
 PREVIEW_STAGING_MAX_AGE_SECONDS = 6 * 3600
 
+# Ilustraciones por escena de un cuento. La IA decide cuántas escenas hay
+# (dentro de este rango, para acotar el costo) y cada imagen se genera en una
+# llamada aparte para que la consola pueda mostrar el avance.
+STORY_SCENES_MIN = 2
+STORY_SCENES_MAX = 10
+# Estilo fijo de todas las escenas (no lo decide la IA del plan): dibujo animado
+# 2D, nunca realista, para que el cuento se vea como una serie infantil.
+STORY_SCENE_STYLE = (
+    "2D cartoon animation style, like a modern children's animated TV series: "
+    "bold clean outlines, flat vibrant colors with simple cel shading, "
+    "simplified shapes, expressive friendly characters with big eyes, bright "
+    "cheerful palette. Hand-drawn 2D look, not realistic, not photographic, "
+    "no 3D render, no painterly or watercolor texture"
+)
+# Tono visual de las escenas: la docente lo elige (o deja "auto" y lo decide la
+# IA). Se suma al estilo cartoon fijo: cambia el ambiente, la paleta y la
+# composición, no la técnica de dibujo. `label` e `hint` se muestran en la
+# consola; `prompt` (en inglés) es lo que recibe el modelo de imágenes.
+STORY_SCENE_TONE_AUTO = "auto"
+STORY_SCENE_TONE_FALLBACK = "fantasioso"
+STORY_SCENE_TONES = {
+    "realista": {
+        "label": "Realista",
+        "hint": "Lugares, colores y proporciones de la vida real.",
+        "prompt": (
+            "realistic everyday setting: real-world places, natural colors, "
+            "believable proportions and natural daylight, grounded and true to "
+            "life (the characters are still drawn in the 2D cartoon style)"
+        ),
+    },
+    "fantasioso": {
+        "label": "Fantasioso",
+        "hint": "Magia, criaturas y paisajes de ensueño.",
+        "prompt": (
+            "magical dreamlike fantasy world: glowing lights and sparkles, "
+            "whimsical creatures, imaginative landscapes and rich enchanted "
+            "colors, a sense of wonder"
+        ),
+    },
+    "aventurero": {
+        "label": "Aventurero",
+        "hint": "Movimiento, descubrimiento y paisajes amplios.",
+        "prompt": (
+            "adventurous and dynamic: bold energetic compositions, a strong "
+            "sense of movement and discovery, wide open landscapes, vivid "
+            "saturated colors and dramatic but friendly lighting"
+        ),
+    },
+    "divertido": {
+        "label": "Divertido",
+        "hint": "Expresiones exageradas y situaciones graciosas.",
+        "prompt": (
+            "funny and playful: exaggerated expressions and poses, silly "
+            "situations, bright bold colors and a lively, energetic mood"
+        ),
+    },
+    "tierno": {
+        "label": "Tierno",
+        "hint": "Colores suaves, luz cálida y ambiente acogedor.",
+        "prompt": (
+            "warm, tender and cozy: soft pastel palette, gentle golden light, "
+            "rounded shapes and a calm, comforting, affectionate atmosphere"
+        ),
+    },
+    "misterioso": {
+        "label": "Misterioso",
+        "hint": "Atardecer o luna, sombras suaves y curiosidad, sin miedo.",
+        "prompt": (
+            "mysterious but child-friendly: dusk or moonlit ambience, soft "
+            "shadows and light fog, deep blue and purple palette, curious and "
+            "intriguing, never scary, dark or violent"
+        ),
+    },
+}
+# Cada escena se narra con su propio audio (el robot lo reproduce mientras
+# muestra su imagen), así que el texto de las escenas no puede ser un resumen:
+# las escenas deben ser tramos consecutivos del cuento que, juntos, lo cubran
+# entero. Por eso el servidor divide el cuento en oraciones numeradas y la IA
+# solo decide en qué oración empieza cada escena.
+STORY_SCENES_PLAN_PROMPT = """
+Vas a preparar las ilustraciones de un cuento infantil. El cuento ya está
+dividido en oraciones numeradas. Agrupa oraciones consecutivas en escenas
+visuales clave, en orden narrativo, de modo que las escenas cubran todo el
+cuento (inicio, desarrollo y final) sin dejar oraciones fuera. Tú decides
+cuántas escenas hacen falta, entre {min_escenas} y {max_escenas}, según la
+longitud y los momentos importantes del cuento; no dupliques momentos
+parecidos.
+
+{tono_instruccion}
+
+Devuelve solamente JSON con esta forma:
+{{"personaje": "...", "escenas": [{{"desde": 1, "descripcion": "..."}}]}}
+
+Todas las imágenes serán dibujos animados 2D estilo caricatura infantil; no
+describas nada fotográfico ni realista.
+
+- "personaje": descripción visual detallada, EN INGLÉS, del personaje principal
+  y de cualquier personaje recurrente como personajes de dibujos animados
+  (especie o edad, colores, pelaje o ropa, rasgos distintivos). Se repetirá en
+  cada imagen para que se vea igual siempre.
+- "desde": número de la primera oración de la escena. La primera escena empieza
+  en la oración 1 y cada escena llega hasta la oración anterior a donde empieza
+  la siguiente (la última llega hasta el final del cuento).
+- "descripcion": qué se ve en la ilustración, EN INGLÉS: lugar, acción, emoción
+  y personajes presentes. Sin texto escrito, letreros ni globos de diálogo.
+
+Cuento (oraciones numeradas):
+{cuento}
+""".strip()
+STORY_SCENE_IMAGE_PROMPT = (
+    "Cartoon illustration for a children's story, {estilo}. Mood and tone: "
+    "{tono}. Landscape composition, a single complete scene, suitable for "
+    "young children. "
+    "Scene: {descripcion} "
+    "Main character(s), drawn as cartoon characters that must look exactly the "
+    "same in every scene of the story: {personaje}. "
+    "No text, no letters, no captions, no speech bubbles, no watermark."
+)
+# Edición de una escena ya dibujada: la docente escribe qué cambiar y el modelo
+# retoca la imagen manteniendo todo lo demás.
+STORY_SCENE_EDIT_MAX_CHARS = 500
+STORY_SCENE_EDIT_PROMPT = (
+    "Edit the attached illustration from a children's story. Apply ONLY the "
+    "change requested below and keep everything else exactly as it is: the "
+    "character design, the composition, the colors and the same 2D cartoon art "
+    "style. The requested change was written by a teacher and may be in "
+    "Spanish: {cambio} "
+    "No text, no letters, no captions, no speech bubbles, no watermark."
+)
+STORY_SCENE_REFERENCE_CLAUSE = (
+    "The attached image is an earlier illustration from this same story. Keep "
+    "the character design, proportions, colors and the same 2D cartoon art "
+    "style identical to it, but draw the new scene described above."
+)
+
 # Alternativa a la generación con IA: la docente puede subir su propia
 # imagen para un sustantivo (ver /api/material/image-sentences/upload-image).
 # El nombre y formato originales del archivo son indiferentes -nunca se
@@ -291,10 +446,17 @@ MAX_NOUN_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024
 NOUN_IMAGE_MAX_DIMENSION = 1024
 
 # "Bits" (bits de inteligencia): tarjetas de una sola palabra + una imagen,
-# para practicar fonética por sílabas. Más simple que "oraciones con
+# para practicar fonética con una consonante. Más simple que "oraciones con
 # imágenes": no hay oración ni plantilla que intercalar, cada bit es
-# {palabra, imagen}. Las sílabas objetivo y la cantidad de sílabas por
-# palabra son solo criterio de generación con IA, no se guardan por palabra.
+# {palabra, imagen}. La consonante a trabajar es solo criterio de generación
+# con IA, no se guarda por palabra.
+# Las 22 consonantes del alfabeto español, en las dos filas en que las muestra
+# el selector de la consola.
+BITS_CONSONANT_ROWS = (
+    ("B", "C", "D", "F", "G", "H", "J", "K", "L", "M", "N"),
+    ("Ñ", "P", "Q", "R", "S", "T", "V", "W", "X", "Y", "Z"),
+)
+BITS_CONSONANTS = tuple(letter for row in BITS_CONSONANT_ROWS for letter in row)
 MAX_BITS_PER_REQUEST = 20
 # Tope por material al guardar (un documento puede traer más palabras que las
 # que se generan/diseñan de una tacada). Igual criterio que
@@ -305,13 +467,23 @@ MAX_BITS_DESIGN_ITEMS = 20
 MAX_BIT_WORD_CHARS = 60
 MAX_BITS_CHARS = 8_000
 
+# Los bits generados con IA son siempre para el mismo público y con la misma
+# mezcla de sílabas: la docente elige la consonante y cuántas palabras
+# quiere (con 10 el 90 % de 2 sílabas y 10 % de 3 sale exacto).
+BITS_TARGET_LEVEL = "inicial de 5 años"
+BITS_DEFAULT_WORDS = 10
+BITS_THREE_SYLLABLE_SHARE = 0.10
+
 BITS_GENERATE_PROMPT = (
-    "Genera palabras en español, reales y de uso común, para que estudiantes "
-    "de {nivel} practiquen fonética. Cada palabra DEBE EMPEZAR con una de "
-    "estas sílabas objetivo -tiene que ser la primera sílaba de la palabra, "
-    "no basta con que la sílaba aparezca en cualquier otra posición-: "
-    "{silabas}. Cada palabra DEBE tener EXACTAMENTE {cantidad_silabas} "
-    "sílabas. Objetivo o detalles: {detalles}. Elige palabras concretas y "
+    "Genera palabras en español, reales y de uso común, para que niños de "
+    "{nivel} practiquen fonética; usa vocabulario muy sencillo y cotidiano "
+    "que conozcan a esa edad. Cada palabra DEBE EMPEZAR con "
+    "la consonante objetivo -tiene que ser la primera letra de la "
+    "palabra, no basta con que la consonante aparezca en cualquier otra "
+    "posición-: {consonante}. De las {cantidad} palabras, {dos_silabas} deben "
+    "tener EXACTAMENTE 2 sílabas y {tres_silabas} EXACTAMENTE 3 sílabas; "
+    "ninguna puede tener otra cantidad de sílabas. "
+    "Objetivo o detalles: {detalles}. Elige palabras concretas y "
     "fáciles de representar con un dibujo inequívoco (evita palabras "
     "abstractas, difíciles, nombres propios, o palabras con varios "
     "significados donde el más común no sea justamente ese objeto/animal/"
@@ -383,23 +555,12 @@ STORY_DURATION_MINUTES_MIN = 1
 STORY_DURATION_MINUTES_MAX = 15
 STORY_NARRATION_WORDS_PER_MINUTE = 125
 STORY_WORD_COUNT_TOLERANCE = 0.08
-TTS_MIN_WORDS_PER_MINUTE = 90
-TTS_MAX_WORDS_PER_MINUTE = 170
 
-# Gemini TTS quality tends to drift (flatter tone, mumbled words) the longer a
-# single generation runs. Splitting the text into short chunks — and re-stating
-# the same tone instruction on every chunk — keeps each individual generation
-# short enough that the voice stays consistent from start to finish.
-TTS_CHUNK_MAX_CHARS = 700
-TTS_STYLE_INSTRUCTION = (
-    "Narra el siguiente fragmento en español latinoamericano, en voz alta, con un tono super alegre," \
-    "desbordante de energia, como si estuvieras riendo a carcajadas, "
-    "natural y propio de un cuento infantil. Mantén EXACTAMENTE la misma "
-    "tonalidad, ritmo, energía, volumen y claridad de principio a fin de este "
-    "fragmento, sin que la voz decaiga, se apague, acelere o pierda entonación "
-    "en ningún momento. No resumas, no omitas y no agregues palabras."
-)
-TTS_DEFAULT_SAMPLE_RATE = 24000
+# Fish Audio divide el texto por su cuenta y mantiene la voz entre fragmentos
+# (condition_on_previous_chunks), así que cada escena se envía de una vez. Solo
+# se parte antes de enviar si un texto es larguísimo, porque no hay un máximo
+# documentado por petición.
+FISH_CHUNK_MAX_CHARS = 3000
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {".doc", ".docx", ".pdf", ".txt"}
@@ -449,7 +610,6 @@ MATERIAL_DOWNLOADS = {
     "texto": ("path_texto", "text/plain", "texto.txt"),
     "resumen": ("path_texto_resumen", "text/plain", "resumen.txt"),
     "audio": ("path_audio", "audio/wav", "audio.wav"),
-    "audio-resumen": ("path_audio_resumen", "audio/wav", "audio_resumen.wav"),
     "preguntas": ("path_preguntas", "application/json", "preguntas.json"),
 }
 
@@ -702,6 +862,178 @@ def generate_noun_image(palabra: str, *, oracion: str = "") -> bytes:
     raise ValueError("El modelo no devolvió ninguna imagen para este sustantivo.")
 
 
+def _image_mime_type(data: bytes) -> str:
+    if data.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
+
+
+def story_scene_tone_options() -> list[dict[str, str]]:
+    """Tonos elegibles para la consola (clave, etiqueta y ayuda)."""
+    return [
+        {"key": key, "label": tone["label"], "hint": tone["hint"]}
+        for key, tone in STORY_SCENE_TONES.items()
+    ]
+
+
+def resolve_story_scene_tone(requested: str, suggested=None) -> str:
+    """Tono final: el que eligió la docente; si dejó "auto", el que propuso la
+    IA en el plan; y si tampoco es válido, el tono por defecto."""
+    if requested in STORY_SCENE_TONES:
+        return requested
+    suggested = str(suggested or "").strip().lower()
+    return suggested if suggested in STORY_SCENE_TONES else STORY_SCENE_TONE_FALLBACK
+
+
+def _scene_tone_instruction(tone: str) -> str:
+    if tone in STORY_SCENE_TONES:
+        chosen = STORY_SCENE_TONES[tone]
+        return (
+            f"La docente eligió el tono visual «{chosen['label']}» "
+            f"({chosen['hint']}). Las descripciones de las escenas deben ser "
+            "coherentes con ese tono."
+        )
+    return (
+        "Elige el tono visual que mejor encaje con el cuento y agrégalo al JSON "
+        'como campo "tono", con solo la clave, una de: '
+        f"{', '.join(STORY_SCENE_TONES)}. Las descripciones de las escenas deben "
+        "ser coherentes con ese tono."
+    )
+
+
+def split_story_sentences(story_text: str) -> list[str]:
+    """Oraciones del cuento con los espacios normalizados. Unidas con un espacio
+    reproducen el cuento normalizado, que es lo que se compara al guardar."""
+    normalized = " ".join(str(story_text or "").split())
+    return [part for part in re.split(r"(?<=[.!?…])\s+", normalized) if part]
+
+
+def normalize_story_text(text: str) -> str:
+    return " ".join(str(text or "").split())
+
+
+def plan_story_scenes(
+    story_text: str, tone: str = STORY_SCENE_TONE_AUTO
+) -> dict[str, object]:
+    """Pide a Gemini que decida cuántas escenas ilustrar y en qué oración
+    empieza cada una. Devuelve {"personaje", "tono", "escenas": [{"texto",
+    "descripcion"}]}; los `texto` son tramos literales y consecutivos que
+    cubren el cuento completo."""
+    sentences = split_story_sentences(story_text)
+    numbered = "\n".join(f"{number}. {sentence}" for number, sentence in enumerate(sentences, start=1))
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=STORY_SCENES_PLAN_PROMPT.format(
+            min_escenas=STORY_SCENES_MIN,
+            max_escenas=STORY_SCENES_MAX,
+            tono_instruccion=_scene_tone_instruction(tone),
+            cuento=numbered,
+        ),
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    return _normalize_scene_plan(json.loads(response.text), sentences, tone)
+
+
+def _normalize_scene_plan(
+    data, sentences: list[str], tone: str = STORY_SCENE_TONE_AUTO
+) -> dict[str, object]:
+    """Arma las escenas a partir de la oración donde empieza cada una. Cada
+    escena llega hasta donde empieza la siguiente, así que no puede haber
+    huecos, solapes ni texto inventado aunque la IA se equivoque en los
+    números: se ordenan, se acotan y la primera siempre empieza en la 1."""
+    if not isinstance(data, dict):
+        raise ValueError("Gemini no devolvió un plan de escenas válido.")
+    personaje = " ".join(str(data.get("personaje") or "").split())
+    total = len(sentences)
+    described: dict[int, str] = {}
+    for raw in data.get("escenas") or []:
+        if not isinstance(raw, dict):
+            continue
+        start = raw.get("desde")
+        if isinstance(start, str) and start.strip().isdigit():
+            start = int(start.strip())
+        descripcion = " ".join(str(raw.get("descripcion") or "").split())
+        if isinstance(start, bool) or not isinstance(start, int) or not descripcion:
+            continue
+        described.setdefault(min(max(start, 1), total), descripcion)
+    starts = sorted(described)[:STORY_SCENES_MAX]
+    if len(starts) < STORY_SCENES_MIN or not personaje:
+        raise ValueError("Gemini no devolvió suficientes escenas para el cuento.")
+    first = starts[0]
+    if first != 1:
+        # La IA no ilustró el inicio: esa parte se suma a la primera escena.
+        described[1] = described.pop(first)
+        starts[0] = 1
+    scenes = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] - 1 if position + 1 < len(starts) else total
+        scenes.append({
+            "texto": " ".join(sentences[start - 1:end]),
+            "descripcion": described[start],
+        })
+    return {
+        "personaje": personaje,
+        "tono": resolve_story_scene_tone(tone, data.get("tono")),
+        "escenas": scenes,
+    }
+
+
+def generate_story_scene_image(
+    descripcion: str,
+    personaje: str,
+    tono: str,
+    reference_image: bytes | None = None,
+) -> bytes:
+    """Genera la ilustración de una escena en estilo cartoon 2D
+    (STORY_SCENE_STYLE) con el tono elegido. `reference_image` (la primera
+    escena ya generada) se manda como referencia para que el personaje y el
+    estilo se mantengan iguales en todo el cuento."""
+    prompt = STORY_SCENE_IMAGE_PROMPT.format(
+        estilo=STORY_SCENE_STYLE,
+        tono=STORY_SCENE_TONES[resolve_story_scene_tone(tono)]["prompt"],
+        personaje=personaje,
+        descripcion=descripcion,
+    )
+    contents: list = [prompt]
+    if reference_image:
+        contents.append(STORY_SCENE_REFERENCE_CLAUSE)
+        contents.append(types.Part.from_bytes(
+            data=reference_image, mime_type=_image_mime_type(reference_image),
+        ))
+    response = gemini_client.models.generate_content(
+        model=GEMINI_IMAGE_MODEL,
+        contents=contents,
+        config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+    )
+    return _first_inline_image(response, "El modelo no devolvió ninguna imagen para esta escena.")
+
+
+def edit_story_scene_image(image: bytes, instruction: str) -> bytes:
+    """Modifica una ilustración ya generada según lo que pidió la docente,
+    conservando personaje, composición y estilo salvo lo indicado."""
+    response = gemini_client.models.generate_content(
+        model=GEMINI_IMAGE_MODEL,
+        contents=[
+            STORY_SCENE_EDIT_PROMPT.format(cambio=instruction),
+            types.Part.from_bytes(data=image, mime_type=_image_mime_type(image)),
+        ],
+        config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+    )
+    return _first_inline_image(response, "El modelo no devolvió la imagen editada.")
+
+
+def _first_inline_image(response, missing_message: str) -> bytes:
+    for candidate in response.candidates or []:
+        parts = getattr(getattr(candidate, "content", None), "parts", None) or []
+        for part in parts:
+            inline = getattr(part, "inline_data", None)
+            if inline and getattr(inline, "data", None):
+                return bytes(inline.data)
+    raise ValueError(missing_message)
+
+
 def generate_questions(text: str, counts: dict[str, int]) -> dict[str, list[dict[str, str]]]:
     """Asks Gemini for reading-comprehension questions, grouped by type, in the
     quantities requested."""
@@ -921,17 +1253,43 @@ def extract_bits_words(file_storage) -> list[dict[str, object]]:
             os.remove(tmp_path)
 
 
-def generate_bits_words(
-    silabas: str, cantidad_silabas: int, grade_level: str, count: int, extra_details: str,
+def filter_bits_by_consonant(
+    items: list[dict[str, object]], consonante: str
 ) -> list[dict[str, object]]:
-    """Asks Gemini for words matching the target syllables and syllable count
-    (later paired with an image each). Returns [{palabra}]."""
+    """Descarta las palabras que no empiezan con la consonante elegida: el
+    modelo a veces se equivoca y aquí la regla es exacta."""
+    initial = consonante.casefold()
+    return [
+        item for item in items
+        # NFC: una "ñ" descompuesta (n + tilde) no debe contar como "n".
+        if unicodedata.normalize("NFC", str(item["palabra"]))[:1].casefold() == initial
+    ]
+
+
+def bits_syllable_mix(count: int) -> tuple[int, int]:
+    """(palabras de 2 sílabas, palabras de 3 sílabas): 90 % / 10 %, con al
+    menos una de 3 cuando hay dos o más palabras."""
+    three = round(count * BITS_THREE_SYLLABLE_SHARE)
+    if count >= 2:
+        three = max(1, three)
+    return count - three, three
+
+
+def generate_bits_words(
+    consonante: str, count: int, extra_details: str,
+) -> list[dict[str, object]]:
+    """Asks Gemini for `count` words for children of BITS_TARGET_LEVEL that
+    start with the target consonant (mostly 2 syllables, a few 3), later
+    paired with an image each. Returns [{palabra}], keeping only the words
+    that really start with it."""
+    two, three = bits_syllable_mix(count)
     response = gemini_client.models.generate_content(
         model=GEMINI_MODEL,
         contents=BITS_GENERATE_PROMPT.format(
-            nivel=grade_level or "primaria",
-            silabas=silabas,
-            cantidad_silabas=cantidad_silabas,
+            nivel=BITS_TARGET_LEVEL,
+            consonante=consonante.lower(),
+            dos_silabas=two,
+            tres_silabas=three,
             detalles=extra_details or "Sin detalles adicionales.",
             cantidad=count,
         ),
@@ -939,7 +1297,8 @@ def generate_bits_words(
     )
     data = json.loads(response.text)
     raw_items = data.get("palabras") if isinstance(data, dict) else data
-    return normalize_bits_words(raw_items if isinstance(raw_items, list) else [])
+    words = normalize_bits_words(raw_items if isinstance(raw_items, list) else [])
+    return filter_bits_by_consonant(words, consonante)
 
 
 def generate_story(
@@ -1045,7 +1404,7 @@ def _story_word_limits(duration_minutes: int) -> tuple[int, int, int]:
     return target, target - tolerance, target + tolerance
 
 
-def _split_text_into_chunks(text: str, max_chars: int = TTS_CHUNK_MAX_CHARS) -> list[str]:
+def _split_text_into_chunks(text: str, max_chars: int = FISH_CHUNK_MAX_CHARS) -> list[str]:
     """Splits text into sentence-aligned chunks no longer than max_chars."""
     sentences = re.split(r"(?<=[.!?…])\s+", text.strip())
     chunks: list[str] = []
@@ -1067,90 +1426,20 @@ def _split_text_into_chunks(text: str, max_chars: int = TTS_CHUNK_MAX_CHARS) -> 
     return chunks or [text.strip()]
 
 
-def _target_narration_pace(text: str, target_duration_minutes: int) -> float:
-    word_count = _count_words(text)
-    if not word_count:
+def generate_speech(text: str) -> tuple[bytes, float]:
+    """Narra `text` con Fish Audio. Devuelve el WAV y su duración medida.
+    Lanza ValueError si el texto no tiene palabras que narrar y FishAudioError
+    si el servicio falla."""
+    if not fish_client:
+        raise RuntimeError("FISH_API_KEY no está configurada.")
+    if not _count_words(text):
         raise ValueError("El texto no contiene palabras que se puedan narrar.")
-    words_per_minute = word_count / target_duration_minutes
-    if not TTS_MIN_WORDS_PER_MINUTE <= words_per_minute <= TTS_MAX_WORDS_PER_MINUTE:
-        min_words = target_duration_minutes * TTS_MIN_WORDS_PER_MINUTE
-        max_words = target_duration_minutes * TTS_MAX_WORDS_PER_MINUTE
-        raise ValueError(
-            "La cantidad de texto no corresponde a la duración elegida. "
-            f"Para {target_duration_minutes} minuto(s), usa entre "
-            f"{min_words} y {max_words} palabras."
-        )
-    return words_per_minute
 
-
-def _tts_prompt(chunk: str, words_per_minute: float | None) -> str:
-    pace_instruction = ""
-    if words_per_minute is not None:
-        pace_instruction = (
-            f" Mantén un ritmo cercano a {round(words_per_minute)} palabras por minuto "
-            "para respetar la duración elegida por la docente."
-        )
-    return f"{TTS_STYLE_INSTRUCTION}{pace_instruction}\n\nTexto que debes narrar:\n{chunk}"
-
-
-def generate_speech(
-    text: str,
-    target_duration_minutes: int | None = None,
-) -> tuple[bytes, float]:
-    """Converts text to speech with Gemini TTS, chunked to keep tone consistent
-    across long passages. Returns the WAV bytes and its measured duration."""
     pcm_data = bytearray()
-    sample_rate = None
-    elapsed_seconds = 0.0
-    chunks = _split_text_into_chunks(text)
-    chunk_word_counts = [_count_words(chunk) for chunk in chunks]
+    for chunk in _split_text_into_chunks(text, FISH_CHUNK_MAX_CHARS):
+        pcm_data.extend(fish_client.synthesize_pcm(chunk))
 
-    if target_duration_minutes is not None:
-        _target_narration_pace(text, target_duration_minutes)
-
-    for index, chunk in enumerate(chunks):
-        target_pace = None
-        if target_duration_minutes is not None:
-            remaining_words = sum(chunk_word_counts[index:])
-            remaining_seconds = max(
-                target_duration_minutes * 60 - elapsed_seconds,
-                1,
-            )
-            target_pace = remaining_words / (remaining_seconds / 60)
-            target_pace = max(
-                TTS_MIN_WORDS_PER_MINUTE,
-                min(target_pace, TTS_MAX_WORDS_PER_MINUTE),
-            )
-
-        response = gemini_client.models.generate_content(
-            model=GEMINI_TTS_MODEL,
-            contents=_tts_prompt(chunk, target_pace),
-            config=types.GenerateContentConfig(
-                response_modalities=["AUDIO"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=GEMINI_TTS_VOICE
-                        )
-                    )
-                ),
-            ),
-        )
-        inline_data = response.candidates[0].content.parts[0].inline_data
-        pcm_data.extend(inline_data.data)
-
-        rate_match = re.search(r"rate=(\d+)", inline_data.mime_type or "")
-        chunk_sample_rate = (
-            int(rate_match.group(1)) if rate_match else TTS_DEFAULT_SAMPLE_RATE
-        )
-        if sample_rate is None:
-            sample_rate = chunk_sample_rate
-        elif sample_rate != chunk_sample_rate:
-            raise ValueError("Gemini devolvió fragmentos de audio con frecuencias incompatibles.")
-        elapsed_seconds += len(inline_data.data) / (sample_rate * 2)
-
-    sample_rate = sample_rate or TTS_DEFAULT_SAMPLE_RATE
-
+    sample_rate = fish_client.sample_rate
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav_file:
         wav_file.setnchannels(1)
@@ -1168,6 +1457,25 @@ def _wav_duration_seconds(path: str) -> float:
         if frame_rate <= 0:
             raise wave.Error("Frecuencia de audio inválida.")
         return wav_file.getnframes() / frame_rate
+
+
+def _concat_wav_files(sources: list[str], destination: str) -> None:
+    """Une varios WAV, en orden, en uno solo. Lanza wave.Error si no todos
+    tienen los mismos canales, ancho de muestra y frecuencia (p. ej. audios
+    reales mezclados con los del modo demo)."""
+    format_params = None
+    with wave.open(destination, "wb") as output:
+        for source in sources:
+            with wave.open(source, "rb") as part:
+                current = (part.getnchannels(), part.getsampwidth(), part.getframerate())
+                if format_params is None:
+                    format_params = current
+                    output.setnchannels(current[0])
+                    output.setsampwidth(current[1])
+                    output.setframerate(current[2])
+                elif current != format_params:
+                    raise wave.Error("Los audios tienen formatos distintos.")
+                output.writeframes(part.readframes(part.getnframes()))
 
 
 def format_period_label(today: date) -> str:
@@ -2283,6 +2591,9 @@ def create_app(test_config: dict | None = None):
             bits_by_material=bits_by_material,
             skills=MATERIAL_SKILLS,
             question_configuration=QUESTION_CONFIGURATION,
+            bits_consonant_rows=BITS_CONSONANT_ROWS,
+            bits_default_words=BITS_DEFAULT_WORDS,
+            scene_tones=story_scene_tone_options(),
             periodos=available_periodos,
             temas=available_temas,
             current_periodo_id=active_periodo.id if active_periodo else None,
@@ -2529,48 +2840,29 @@ def create_app(test_config: dict | None = None):
     def material_tts():
         payload = request.get_json(silent=True) or {}
         text = (payload.get("text") or "").strip()
-        target_duration_minutes = None
-        if payload.get("target_duration_minutes") not in (None, ""):
-            try:
-                target_duration_minutes = _parse_duration_minutes(
-                    payload.get("target_duration_minutes")
-                )
-            except ValueError as exc:
-                return jsonify({"error": str(exc)}), 400
         if not text:
             return jsonify({"error": "No hay texto para convertir a audio."}), 400
         if len(text) > MAX_TTS_TEXT_CHARS:
             return jsonify({"error": "El texto es demasiado largo para generar audio."}), 413
-        if not gemini_client and app.config.get("DEMO_MODE"):
-            audio_bytes, duration_seconds = create_demo_wav(text, target_duration_minutes)
+        if not fish_client and app.config.get("DEMO_MODE"):
+            audio_bytes, duration_seconds = create_demo_wav(text)
             response = Response(audio_bytes, mimetype="audio/wav")
             response.headers["X-MAXCIM-Audio-Duration-Seconds"] = f"{duration_seconds:.2f}"
             response.headers["X-MAXCIM-Demo-Audio"] = "true"
-            if target_duration_minutes is not None:
-                response.headers["X-MAXCIM-Target-Duration-Minutes"] = str(
-                    target_duration_minutes
-                )
             return response
-        if not gemini_client:
-            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+        if not fish_client:
+            return jsonify({"error": "FISH_API_KEY no está configurada en el servidor."}), 503
 
         try:
-            audio_bytes, duration_seconds = generate_speech(
-                text,
-                target_duration_minutes=target_duration_minutes,
-            )
+            audio_bytes, duration_seconds = generate_speech(text)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         except Exception:
-            app.logger.exception("No se pudo generar el audio con Gemini")
-            return jsonify({"error": "No se pudo generar el audio con Gemini."}), 502
+            app.logger.exception("No se pudo generar el audio con Fish Audio")
+            return jsonify({"error": "No se pudo generar el audio con Fish Audio."}), 502
 
         response = Response(audio_bytes, mimetype="audio/wav")
         response.headers["X-MAXCIM-Audio-Duration-Seconds"] = f"{duration_seconds:.2f}"
-        if target_duration_minutes is not None:
-            response.headers["X-MAXCIM-Target-Duration-Minutes"] = str(
-                target_duration_minutes
-            )
         return response
 
     @app.route("/api/material/questions", methods=["POST"])
@@ -2771,23 +3063,21 @@ def create_app(test_config: dict | None = None):
     @app.route("/api/bits/generate", methods=["POST"])
     @login_required
     def bits_generate():
-        """Borrador de palabras para "bits": cada palabra contiene al menos una
-        de las sílabas objetivo y tiene la cantidad de sílabas pedida. Solo
-        genera y devuelve las palabras para que la docente las revise; la
-        generación de imágenes es el paso de diseño (/api/bits/prepare)."""
+        """Borrador de palabras para "bits": cada palabra empieza con la
+        consonante elegida. Cuerpo JSON: {consonante: "M", count,
+        extra_details?}. El público (BITS_TARGET_LEVEL) y la mezcla de sílabas
+        (90 % de 2, 10 % de 3) son fijos. Solo genera y devuelve las palabras
+        para que la docente las revise; la generación de imágenes es el paso
+        de diseño (/api/bits/prepare)."""
         payload = request.get_json(silent=True) or {}
-        silabas = str(payload.get("silabas") or "").strip()
-        grade_level = str(payload.get("grade_level") or "").strip()
         extra_details = str(payload.get("extra_details") or "").strip()
 
-        if not silabas:
-            return jsonify({"error": "Falta indicar: sílabas a trabajar."}), 400
-        try:
-            cantidad_silabas = int(payload.get("cantidad_silabas"))
-        except (TypeError, ValueError):
-            cantidad_silabas = 0
-        if not 1 <= cantidad_silabas <= 10:
-            return jsonify({"error": "La cantidad de sílabas debe estar entre 1 y 10."}), 400
+        raw_consonant = payload.get("consonante")
+        consonante = raw_consonant.strip().upper() if isinstance(raw_consonant, str) else ""
+        if not consonante:
+            return jsonify({"error": "Falta indicar: la consonante a trabajar."}), 400
+        if consonante not in BITS_CONSONANTS:
+            return jsonify({"error": "La consonante no es válida."}), 400
         try:
             count = int(payload.get("count"))
         except (TypeError, ValueError):
@@ -2796,20 +3086,17 @@ def create_app(test_config: dict | None = None):
             return jsonify({
                 "error": f"La cantidad debe estar entre 1 y {MAX_BITS_PER_REQUEST} palabras."
             }), 400
-        field_limits = {"sílabas": (silabas, 160), "nivel del aula": (grade_level, 100),
-                        "detalles adicionales": (extra_details, 1_000)}
-        too_long = [label for label, (value, limit) in field_limits.items() if len(value) > limit]
-        if too_long:
-            return jsonify({"error": f"Excede el límite permitido: {', '.join(too_long)}."}), 413
+        if len(extra_details) > 1_000:
+            return jsonify({"error": "Excede el límite permitido: detalles adicionales."}), 413
 
-        title = f"Bits: sílabas {silabas} · {cantidad_silabas} sílabas"[:120]
+        title = f"Bits: consonante {consonante}"
         if not gemini_client and app.config.get("DEMO_MODE"):
-            items = create_demo_bits_words(silabas, cantidad_silabas, count)
+            items = create_demo_bits_words(consonante, count)
         elif not gemini_client:
             return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
         else:
             try:
-                items = generate_bits_words(silabas, cantidad_silabas, grade_level, count, extra_details)
+                items = generate_bits_words(consonante, count, extra_details)
             except Exception:
                 app.logger.exception("No se pudieron generar las palabras con Gemini")
                 return jsonify({"error": "No se pudieron generar las palabras con Gemini."}), 502
@@ -3325,6 +3612,309 @@ def create_app(test_config: dict | None = None):
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    # --- Ilustraciones por escena de un cuento generado con IA ----------------
+    # Mismo esquema que el diseño de imágenes: todo vive en `_previews/<token>/`
+    # (meta.json + escena-<i>.png) hasta que se limpie por antigüedad. El plan
+    # (cuántas escenas y qué se ve en cada una) se pide una vez; cada imagen se
+    # genera con su propia petición para que la consola muestre el avance.
+
+    def _scene_image_name(index: int) -> str:
+        return f"escena-{index}.png"
+
+    def _scenes_meta(token: str):
+        """Devuelve (staging, meta) del plan de escenas, o lanza ValueError con
+        un mensaje apto para mostrar."""
+        try:
+            staging = _staging_dir(token)
+        except ValueError:
+            raise ValueError("Las escenas expiraron. Vuelve a generarlas.")
+        try:
+            with open(os.path.join(staging, "meta.json"), "rb") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            raise ValueError("Las escenas expiraron. Vuelve a generarlas.")
+        if not isinstance(meta.get("escenas"), list):
+            raise ValueError("Las escenas expiraron. Vuelve a generarlas.")
+        return staging, meta
+
+    def _scene_audio_name(index: int) -> str:
+        return f"escena-{index}.wav"
+
+    def _scene_preview_url(token: str, index: int) -> str:
+        return url_for("story_scene_preview_image", token=token, i=index) + (
+            f"?v={secrets.token_hex(4)}"
+        )
+
+    def _scene_audio_preview_url(token: str, index: int) -> str:
+        return url_for("story_scene_preview_audio", token=token, i=index) + (
+            f"?v={secrets.token_hex(4)}"
+        )
+
+    def _staged_scenes_for_save(token: str, story_text: str) -> list[dict[str, object]]:
+        """Escenas de la carpeta de previsualización listas para guardarse con
+        el cuento: [{texto, imagen, audio, duracion_s}] con las rutas de origen.
+        Lanza ValueError (mensaje apto para mostrar) si expiraron, si el texto
+        del cuento cambió desde que se crearon o si a alguna le falta su imagen
+        o su audio: el robot necesita las dos cosas de cada escena."""
+        staging, meta = _scenes_meta(token)
+        scenes = meta["escenas"]
+        texts = [str(scene.get("texto") or "") for scene in scenes]
+        if normalize_story_text(" ".join(texts)) != normalize_story_text(story_text):
+            raise ValueError(
+                "El texto del cuento cambió después de crear las escenas. Vuelve a generarlas."
+            )
+        staged = []
+        for index, texto in enumerate(texts):
+            image = os.path.join(staging, _scene_image_name(index))
+            audio = os.path.join(staging, _scene_audio_name(index))
+            if not os.path.isfile(image):
+                raise ValueError(f"Falta la imagen de la escena {index + 1}.")
+            if not os.path.isfile(audio):
+                raise ValueError(f"Falta el audio de la escena {index + 1}.")
+            try:
+                duration = _wav_duration_seconds(audio)
+            except (EOFError, OSError, wave.Error):
+                raise ValueError(f"El audio de la escena {index + 1} no es válido.")
+            staged.append({
+                "texto": texto, "imagen": image, "audio": audio, "duracion_s": duration,
+            })
+        return staged
+
+    def _store_scenes(material_dir: str, staged: list[dict[str, object]]) -> None:
+        """Copia las escenas al material: escenas/escena_<i>.{png|jpg|webp} y
+        escenas/escena_<i>.wav, más escenas.json con el texto y la duración de
+        cada una y qué imagen va con qué audio (sin columnas nuevas: la carpeta del
+        material ya lo contiene)."""
+        os.makedirs(os.path.join(material_dir, "escenas"), exist_ok=True)
+        rows = []
+        for index, scene in enumerate(staged):
+            with open(scene["imagen"], "rb") as f:
+                head = f.read(16)
+            extension = {
+                "image/jpeg": "jpg", "image/webp": "webp",
+            }.get(_image_mime_type(head), "png")
+            image_rel = f"escenas/escena_{index}.{extension}"
+            audio_rel = f"escenas/escena_{index}.wav"
+            shutil.copyfile(scene["imagen"], os.path.join(material_dir, image_rel))
+            shutil.copyfile(scene["audio"], os.path.join(material_dir, audio_rel))
+            rows.append({
+                "indice": index,
+                "texto": scene["texto"],
+                "imagen": image_rel,
+                "audio": audio_rel,
+                "duracion_s": round(float(scene["duracion_s"]), 2),
+            })
+        with open(os.path.join(material_dir, "escenas.json"), "wb") as f:
+            f.write(json.dumps(rows, ensure_ascii=False, indent=2).encode("utf-8"))
+
+    @app.route("/api/story/scenes/plan", methods=["POST"])
+    @login_required
+    def story_scenes_plan():
+        """Cuerpo JSON: {story, tone?}. La IA decide cuántas escenas ilustrar;
+        `tone` es una clave de STORY_SCENE_TONES o "auto" (por defecto), en
+        cuyo caso la IA elige el tono según el cuento."""
+        payload = request.get_json(silent=True) or {}
+        story_text = str(payload.get("story") or "").strip()
+        tone = str(payload.get("tone") or STORY_SCENE_TONE_AUTO).strip()
+        if not story_text:
+            return jsonify({"error": "Escribe o genera el cuento antes de crear las escenas."}), 400
+        if len(story_text) > MAX_SOURCE_TEXT_CHARS:
+            return jsonify({"error": "El cuento excede el límite permitido."}), 413
+        if tone != STORY_SCENE_TONE_AUTO and tone not in STORY_SCENE_TONES:
+            return jsonify({"error": "El tono de las imágenes no es válido."}), 400
+        if len(split_story_sentences(story_text)) < STORY_SCENES_MIN:
+            return jsonify({
+                "error": f"El cuento es muy corto para dividirlo en escenas: necesita al menos {STORY_SCENES_MIN} oraciones."
+            }), 400
+        if not _image_sentences_ready():
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+
+        try:
+            if not gemini_client and app.config.get("DEMO_MODE"):
+                plan = create_demo_scene_plan(story_text)
+                plan["tono"] = resolve_story_scene_tone(tone)
+            else:
+                plan = plan_story_scenes(story_text, tone)
+        except Exception:
+            app.logger.exception("No se pudo planear las escenas del cuento")
+            return jsonify({"error": "No se pudieron planear las escenas con Gemini."}), 502
+
+        _sweep_stale_previews()
+        token = uuid.uuid4().hex
+        staging = _staging_dir(token)
+        os.makedirs(staging, exist_ok=True)
+        meta = {"created_at": utc_now().isoformat(), **plan}
+        with open(os.path.join(staging, "meta.json"), "wb") as f:
+            f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+
+        return jsonify({
+            "token": token,
+            "tone": plan["tono"],
+            "tone_label": STORY_SCENE_TONES[plan["tono"]]["label"],
+            "scenes": [
+                {"index": index, "texto": scene["texto"]}
+                for index, scene in enumerate(plan["escenas"])
+            ],
+        })
+
+    @app.route("/api/story/scenes/image", methods=["POST"])
+    @login_required
+    def story_scene_image():
+        """Genera (o regenera) la imagen de una escena. Cuerpo JSON:
+        {token, index}. Las escenas posteriores a la primera usan la primera
+        imagen como referencia para conservar al personaje."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            staging, meta = _scenes_meta(str(payload.get("token") or ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+        scenes = meta["escenas"]
+        index = payload.get("index")
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(scenes):
+            return jsonify({"error": "Escena inválida."}), 400
+
+        reference = None
+        if index != 0:
+            try:
+                with open(os.path.join(staging, _scene_image_name(0)), "rb") as f:
+                    reference = f.read()
+            except OSError:
+                reference = None
+
+        scene = scenes[index]
+        try:
+            if not gemini_client and app.config.get("DEMO_MODE"):
+                data = create_demo_noun_image(scene["descripcion"])
+            else:
+                data = generate_story_scene_image(
+                    scene["descripcion"],
+                    str(meta.get("personaje") or ""),
+                    str(meta.get("tono") or ""),
+                    reference,
+                )
+            with open(os.path.join(staging, _scene_image_name(index)), "wb") as f:
+                f.write(data)
+        except Exception:
+            app.logger.exception("No se pudo generar la imagen de la escena %s", index)
+            return jsonify({"error": "No se pudo generar la imagen de esta escena."}), 502
+
+        return jsonify({"index": index, "imagen_url": _scene_preview_url(payload["token"], index)})
+
+    @app.route("/api/story/scenes/edit", methods=["POST"])
+    @login_required
+    def story_scene_edit():
+        """Edita la imagen ya generada de una escena. Cuerpo JSON:
+        {token, index, instruction}. Sobrescribe la imagen de esa escena."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            staging, meta = _scenes_meta(str(payload.get("token") or ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+        index = payload.get("index")
+        if (
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or not 0 <= index < len(meta["escenas"])
+        ):
+            return jsonify({"error": "Escena inválida."}), 400
+        instruction = " ".join(str(payload.get("instruction") or "").split())
+        if not instruction:
+            return jsonify({"error": "Escribe qué quieres cambiar de la imagen."}), 400
+        if len(instruction) > STORY_SCENE_EDIT_MAX_CHARS:
+            return jsonify({
+                "error": f"El cambio no puede superar {STORY_SCENE_EDIT_MAX_CHARS} caracteres."
+            }), 413
+        if not _image_sentences_ready():
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+
+        image_path = os.path.join(staging, _scene_image_name(index))
+        try:
+            with open(image_path, "rb") as f:
+                current = f.read()
+        except OSError:
+            return jsonify({"error": "Esta escena todavía no tiene imagen para editar."}), 409
+
+        try:
+            if not gemini_client and app.config.get("DEMO_MODE"):
+                edited = create_demo_noun_image(instruction)
+            else:
+                edited = edit_story_scene_image(current, instruction)
+            with open(image_path, "wb") as f:
+                f.write(edited)
+        except Exception:
+            app.logger.exception("No se pudo editar la imagen de la escena %s", index)
+            return jsonify({"error": "No se pudo editar la imagen. Inténtalo de nuevo."}), 502
+
+        return jsonify({"index": index, "imagen_url": _scene_preview_url(payload["token"], index)})
+
+    @app.route("/api/story/scenes/preview/<token>/<int:i>", methods=["GET"])
+    @login_required
+    def story_scene_preview_image(token, i):
+        try:
+            staging = _staging_dir(token)
+        except ValueError:
+            return jsonify({"error": "Imagen no encontrada."}), 404
+        try:
+            with open(os.path.join(staging, _scene_image_name(i)), "rb") as f:
+                data = f.read()
+        except OSError:
+            return jsonify({"error": "Imagen no encontrada."}), 404
+        response = Response(data, mimetype=_image_mime_type(data))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/api/story/scenes/audio", methods=["POST"])
+    @login_required
+    def story_scene_audio():
+        """Narra (o vuelve a narrar) el texto de una escena. Cuerpo JSON:
+        {token, index}. Cada escena tiene su propio audio para que el robot
+        cambie de imagen al terminar de leerla, sin tiempos que sincronizar."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            staging, meta = _scenes_meta(str(payload.get("token") or ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+        scenes = meta["escenas"]
+        index = payload.get("index")
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(scenes):
+            return jsonify({"error": "Escena inválida."}), 400
+        if not fish_client and not app.config.get("DEMO_MODE"):
+            return jsonify({"error": "FISH_API_KEY no está configurada en el servidor."}), 503
+
+        text = str(scenes[index].get("texto") or "")
+        try:
+            if not fish_client:
+                audio_bytes, duration_seconds = create_demo_wav(text)
+            else:
+                audio_bytes, duration_seconds = generate_speech(text)
+            with open(os.path.join(staging, _scene_audio_name(index)), "wb") as f:
+                f.write(audio_bytes)
+        except Exception:
+            app.logger.exception("No se pudo narrar la escena %s", index)
+            return jsonify({"error": "No se pudo narrar esta escena."}), 502
+
+        return jsonify({
+            "index": index,
+            "audio_url": _scene_audio_preview_url(payload["token"], index),
+            "duration_seconds": duration_seconds,
+        })
+
+    @app.route("/api/story/scenes/audio-preview/<token>/<int:i>", methods=["GET"])
+    @login_required
+    def story_scene_preview_audio(token, i):
+        try:
+            staging = _staging_dir(token)
+        except ValueError:
+            return jsonify({"error": "Audio no encontrado."}), 404
+        try:
+            with open(os.path.join(staging, _scene_audio_name(i)), "rb") as f:
+                data = f.read()
+        except OSError:
+            return jsonify({"error": "Audio no encontrado."}), 404
+        response = Response(data, mimetype="audio/wav")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.route("/api/material/save", methods=["POST"])
     @login_required
     def save_material():
@@ -3424,7 +4014,6 @@ def create_app(test_config: dict | None = None):
                 path_texto=None,
                 path_texto_resumen=None,
                 path_audio=None,
-                path_audio_resumen=None,
                 fk_user=str(teacher["id"]),
                 id_periodo=material_periodo_id,
                 id_tema=material_tema_id,
@@ -3614,7 +4203,6 @@ def create_app(test_config: dict | None = None):
                 path_texto=None,
                 path_texto_resumen=None,
                 path_audio=None,
-                path_audio_resumen=None,
                 fk_user=str(teacher["id"]),
                 id_periodo=material_periodo_id,
                 id_tema=material_tema_id,
@@ -3764,7 +4352,6 @@ def create_app(test_config: dict | None = None):
                 path_texto=None,
                 path_texto_resumen=None,
                 path_audio=None,
-                path_audio_resumen=None,
                 fk_user=str(teacher["id"]),
                 id_periodo=material_periodo_id,
                 id_tema=material_tema_id,
@@ -3787,7 +4374,6 @@ def create_app(test_config: dict | None = None):
         summary_text = (request.form.get("summary_text") or "").strip()
         questions_json_raw = (request.form.get("questions_json") or "").strip()
         audio_full = request.files.get("audio_full")
-        audio_summary = request.files.get("audio_summary")
 
         if not transcribed_text or not summary_text:
             return jsonify({"error": "Falta el texto completo o el resumen."}), 400
@@ -3814,8 +4400,22 @@ def create_app(test_config: dict | None = None):
             return jsonify({
                 "error": "Cada pregunta debe incluir un enunciado y una respuesta esperada revisados por la docente."
             }), 400
-        if not audio_full or not audio_summary:
-            return jsonify({"error": "Falta generar el audio completo o el audio resumen."}), 400
+        # Escenas ilustradas y narradas: el robot reproduce el cuento escena por
+        # escena, así que son la fuente del audio completo (se arma uniendo sus
+        # audios). Se validan antes de crear nada en disco para no dejar una
+        # carpeta a medias si algo falta. Sin escenas solo se acepta el flujo
+        # anterior, con un `audio_full` ya generado.
+        scenes_token = (request.form.get("scenes_token") or "").strip()
+        staged_scenes = []
+        if scenes_token:
+            try:
+                staged_scenes = _staged_scenes_for_save(scenes_token, transcribed_text)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+        if not staged_scenes and not audio_full:
+            return jsonify({
+                "error": "Falta crear las escenas del cuento (imagen y audio de cada una)."
+            }), 400
 
         material_dir_name = uuid.uuid4().hex
         material_dir = os.path.join(app.config["UPLOADS_ROOT"], material_dir_name)
@@ -3831,14 +4431,30 @@ def create_app(test_config: dict | None = None):
                 f.write(content)
 
         full_audio_path = os.path.join(material_dir, "audio.wav")
-        audio_full.save(full_audio_path)
-        audio_summary.save(os.path.join(material_dir, "audio_resumen.wav"))
 
-        try:
-            _wav_duration_seconds(full_audio_path)
-        except (EOFError, OSError, wave.Error):
-            shutil.rmtree(material_dir, ignore_errors=True)
-            return jsonify({"error": "El audio completo no es un WAV válido."}), 400
+        if staged_scenes:
+            # Con escenas, el audio completo siempre sale de ellas (un
+            # `audio_full` enviado además se ignora): así nunca puede narrar
+            # algo distinto de lo que el robot reproduce por escena.
+            try:
+                _store_scenes(material_dir, staged_scenes)
+                _concat_wav_files([scene["audio"] for scene in staged_scenes], full_audio_path)
+            except wave.Error:
+                shutil.rmtree(material_dir, ignore_errors=True)
+                return jsonify({
+                    "error": "Los audios de las escenas no son compatibles entre sí. Vuelve a generarlas."
+                }), 400
+            except OSError:
+                app.logger.exception("No se pudieron guardar las escenas del cuento")
+                shutil.rmtree(material_dir, ignore_errors=True)
+                return jsonify({"error": "No se pudieron guardar las escenas del cuento."}), 500
+        else:
+            audio_full.save(full_audio_path)
+            try:
+                _wav_duration_seconds(full_audio_path)
+            except (EOFError, OSError, wave.Error):
+                shutil.rmtree(material_dir, ignore_errors=True)
+                return jsonify({"error": "El audio completo no es un WAV válido."}), 400
 
         material = Material(
             nombre_material=title,
@@ -3847,7 +4463,6 @@ def create_app(test_config: dict | None = None):
             path_texto_resumen=f"uploads/{material_dir_name}/resumen.txt",
             path_preguntas=f"uploads/{material_dir_name}/preguntas.json",
             path_audio=f"uploads/{material_dir_name}/audio.wav",
-            path_audio_resumen=f"uploads/{material_dir_name}/audio_resumen.wav",
             fk_user=str(teacher["id"]),
             fk_user_name=(str(teacher.get("name") or "").strip() or None),
             id_periodo=material_periodo_id,
@@ -3858,9 +4473,13 @@ def create_app(test_config: dict | None = None):
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
+            shutil.rmtree(material_dir, ignore_errors=True)
             return jsonify({
                 "error": "El periodo o el tema indicado ya no está disponible. Vuelve a intentarlo."
             }), 409
+
+        if staged_scenes:
+            shutil.rmtree(_staging_dir(scenes_token), ignore_errors=True)
 
         return jsonify({"material_id": material.id})
 
@@ -4130,6 +4749,66 @@ def create_app(test_config: dict | None = None):
             for index, item in enumerate(material_bits_items(material))
         ]
 
+    def _material_scenes_stored_path(material, rel: str) -> str:
+        base_dir = posixpath.dirname(str(material.path_texto or ""))
+        return posixpath.join(base_dir, rel)
+
+    def material_scenes_items(material) -> list[dict[str, object]]:
+        """Escenas guardadas de un cuento: [{texto, imagen, audio, duracion_s}],
+        con `imagen` y `audio` relativos a la carpeta del material, leídas de
+        escenas.json. Lista vacía si el cuento no tiene escenas (los cuentos
+        anteriores a esta función tampoco)."""
+        if not material.es_cuento or not material.path_texto:
+            return []
+        try:
+            with open(
+                uploads_abspath(_material_scenes_stored_path(material, "escenas.json")),
+                "r", encoding="utf-8",
+            ) as f:
+                rows = json.load(f)
+        except (OSError, ValueError):
+            return []
+        if not isinstance(rows, list):
+            return []
+        out: list[dict[str, object]] = []
+        for raw in rows:
+            if not isinstance(raw, dict):
+                return []
+            texto = str(raw.get("texto") or "").strip()
+            imagen = str(raw.get("imagen") or "").strip()
+            audio = str(raw.get("audio") or "").strip()
+            if not texto or not imagen or not audio:
+                return []
+            try:
+                duracion = round(float(raw.get("duracion_s")), 2)
+            except (TypeError, ValueError):
+                duracion = None
+            out.append({"texto": texto, "imagen": imagen, "audio": audio, "duracion_s": duracion})
+        return out
+
+    def serialize_scenes(material) -> list[dict[str, object]]:
+        """Vista para el robot: por escena, en orden de lectura, su texto, la
+        duración de su audio y las URL autenticadas de la imagen y del audio.
+        El robot reproduce `audio_url` mostrando `imagen_url` y pasa a la
+        siguiente escena al terminar."""
+        scheme = "https" if app.config.get("PREFERRED_URL_SCHEME") == "https" else request.scheme
+        return [
+            {
+                "indice": index,
+                "texto": item["texto"],
+                "duracion_s": item["duracion_s"],
+                "imagen_url": url_for(
+                    "download_material_scene_image",
+                    material_id=material.id, i=index, _external=True, _scheme=scheme,
+                ),
+                "audio_url": url_for(
+                    "download_material_scene_audio",
+                    material_id=material.id, i=index, _external=True, _scheme=scheme,
+                ),
+            }
+            for index, item in enumerate(material_scenes_items(material))
+        ]
+
     def _material_resource_url(material, recurso):
         # Los `*_url` apuntan al endpoint autenticado del robot, no a
         # /static/: bajarlos exige el secreto compartido y el identificador de
@@ -4181,7 +4860,6 @@ def create_app(test_config: dict | None = None):
                 "texto_completo_url": None,
                 "texto_resumen_url": None,
                 "audio_completo_url": None,
-                "audio_resumen_url": None,
                 "preguntas_url": None,
                 "preguntas": [],
             }
@@ -4202,7 +4880,6 @@ def create_app(test_config: dict | None = None):
                 "texto_completo_url": None,
                 "texto_resumen_url": None,
                 "audio_completo_url": None,
-                "audio_resumen_url": None,
                 "preguntas_url": None,
                 "preguntas": [],
             }
@@ -4229,9 +4906,9 @@ def create_app(test_config: dict | None = None):
             "texto_completo_url": _material_resource_url(material, "texto") if material.path_texto else None,
             "texto_resumen_url": _material_resource_url(material, "resumen") if material.path_texto_resumen else None,
             "audio_completo_url": _material_resource_url(material, "audio") if material.path_audio else None,
-            "audio_resumen_url": _material_resource_url(material, "audio-resumen") if material.path_audio_resumen else None,
             "preguntas_url": _material_resource_url(material, "preguntas") if material.path_preguntas else None,
             "preguntas": preguntas,
+            "escenas": serialize_scenes(material),
         }
 
     def robot_teacher_query():
@@ -4393,7 +5070,7 @@ def create_app(test_config: dict | None = None):
     # Robot-side endpoint: descarga el archivo exacto de un material del docente
     # para guardarlo en local. Hace falta identificar a la docente (`docente`,
     # el nombre, o `teacher_id`) y debe coincidir con el dueño del material. Un
-    # `cuento` expone texto/resumen/audio/audio-resumen/preguntas; una `oracion`
+    # `cuento` expone texto/resumen/audio/preguntas; una `oracion`
     # solo expone `oraciones`.
     @app.route("/api/materials/<int:material_id>/<recurso>", methods=["GET"])
     def download_material_resource(material_id, recurso):
@@ -4406,8 +5083,8 @@ def create_app(test_config: dict | None = None):
         if recurso == "oraciones":
             if not (material.es_oracion or material.es_oracion_imagen):
                 return jsonify({
-                    "error": "Este material es un cuento; usa texto, resumen, audio, "
-                             "audio-resumen o preguntas."
+                    "error": "Este material es un cuento; usa texto, resumen, audio "
+                             "o preguntas."
                 }), 404
             payload = {"oraciones": material_sentences(material)}
             if material.es_oracion_imagen:
@@ -4517,6 +5194,46 @@ def create_app(test_config: dict | None = None):
             as_attachment=True,
             download_name=f"bit_{i}.png",
         )
+
+    # Robot-side endpoints: imagen y audio de una escena de un cuento (`<i>` es
+    # el índice 0-based tal como llega en `escenas`). Mismo control de acceso
+    # que download_material_bit_image.
+    def _send_material_scene_file(material_id, i, kind):
+        if not webhook_authorized():
+            return jsonify({"error": "Integración no autorizada."}), 401
+        material, error = robot_material_or_error(material_id, require_identifier=True)
+        if error:
+            return error
+        items = material_scenes_items(material)
+        if not (0 <= i < len(items)):
+            return jsonify({"error": "Escena no encontrada."}), 404
+
+        try:
+            abs_path = uploads_abspath(_material_scenes_stored_path(material, items[i][kind]))
+        except ValueError:
+            return jsonify({"error": "Escena no encontrada."}), 404
+        if not os.path.isfile(abs_path):
+            return jsonify({"error": "Escena no encontrada."}), 404
+        if kind == "audio":
+            mimetype, extension = "audio/wav", "wav"
+        else:
+            with open(abs_path, "rb") as f:
+                mimetype = _image_mime_type(f.read(16))
+            extension = {"image/jpeg": "jpg", "image/webp": "webp"}.get(mimetype, "png")
+        return send_file(
+            abs_path,
+            mimetype=mimetype,
+            as_attachment=True,
+            download_name=f"escena_{i}.{extension}",
+        )
+
+    @app.route("/api/materials/<int:material_id>/escena-imagen/<int:i>", methods=["GET"])
+    def download_material_scene_image(material_id, i):
+        return _send_material_scene_file(material_id, i, "imagen")
+
+    @app.route("/api/materials/<int:material_id>/escena-audio/<int:i>", methods=["GET"])
+    def download_material_scene_audio(material_id, i):
+        return _send_material_scene_file(material_id, i, "audio")
 
     def parse_optional_bool(value):
         if value is None:

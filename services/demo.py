@@ -277,15 +277,45 @@ def create_demo_noun_image(palabra: str, oracion: str = "") -> bytes:
     return _solid_png(256, 256, rgb)
 
 
-def create_demo_bits_words(silabas: str, cantidad_silabas: int, count: int) -> list[dict]:
-    """Deterministic {palabra} fixture for DEMO_MODE: cycles a fixed pool of
-    short, common Spanish words, ignoring the real syllable criteria (mirrors
-    create_demo_sentences ignoring the real topic)."""
-    pool = [
-        "mano", "pelota", "gato", "mesa", "sol", "pan", "oso", "luna",
-        "flor", "pato", "casa", "dedo",
+DEMO_BITS_WORDS = {
+    "B": ("barco", "bola"), "C": ("casa", "cama"), "D": ("dedo", "dado"),
+    "F": ("foca", "flor"), "G": ("gato", "globo"), "H": ("hoja", "huevo"),
+    "J": ("jirafa", "jabón"), "K": ("koala", "kiwi"), "L": ("luna", "lápiz"),
+    "M": ("mano", "mesa"), "N": ("nube", "naranja"), "Ñ": ("ñandú", "ñoquis"),
+    "P": ("pelota", "pato"), "Q": ("queso", "quena"), "R": ("rana", "ratón"),
+    "S": ("sol", "sapo"), "T": ("taza", "tomate"), "V": ("vaca", "vela"),
+    "W": ("waffle", "wifi"), "X": ("xilófono", "xenón"), "Y": ("yate", "yoyo"),
+    "Z": ("zapato", "zorro"),
+}
+
+
+def create_demo_bits_words(consonante: str, count: int) -> list[dict]:
+    """Deterministic {palabra} fixture for DEMO_MODE: words that start with the
+    chosen consonant, ignoring the syllable mix (mirrors create_demo_sentences
+    ignoring the real topic)."""
+    pool = DEMO_BITS_WORDS.get(consonante) or [
+        word for words in DEMO_BITS_WORDS.values() for word in words
     ]
     return [{"palabra": pool[index % len(pool)]} for index in range(max(1, count))]
+
+
+def create_demo_scene_plan(story_text: str) -> dict:
+    """DEMO_MODE: parte el cuento en hasta 4 escenas de oraciones consecutivas
+    que lo cubren completo (cada escena se narra con su propio audio); la
+    imagen de cada una es un mosaico de color (ver create_demo_noun_image).
+    Espera un cuento de al menos 2 oraciones, como el resto del flujo."""
+    normalized = " ".join(story_text.split())
+    sentences = [s for s in re.split(r"(?<=[.!?…])\s+", normalized) if s]
+    scene_count = min(4, len(sentences))
+    size = math.ceil(len(sentences) / scene_count)
+    chunks = [" ".join(sentences[i:i + size]) for i in range(0, len(sentences), size)]
+    return {
+        "personaje": "demo character",
+        "escenas": [
+            {"texto": chunk, "descripcion": f"Escena {index}: {chunk[:60]}"}
+            for index, chunk in enumerate(chunks, start=1)
+        ],
+    }
 
 
 def extract_demo_bits_words(file_storage) -> list[dict]:
@@ -331,14 +361,11 @@ def process_demo_document(file_storage) -> tuple[str, str]:
     return text, summary
 
 
-def create_demo_wav(text: str, target_duration_minutes: int | None = None) -> tuple[bytes, float]:
-    """Return a lightweight audible placeholder WAV with an exact test duration."""
+def create_demo_wav(text: str) -> tuple[bytes, float]:
+    """Return a lightweight audible placeholder WAV whose length follows the text."""
 
-    if target_duration_minutes is not None:
-        duration_seconds = float(target_duration_minutes * 60)
-    else:
-        word_count = max(1, len(text.split()))
-        duration_seconds = float(max(4, min(30, round(word_count / 2.2))))
+    word_count = max(1, len(text.split()))
+    duration_seconds = float(max(4, min(30, round(word_count / 2.2))))
 
     sample_rate = 8_000
     pattern_seconds = 2

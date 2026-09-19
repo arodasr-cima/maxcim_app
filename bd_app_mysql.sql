@@ -65,7 +65,6 @@ CREATE TABLE IF NOT EXISTS `material` (
   `tipo_material` VARCHAR(255) NOT NULL,
   `path_audio` VARCHAR(500) NULL,
   `path_texto` VARCHAR(500) NULL,
-  `path_audio_resumen` VARCHAR(500) NULL,
   `path_texto_resumen` VARCHAR(500) NULL,
   -- Para un cuento guarda la ruta del JSON de preguntas; para una oración
   -- guarda el texto de las oraciones. Por eso es TEXT y no VARCHAR(500).

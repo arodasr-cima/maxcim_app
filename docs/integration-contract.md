@@ -78,18 +78,28 @@ Un `cuento` devuelve `200` con esta forma:
   "texto_completo_url": "https://<maxcim>/api/materials/12/texto",
   "texto_resumen_url": "https://<maxcim>/api/materials/12/resumen",
   "audio_completo_url": "https://<maxcim>/api/materials/12/audio",
-  "audio_resumen_url": "https://<maxcim>/api/materials/12/audio-resumen",
   "preguntas_url": "https://<maxcim>/api/materials/12/preguntas",
   "preguntas": [
     {
       "pregunta": "¿Quién es el personaje?",
       "respuesta_esperada": "Luna"
     }
+  ],
+  "escenas": [
+    {
+      "indice": 0,
+      "texto": "Luna salió al bosque.",
+      "duracion_s": 2.9,
+      "imagen_url": "https://<maxcim>/api/materials/12/escena-imagen/0",
+      "audio_url": "https://<maxcim>/api/materials/12/escena-audio/0"
+    }
   ]
 }
 ```
 
-En la tabla `material`, el cuento llena `path_texto`, `path_texto_resumen`, `path_audio`, `path_audio_resumen` y `path_preguntas` con rutas relativas. `preguntas` se lee del JSON apuntado por `path_preguntas`; si el archivo no existe o su JSON no es válido, la API devuelve una lista vacía.
+`escenas` (`[]` solo en cuentos anteriores a esta función) trae, en orden de lectura, cada tramo del cuento con su imagen y su propio audio: el robot reproduce `audio_url` mostrando `imagen_url` y pasa a la siguiente escena cuando termina. En un cuento con escenas, `audio_completo_url` es la unión de esos audios. Detalle y descargas en `docs/robot-api-reference.md` (§4, §8.1 y §8.2). Se guardan en `uploads/<id>/escenas.json` y `uploads/<id>/escenas/`, sin columnas nuevas en `material`. `escenas.json` es el archivo que indica qué imagen va con cada audio: una fila por escena, `{indice, texto, imagen, audio, duracion_s}`, con `imagen` y `audio` relativos a la carpeta del material (`escenas/escena_0.png`, `escenas/escena_0.wav`, …).
+
+En la tabla `material`, el cuento llena `path_texto`, `path_texto_resumen`, `path_audio` y `path_preguntas` con rutas relativas. `preguntas` se lee del JSON apuntado por `path_preguntas`; si el archivo no existe o su JSON no es válido, la API devuelve una lista vacía.
 
 Una `oracion` devuelve `200` con esta forma:
 
@@ -106,7 +116,6 @@ Una `oracion` devuelve `200` con esta forma:
   "texto_completo_url": null,
   "texto_resumen_url": null,
   "audio_completo_url": null,
-  "audio_resumen_url": null,
   "preguntas_url": null,
   "preguntas": []
 }
@@ -117,7 +126,7 @@ docente las cargó. Al subir el archivo, Gemini identifica cada oración
 individual (la docente las revisa y corrige antes de aprobar) y MAXCIM las
 guarda como `uploads/<id>/oraciones.json`, igual que `preguntas.json` de un
 cuento; `path_preguntas` apunta a ese archivo y `oraciones_url` lo expone.
-`path_texto`, `path_texto_resumen`, `path_audio` y `path_audio_resumen` quedan
+`path_texto`, `path_texto_resumen` y `path_audio` quedan
 en `NULL`.
 
 Compatibilidad: registros antiguos guardan el texto plano directamente en
@@ -246,7 +255,6 @@ Para un `cuento`, `{recurso}` puede ser:
 | `texto` | `text/plain; charset=utf-8` | `texto.txt` | `path_texto` |
 | `resumen` | `text/plain; charset=utf-8` | `resumen.txt` | `path_texto_resumen` |
 | `audio` | `audio/wav` | `audio.wav` | `path_audio` |
-| `audio-resumen` | `audio/wav` | `audio_resumen.wav` | `path_audio_resumen` |
 | `preguntas` | `application/json` | `preguntas.json` | `path_preguntas` |
 
 La respuesta `200` es el archivo con `Content-Disposition: attachment` y el

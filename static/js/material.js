@@ -147,6 +147,32 @@ document.addEventListener("DOMContentLoaded", () => {
   const resultSubtitle = document.getElementById("resultSubtitle");
   const resultTranscribedText = document.getElementById("resultTranscribedText");
   const resultSummaryText = document.getElementById("resultSummaryText");
+  const resultModal = resultOverlay.querySelector(".result-modal");
+  const reviewSteps = Array.from(resultOverlay.querySelectorAll("[data-review-step]"));
+  const reviewRequirements = document.getElementById("reviewRequirements");
+  const reviewStepper = document.getElementById("reviewStepper");
+  const reviewStepHeading = document.getElementById("reviewStepHeading");
+  const resultBackBtn = document.getElementById("resultBackBtn");
+  const resultScenesBlock = document.getElementById("resultScenesBlock");
+  const generateScenesBtn = document.getElementById("generateScenesBtn");
+  const scenesProgress = document.getElementById("scenesProgress");
+  const scenesProgressText = document.getElementById("scenesProgressText");
+  const scenesProgressCount = document.getElementById("scenesProgressCount");
+  const scenesProgressTrack = document.getElementById("scenesProgressTrack");
+  const scenesProgressFill = document.getElementById("scenesProgressFill");
+  const scenesStale = document.getElementById("scenesStale");
+  const scenesGrid = document.getElementById("scenesGrid");
+  const scenesTone = document.getElementById("scenesTone");
+  const scenesToneHint = document.getElementById("scenesToneHint");
+  const sceneEditOverlay = document.getElementById("sceneEditOverlay");
+  const sceneEditForm = document.getElementById("sceneEditForm");
+  const sceneEditTitle = document.getElementById("sceneEditTitle");
+  const sceneEditImage = document.getElementById("sceneEditImage");
+  const sceneEditContext = document.getElementById("sceneEditContext");
+  const sceneEditInstruction = document.getElementById("sceneEditInstruction");
+  const sceneEditError = document.getElementById("sceneEditError");
+  const sceneEditCancelBtn = document.getElementById("sceneEditCancelBtn");
+  const sceneEditApplyBtn = document.getElementById("sceneEditApplyBtn");
   const storyOverlay = document.getElementById("storyOverlay");
   const storyOpenBtn = document.getElementById("storyOpenBtn");
   const storyCancelBtn = document.getElementById("storyCancelBtn");
@@ -162,9 +188,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const storySentenceFields = document.getElementById("storySentenceFields");
   const storyImageFields = document.getElementById("storyImageFields");
   const storyBitsFields = document.getElementById("storyBitsFields");
-  const bitsSyllablesInput = document.getElementById("bitsSyllables");
-  const bitsSyllableCountInput = document.getElementById("bitsSyllableCount");
-  const bitsGradeInput = document.getElementById("bitsGrade");
+  const bitsConsonantButtons = Array.from(document.querySelectorAll(".consonant-btn"));
+  const bitsConsonantsSummary = document.getElementById("bitsConsonantsSummary");
+  const bitsConsonantsError = document.getElementById("bitsConsonantsError");
   const bitsCountInput = document.getElementById("bitsCount");
   const bitsDetailsInput = document.getElementById("bitsDetails");
   const uploadTypeCuentoBtn = document.getElementById("uploadTypeCuentoBtn");
@@ -180,7 +206,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const resultSentencesList = document.getElementById("resultSentencesList");
   const addSentenceBtn = document.getElementById("addSentenceBtn");
   const generateMoreSentencesBtn = document.getElementById("generateMoreSentencesBtn");
-  const resultAudioColumn = document.getElementById("resultAudioColumn");
   const resultQuestionsColumn = document.getElementById("resultQuestionsColumn");
   const imageDesignOverlay = document.getElementById("imageDesignOverlay");
   const imageDesignTitle = document.getElementById("imageDesignTitle");
@@ -248,14 +273,21 @@ document.addEventListener("DOMContentLoaded", () => {
   // material" en classifyOverlay.
   let pendingSave = null;
   let currentMaterialTitle = "";
-  let audioFullReady = false;
-  let audioSummaryReady = false;
+  // Escenas ilustradas y narradas del cuento generado con IA (ver generateScenes).
+  // Cada escena: { index, texto, url, state, audioUrl, audioDuration, audioState,
+  // error, audioError } con state/audioState: "pending" | "loading" | "done" | "error"
+  // (imagen y audio respectivamente). `scenesRunId` invalida las respuestas en vuelo cuando se cierra el modal
+  // o se vuelven a generar las escenas.
+  let scenes = [];
+  let scenesToken = "";
+  let scenesBusy = false;
+  let scenesRunId = 0;
+  let scenesStoryText = "";
+  let scenesToneUsed = "";
+  let sceneEditIndex = -1;
+  let sceneEditBusy = false;
   let questionsReady = false;
-  let audioFullBlob = null;
-  let audioSummaryBlob = null;
   let currentTargetDurationMinutes = null;
-  let audioFullDurationSeconds = null;
-  let audioSummaryDurationSeconds = null;
   let imageDesignToken = "";
   let designSentences = [];
   let currentDesignIndex = 0;
@@ -354,7 +386,18 @@ document.addEventListener("DOMContentLoaded", () => {
     resultTranscribedBlock.hidden = isSentenceType;
     resultSummaryBlock.hidden = isSentenceType;
     resultSentencesBlock.hidden = !isSentenceType;
-    resultAudioColumn.hidden = isSentenceType;
+    // Las escenas solo se ofrecen en cuentos (generados con IA o cargados desde
+    // un documento): esos caminos las muestran después de llamar a esta función.
+    resultScenesBlock.hidden = true;
+    // Con un solo bloque (oraciones, oraciones con imágenes, bits) no hay
+    // acordeón: se oculta el encabezado y el bloque queda siempre abierto. Los
+    // cuentos, en cambio, se revisan como un asistente de tres pantallas
+    // (ver openReviewStep).
+    resultModal.classList.toggle("result-modal--simple", isSentenceType);
+    resultModal.classList.toggle("result-modal--wizard", !isSentenceType);
+    reviewStepper.hidden = isSentenceType;
+    reviewStepHeading.hidden = isSentenceType;
+    resultBackBtn.hidden = true;
     resultQuestionsColumn.hidden = isSentenceType;
     generateMoreSentencesBtn.hidden = isImageSentence || isBits;
     resultSentencesLabel.textContent = isBits
@@ -373,6 +416,7 @@ document.addEventListener("DOMContentLoaded", () => {
     resultDoneBtn.textContent = (isImageSentence || isBits)
       ? "Siguiente: diseñar imágenes"
       : "Continuar";
+    openReviewStep("text");
   }
 
   function updateUploadButtonState() {
@@ -572,12 +616,11 @@ document.addEventListener("DOMContentLoaded", () => {
   async function saveStoryMaterial(transcribedText, summaryText, questionsData) {
     const formData = new FormData();
     formData.append("tipo_material", "cuento");
+    formData.append("scenes_token", scenesToken);
     formData.append("title", currentMaterialTitle);
     formData.append("transcribed_text", transcribedText);
     formData.append("summary_text", summaryText);
     formData.append("questions_json", JSON.stringify(questionsData));
-    formData.append("audio_full", audioFullBlob, "audio.wav");
-    formData.append("audio_summary", audioSummaryBlob, "audio_resumen.wav");
     formData.append("id_periodo", uploadPeriodoSelect.value);
     formData.append("id_tema", uploadTemaSelect.value);
     if (currentTargetDurationMinutes !== null) {
@@ -773,6 +816,8 @@ document.addEventListener("DOMContentLoaded", () => {
         resultTranscribedText.textContent = data.transcribed_text;
         resultSummaryText.textContent = data.summary_text;
         resultSubtitle.textContent = "A partir del documento original · revisa el contenido antes de aprobar";
+        resultScenesBlock.hidden = false;
+        updateDoneButtonState();
       }
 
       loadingOverlay.classList.remove("is-open");
@@ -852,10 +897,9 @@ document.addEventListener("DOMContentLoaded", () => {
       "Crear oraciones con imágenes con IA",
       "Indica el tema y el nivel. La IA prepara un borrador de oraciones con una imagen para cada una, para revisar antes de crear el material.",
     ],
-    // TODO: título/descripción reales cuando se implemente la generación de bits.
     bits: [
       "Crear bits con IA",
-      "Pendiente de definir.",
+      "Elige la consonante y cuántas palabras quieres. La IA prepara un borrador para inicial de 5 años, para revisar antes de crear el material.",
     ],
   };
 
@@ -881,10 +925,58 @@ document.addEventListener("DOMContentLoaded", () => {
     btn.addEventListener("click", () => setStoryType(btn.dataset.type));
   });
 
+  // Selector de consonante de "Bits": grupo de opciones (radio) con una sola
+  // consonante elegida. Solo la elegida (o la primera, si no hay ninguna) entra
+  // en el orden de tabulación; las flechas mueven y eligen.
+  const BITS_CONSONANTS_HINT = bitsConsonantsSummary.textContent;
+
+  function selectedBitsConsonant() {
+    const checked = bitsConsonantButtons.find((btn) => btn.getAttribute("aria-checked") === "true");
+    return checked ? checked.dataset.consonant : "";
+  }
+
+  function setBitsConsonant(target) {
+    bitsConsonantButtons.forEach((btn) => {
+      const checked = btn === target;
+      btn.setAttribute("aria-checked", String(checked));
+      btn.tabIndex = checked || (!target && btn === bitsConsonantButtons[0]) ? 0 : -1;
+    });
+    const letter = selectedBitsConsonant();
+    bitsConsonantsSummary.textContent = letter ? `Elegida: ${letter}` : BITS_CONSONANTS_HINT;
+    if (letter) bitsConsonantsError.hidden = true;
+  }
+
+  function resetBitsConsonants() {
+    setBitsConsonant(null);
+    bitsConsonantsError.hidden = true;
+  }
+
+  bitsConsonantButtons.forEach((btn, index) => {
+    btn.addEventListener("click", () => setBitsConsonant(btn));
+    btn.addEventListener("keydown", (event) => {
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+      let next;
+      if (step) {
+        next = bitsConsonantButtons[(index + step + bitsConsonantButtons.length) % bitsConsonantButtons.length];
+      } else if (event.key === "Home") {
+        next = bitsConsonantButtons[0];
+      } else if (event.key === "End") {
+        next = bitsConsonantButtons[bitsConsonantButtons.length - 1];
+      }
+      if (!next) return;
+      event.preventDefault();
+      setBitsConsonant(next);
+      next.focus();
+    });
+  });
+
+  setBitsConsonant(null);
+
   storyOpenBtn.addEventListener("click", () => {
     resetImageDesignState();
     resetBitsDesignState();
     storyForm.reset();
+    resetBitsConsonants();
     setStoryType("cuento");
     storyOverlay.classList.add("is-open");
   });
@@ -1017,10 +1109,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (currentStoryType === "bits") {
+      const consonante = selectedBitsConsonant();
+      if (!consonante) {
+        bitsConsonantsError.hidden = false;
+        bitsConsonantButtons[0].focus();
+        return;
+      }
       const bitsPayload = {
-        silabas: bitsSyllablesInput.value.trim(),
-        cantidad_silabas: Number.parseInt(bitsSyllableCountInput.value, 10),
-        grade_level: bitsGradeInput.value.trim(),
+        consonante,
         count: Number.parseInt(bitsCountInput.value, 10),
         extra_details: bitsDetailsInput.value.trim(),
       };
@@ -1091,6 +1187,7 @@ document.addEventListener("DOMContentLoaded", () => {
       configureResultModalForType("cuento");
       resultSubtitle.textContent = `Creado para ${data.target_duration_minutes} min · ${data.word_count} palabras · la miss puede editarlo antes de aprobar`;
       resetResultState();
+      resultScenesBlock.hidden = false;
       loadingOverlay.classList.remove("is-open");
       resultOverlay.classList.add("is-open");
     } catch (error) {
@@ -1105,6 +1202,12 @@ document.addEventListener("DOMContentLoaded", () => {
   // periodo y tema) pasa a classifyOverlay (ver openClassifyModal), un paso
   // aparte que se abre en vez de guardar directo.
   resultDoneBtn.addEventListener("click", async () => {
+    // En un cuento, "Siguiente" pasa a la pantalla que sigue; solo la última
+    // ("Continuar") aprueba el contenido y abre la clasificación.
+    if (isReviewWizard() && reviewStepKey !== "questions") {
+      goToReviewStep(1);
+      return;
+    }
     if (currentResultType === "oracion_imagen") {
       const items = getImageSentencesData();
       if (!items.length) {
@@ -1191,22 +1294,14 @@ document.addEventListener("DOMContentLoaded", () => {
       alert("Revisa y completa la respuesta esperada de cada pregunta.");
       return;
     }
-    if (!audioFullBlob || !audioSummaryBlob) {
-      alert("Genera ambos audios antes de guardar.");
+    if (!scenesReadyToSave()) {
+      alert("Genera las escenas (imágenes y audios) antes de guardar.");
       return;
     }
-
     openClassifyModal(resultOverlay, () => saveStoryMaterial(transcribedText, summaryText, questionsData));
   });
 
-  // Text-to-speech: send the (possibly edited) text and play back the result
-  const generateAudioFullBtn = document.getElementById("generateAudioFullBtn");
-  const generateAudioSummaryBtn = document.getElementById("generateAudioSummaryBtn");
-  const resultAudioFull = document.getElementById("resultAudioFull");
-  const resultAudioSummary = document.getElementById("resultAudioSummary");
-  const resultAudioFullMeta = document.getElementById("resultAudioFullMeta");
-  const resultAudioSummaryMeta = document.getElementById("resultAudioSummaryMeta");
-
+  // Duración de un audio de escena en texto legible (p. ej. «1 min 05 s»).
   function formatAudioDuration(seconds) {
     if (!Number.isFinite(seconds)) return "";
     const roundedSeconds = Math.max(0, Math.round(seconds));
@@ -1215,108 +1310,490 @@ document.addEventListener("DOMContentLoaded", () => {
     return minutes ? `${minutes} min ${String(remainder).padStart(2, "0")} s` : `${remainder} s`;
   }
 
-  function invalidateAudio(audioEl, kind) {
-    if (audioEl.src) URL.revokeObjectURL(audioEl.src);
-    audioEl.removeAttribute("src");
-    audioEl.load();
-    if (kind === "full") {
-      audioFullReady = false;
-      audioFullBlob = null;
-      audioFullDurationSeconds = null;
-      resultAudioFullMeta.textContent = "";
+  // --- Escenas ilustradas del cuento generado con IA -------------------------
+  // Flujo: /api/story/scenes/plan (la IA decide cuántas escenas) y después una
+  // petición /api/story/scenes/image y otra /api/story/scenes/audio por escena,
+  // para mostrar el avance de cada ilustración y su narración.
+  const SCENES_BUTTON_LABEL = generateScenesBtn.textContent;
+
+  function setScenesProgress({ text, done = 0, total = 0, indeterminate = false, finished = false }) {
+    const percent = total ? Math.round((done / total) * 100) : 0;
+    scenesProgress.hidden = false;
+    scenesProgress.classList.toggle("scenes-progress--indeterminate", indeterminate);
+    scenesProgress.classList.toggle("scenes-progress--done", finished);
+    scenesProgressText.textContent = text;
+    scenesProgressCount.textContent = total ? `${done} de ${total}` : "";
+    scenesProgressFill.style.width = indeterminate ? "" : `${percent}%`;
+    if (indeterminate) {
+      scenesProgressTrack.removeAttribute("aria-valuenow");
     } else {
-      audioSummaryReady = false;
-      audioSummaryBlob = null;
-      audioSummaryDurationSeconds = null;
-      resultAudioSummaryMeta.textContent = "";
+      scenesProgressTrack.setAttribute("aria-valuenow", String(percent));
     }
-    updateDoneButtonState();
   }
 
-  resultTranscribedText.addEventListener("input", () => {
-    if (audioFullReady) invalidateAudio(resultAudioFull, "full");
-    updateDoneButtonState();
-  });
-  resultSummaryText.addEventListener("input", () => {
-    if (audioSummaryReady) invalidateAudio(resultAudioSummary, "summary");
-  });
+  function isSceneComplete(scene) {
+    return scene.state === "done" && scene.audioState === "done";
+  }
 
-  async function fetchSpeech(text, targetDurationMinutes = null) {
-    const payload = { text };
-    if (targetDurationMinutes !== null) {
-      payload.target_duration_minutes = targetDurationMinutes;
-    }
-    const response = await authorizedFetch("/api/material/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+  function scenesReadyToSave() {
+    return scenes.length > 0 && scenes.every(isSceneComplete) && !scenesBusy && scenesStale.hidden;
+  }
+
+  function setScenesBusy(busy) {
+    scenesBusy = busy;
+    updateDoneButtonState();
+    generateScenesBtn.disabled = busy;
+    scenesTone.disabled = busy;
+    scenesGrid.querySelectorAll(".scene-card__action, .scene-card__edit").forEach((btn) => {
+      btn.disabled = busy || Boolean(btn.closest(".scene-card--pending, .scene-card--loading"));
     });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.error || "No se pudo generar el audio.");
-    }
-
-    const durationSeconds = Number.parseFloat(
-      response.headers.get("X-MAXCIM-Audio-Duration-Seconds") || ""
-    );
-    return {
-      blob: await response.blob(),
-      durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : null,
-    };
   }
 
-  async function generateAudio(button, audioEl, getText, targetDurationMinutes, onSuccess) {
-    const text = (getText() || "").trim();
-    if (!text) {
-      alert("No hay texto para generar el audio.");
+  function buildSceneCard(scene) {
+    const card = document.createElement("li");
+    card.className = `scene-card scene-card--${scene.state}`;
+    card.tabIndex = -1;
+
+    const media = document.createElement("div");
+    media.className = "scene-card__media";
+    if (scene.state === "done" && scene.url) {
+      const img = document.createElement("img");
+      img.src = scene.url;
+      img.alt = `Ilustración de la escena ${scene.index + 1}: ${scene.texto}`;
+      media.appendChild(img);
+
+      // Capa sobre la imagen: "Editar imagen" al pasar el cursor o enfocarla.
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "scene-card__edit";
+      edit.setAttribute("aria-label", `Editar imagen de la escena ${scene.index + 1}`);
+      edit.disabled = scenesBusy;
+      const editLabel = document.createElement("span");
+      editLabel.className = "scene-card__edit-label";
+      editLabel.setAttribute("aria-hidden", "true");
+      editLabel.textContent = "✏️ Editar imagen";
+      edit.appendChild(editLabel);
+      edit.addEventListener("click", () => openSceneEdit(scene.index));
+      media.appendChild(edit);
+    } else {
+      const status = document.createElement("div");
+      status.className = "scene-card__status";
+      status.textContent = {
+        pending: "En espera",
+        loading: "Dibujando…",
+        error: scene.error || "No se pudo dibujar",
+      }[scene.state] || "";
+      media.appendChild(status);
+    }
+    const badge = document.createElement("span");
+    badge.className = "scene-card__badge";
+    badge.textContent = String(scene.index + 1);
+    media.appendChild(badge);
+    card.appendChild(media);
+
+    const body = document.createElement("div");
+    body.className = "scene-card__body";
+    const text = document.createElement("p");
+    text.className = "scene-card__text";
+    text.textContent = scene.texto;
+    body.appendChild(text);
+    if (scene.audioState === "done") {
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.preload = "none";
+      audio.className = "scene-card__audio";
+      audio.src = scene.audioUrl;
+      audio.setAttribute("aria-label", `Audio de la escena ${scene.index + 1}`);
+      body.appendChild(audio);
+      if (Number.isFinite(scene.audioDuration)) {
+        const duration = document.createElement("span");
+        duration.className = "scene-card__audio-meta";
+        duration.textContent = `Duración: ${formatAudioDuration(scene.audioDuration)}`;
+        body.appendChild(duration);
+      }
+      if (scene.audioNotice) {
+        const notice = document.createElement("p");
+        notice.className = "scene-card__audio-meta scene-card__audio-meta--error";
+        notice.textContent = scene.audioNotice;
+        body.appendChild(notice);
+      }
+      // La voz puede sonar distinta en cada intento: la docente escucha el audio
+      // y, si no le gusta, lo vuelve a generar sin tocar la imagen.
+      const regen = document.createElement("button");
+      regen.type = "button";
+      regen.className = "btn btn--ghost scene-card__action scene-card__regen";
+      regen.textContent = "🔄 Volver a generar audio";
+      regen.setAttribute("aria-label", `Volver a generar el audio de la escena ${scene.index + 1}`);
+      regen.disabled = scenesBusy;
+      regen.addEventListener("click", () => regenerateScene(scene.index, { forceAudio: true }));
+      body.appendChild(regen);
+    } else if (scene.audioState === "loading" || scene.audioState === "error") {
+      const status = document.createElement("p");
+      status.className = "scene-card__audio-meta";
+      status.classList.toggle("scene-card__audio-meta--error", scene.audioState === "error");
+      status.textContent = scene.audioState === "loading"
+        ? "Narrando…"
+        : scene.audioError || "No se pudo narrar esta escena.";
+      body.appendChild(status);
+    }
+    // Las escenas ya dibujadas se editan desde la capa de la imagen; el botón
+    // solo aparece cuando una falló y hay que volver a intentarla.
+    if (scene.state === "error" || scene.audioState === "error") {
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "btn btn--ghost scene-card__action";
+      action.textContent = "Reintentar";
+      action.setAttribute("aria-label", `Reintentar escena ${scene.index + 1}`);
+      action.disabled = scenesBusy;
+      action.addEventListener("click", () => regenerateScene(scene.index));
+      body.appendChild(action);
+    }
+    card.appendChild(body);
+    return card;
+  }
+
+  function updateSceneCard(index) {
+    const current = scenesGrid.children[index];
+    const next = buildSceneCard(scenes[index]);
+    if (current) {
+      // Se conserva el <li> (y con él el foco del teclado) y solo se cambia su contenido.
+      current.className = next.className;
+      current.replaceChildren(...next.childNodes);
+    } else {
+      scenesGrid.appendChild(next);
+    }
+  }
+
+  function finishScenesProgress() {
+    const done = scenes.filter(isSceneComplete).length;
+    const incomplete = scenes.length - done;
+    setScenesProgress({
+      text: incomplete
+        ? `Listo, pero ${incomplete === 1 ? "1 escena quedó incompleta" : `${incomplete} escenas quedaron incompletas`}. Usa «Reintentar».`
+        : "Escenas listas. Cada una tiene su imagen y su audio; edita una imagen pasando el cursor (o tocándola) o vuelve a generar su audio.",
+      done,
+      total: scenes.length,
+      finished: scenes.length > 0 && incomplete === 0 && scenesStale.hidden,
+    });
+  }
+
+  // Devuelve false si la respuesta llegó tarde (se cerró el modal o se volvió
+  // a generar) y por eso se descartó.
+  async function drawScene(index, runId) {
+    const scene = scenes[index];
+    scene.state = "loading";
+    scene.error = "";
+    updateSceneCard(index);
+    try {
+      const response = await authorizedFetch("/api/story/scenes/image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: scenesToken, index }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (runId !== scenesRunId) return false;
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo dibujar esta escena.");
+      }
+      scene.url = data.imagen_url;
+      scene.state = "done";
+    } catch (error) {
+      if (runId !== scenesRunId) return false;
+      scene.state = "error";
+      scene.error = error.message || "No se pudo dibujar esta escena.";
+    }
+    updateSceneCard(index);
+    paintReviewState();
+    return true;
+  }
+
+  async function generateSceneAudio(index, runId) {
+    const scene = scenes[index];
+    // Al volver a narrar una escena que ya tenía audio, si falla se conserva el
+    // anterior: el servidor solo reemplaza el archivo cuando la nueva narración sale bien.
+    const previous = scene.audioState === "done"
+      ? { url: scene.audioUrl, duration: scene.audioDuration }
+      : null;
+    scene.audioState = "loading";
+    scene.audioError = "";
+    scene.audioNotice = "";
+    updateSceneCard(index);
+    paintReviewState();
+    try {
+      const response = await authorizedFetch("/api/story/scenes/audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: scenesToken, index }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (runId !== scenesRunId) return false;
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo narrar esta escena.");
+      }
+      scene.audioUrl = data.audio_url;
+      scene.audioDuration = Number.isFinite(data.duration_seconds) ? data.duration_seconds : null;
+      scene.audioState = "done";
+    } catch (error) {
+      if (runId !== scenesRunId) return false;
+      const message = error.message || "No se pudo narrar esta escena.";
+      if (previous) {
+        scene.audioUrl = previous.url;
+        scene.audioDuration = previous.duration;
+        scene.audioState = "done";
+        scene.audioNotice = `${message} Se conserva el audio anterior.`;
+      } else {
+        scene.audioState = "error";
+        scene.audioError = message;
+      }
+    }
+    updateSceneCard(index);
+    paintReviewState();
+    return true;
+  }
+
+  async function generateScenes() {
+    if (scenesBusy) return;
+    const storyText = resultTranscribedText.textContent.trim();
+    if (!storyText) {
+      alert("Escribe o genera el cuento antes de crear las escenas.");
       return;
     }
 
-    const originalLabel = button.textContent;
-    button.disabled = true;
-    button.textContent = "Generando...";
+    const tone = scenesTone.value;
+    resetScenes();
+    const runId = scenesRunId;
+    scenesStoryText = storyText;
+    scenesToneUsed = tone;
+    setScenesBusy(true);
+    setScenesProgress({ text: "Analizando el cuento y decidiendo las escenas…", indeterminate: true });
 
     try {
-      const { blob, durationSeconds } = await fetchSpeech(text, targetDurationMinutes);
-      if (audioEl.src) {
-        URL.revokeObjectURL(audioEl.src);
+      const response = await authorizedFetch("/api/story/scenes/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ story: storyText, tone }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (runId !== scenesRunId) return;
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudieron planear las escenas.");
       }
-      audioEl.src = URL.createObjectURL(blob);
-      audioEl.play().catch(() => {});
-      onSuccess(blob, durationSeconds);
+      scenesToken = data.token;
+      scenes = (data.scenes || []).map((scene) => ({
+        index: scene.index,
+        texto: scene.texto,
+        url: "",
+        state: "pending",
+        error: "",
+        audioState: "pending",
+        audioUrl: "",
+        audioDuration: null,
+        audioError: "",
+      }));
+      scenesGrid.replaceChildren(...scenes.map(buildSceneCard));
+      // Con las tarjetas ya en el DOM el panel tiene su altura completa: se
+      // acerca a la vista para que la docente vea aparecer las escenas.
+      if (resultScenesBlock.open) {
+        resultScenesBlock.scrollIntoView({
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+          block: "start",
+        });
+      }
+
+      const toneLabel = data.tone_label ? ` · tono ${data.tone_label.toLowerCase()}` : "";
+      for (let i = 0; i < scenes.length; i += 1) {
+        setScenesProgress({
+          text: `Escena ${i + 1} de ${scenes.length}: dibujando${toneLabel}…`,
+          done: scenes.filter(isSceneComplete).length,
+          total: scenes.length,
+        });
+        if (!(await drawScene(i, runId))) return;
+        if (scenes[i].state === "done") {
+          setScenesProgress({
+            text: `Escena ${i + 1} de ${scenes.length}: narrando…`,
+            done: scenes.filter(isSceneComplete).length,
+            total: scenes.length,
+          });
+          if (!(await generateSceneAudio(i, runId))) return;
+        }
+      }
+      finishScenesProgress();
+      generateScenesBtn.textContent = "✨ Generar de nuevo";
     } catch (error) {
-      alert(error.message || "No se pudo generar el audio.");
+      if (runId !== scenesRunId) return;
+      setScenesProgress({ text: error.message || "No se pudieron crear las escenas." });
     } finally {
-      button.disabled = false;
-      button.textContent = originalLabel;
+      if (runId === scenesRunId) setScenesBusy(false);
     }
   }
 
-  generateAudioFullBtn.addEventListener("click", () => {
-    generateAudio(generateAudioFullBtn, resultAudioFull, () => resultTranscribedText.textContent, currentTargetDurationMinutes, (blob, durationSeconds) => {
-      audioFullBlob = blob;
-      audioFullReady = true;
-      audioFullDurationSeconds = durationSeconds;
-      resultAudioFullMeta.textContent = durationSeconds === null
-        ? "Audio completo generado"
-        : `Duración real: ${formatAudioDuration(durationSeconds)}${currentTargetDurationMinutes === null ? "" : ` · objetivo: ${currentTargetDurationMinutes} min`}`;
-      updateDoneButtonState();
-    });
+  // Rehace lo que falta de una escena (imagen y/o audio). Con `forceAudio` vuelve
+  // a narrarla aunque ya tenga audio.
+  async function regenerateScene(index, { forceAudio = false } = {}) {
+    if (scenesBusy) return;
+    const runId = scenesRunId;
+    // Al deshabilitarse el botón el foco se perdería: se guarda en la tarjeta
+    // y se devuelve al botón al terminar, salvo que la docente ya haya navegado.
+    const card = scenesGrid.children[index];
+    if (card?.contains(document.activeElement)) {
+      card.focus({ preventScroll: true });
+    }
+    setScenesBusy(true);
+    try {
+      if (scenes[index].state !== "done") {
+        setScenesProgress({
+          text: `Escena ${index + 1} de ${scenes.length}: dibujando…`,
+          done: scenes.filter(isSceneComplete).length,
+          total: scenes.length,
+        });
+        if (!(await drawScene(index, runId))) return;
+      }
+      if (scenes[index].state === "done" && (forceAudio || scenes[index].audioState !== "done")) {
+        setScenesProgress({
+          text: `Escena ${index + 1} de ${scenes.length}: narrando${forceAudio ? " de nuevo" : ""}…`,
+          done: scenes.filter(isSceneComplete).length,
+          total: scenes.length,
+        });
+        if (!(await generateSceneAudio(index, runId))) return;
+      }
+      finishScenesProgress();
+    } finally {
+      if (runId === scenesRunId) {
+        setScenesBusy(false);
+        if (document.activeElement === card && resultOverlay.classList.contains("is-open")) {
+          const target = (forceAudio && card.querySelector(".scene-card__regen"))
+            || card.querySelector(".scene-card__action, .scene-card__edit");
+          target?.focus({ preventScroll: true });
+        }
+      }
+    }
+  }
+
+  // Modal "Editar imagen": se abre encima del de revisión (que no cambia) y al
+  // cerrarse se vuelve a él. Mientras la IA edita no se puede cerrar, para que
+  // la imagen del servidor y la que se ve nunca queden desfasadas.
+  const SCENE_EDIT_APPLY_LABEL = sceneEditApplyBtn.textContent;
+
+  function openSceneEdit(index) {
+    const scene = scenes[index];
+    if (scenesBusy || !scene || scene.state !== "done") return;
+    sceneEditIndex = index;
+    sceneEditTitle.textContent = `Editar imagen · Escena ${index + 1}`;
+    sceneEditImage.src = scene.url;
+    sceneEditImage.alt = `Ilustración actual de la escena ${index + 1}`;
+    sceneEditContext.textContent = scene.texto;
+    sceneEditInstruction.value = "";
+    sceneEditError.hidden = true;
+    sceneEditOverlay.classList.add("is-open");
+    sceneEditInstruction.focus();
+  }
+
+  function closeSceneEdit() {
+    if (sceneEditBusy) return;
+    const index = sceneEditIndex;
+    sceneEditIndex = -1;
+    sceneEditOverlay.classList.remove("is-open");
+    // Devuelve el foco a la imagen que se estaba editando.
+    scenesGrid.children[index]?.querySelector(".scene-card__edit")?.focus({ preventScroll: true });
+  }
+
+  async function applySceneEdit() {
+    const index = sceneEditIndex;
+    const instruction = sceneEditInstruction.value.trim();
+    if (index < 0 || !instruction || sceneEditBusy) return;
+
+    const runId = scenesRunId;
+    sceneEditBusy = true;
+    sceneEditError.hidden = true;
+    sceneEditInstruction.disabled = true;
+    sceneEditCancelBtn.disabled = true;
+    sceneEditApplyBtn.disabled = true;
+    sceneEditApplyBtn.textContent = "Editando la imagen…";
+
+    let saved = false;
+    try {
+      const response = await authorizedFetch("/api/story/scenes/edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: scenesToken, index, instruction }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (runId !== scenesRunId) return;
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo editar la imagen.");
+      }
+      scenes[index].url = data.imagen_url;
+      updateSceneCard(index);
+      saved = true;
+    } catch (error) {
+      if (runId !== scenesRunId) return;
+      sceneEditError.textContent = error.message || "No se pudo editar la imagen.";
+      sceneEditError.hidden = false;
+    } finally {
+      sceneEditBusy = false;
+      sceneEditInstruction.disabled = false;
+      sceneEditCancelBtn.disabled = false;
+      sceneEditApplyBtn.disabled = false;
+      sceneEditApplyBtn.textContent = SCENE_EDIT_APPLY_LABEL;
+    }
+    if (saved) {
+      closeSceneEdit();
+    } else {
+      sceneEditInstruction.focus();
+    }
+  }
+
+  sceneEditForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    applySceneEdit();
+  });
+  sceneEditCancelBtn.addEventListener("click", closeSceneEdit);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && sceneEditOverlay.classList.contains("is-open")) {
+      closeSceneEdit();
+    }
   });
 
-  generateAudioSummaryBtn.addEventListener("click", () => {
-    generateAudio(generateAudioSummaryBtn, resultAudioSummary, () => resultSummaryText.textContent, null, (blob, durationSeconds) => {
-      audioSummaryBlob = blob;
-      audioSummaryReady = true;
-      audioSummaryDurationSeconds = durationSeconds;
-      resultAudioSummaryMeta.textContent = durationSeconds === null
-        ? "Audio resumen generado"
-        : `Duración real: ${formatAudioDuration(durationSeconds)}`;
-      updateDoneButtonState();
-    });
-  });
+  function resetScenes() {
+    sceneEditBusy = false;
+    sceneEditIndex = -1;
+    sceneEditOverlay.classList.remove("is-open");
+    scenesRunId += 1;
+    scenes = [];
+    scenesToken = "";
+    scenesBusy = false;
+    scenesStoryText = "";
+    scenesToneUsed = "";
+    scenesGrid.replaceChildren();
+    scenesProgress.hidden = true;
+    scenesStale.hidden = true;
+    generateScenesBtn.disabled = false;
+    scenesTone.disabled = false;
+    generateScenesBtn.textContent = SCENES_BUTTON_LABEL;
+    refreshToneHint();
+  }
 
+  // Muestra qué significa el tono elegido; si cambió después de generar las
+  // escenas, avisa que hay que volver a generarlas para aplicarlo.
+  function refreshToneHint() {
+    const changed = scenes.length > 0 && scenesToneUsed && scenesTone.value !== scenesToneUsed;
+    scenesToneHint.textContent = changed
+      ? "Cambiaste el tono: pulsa «Generar de nuevo» para aplicarlo."
+      : (scenesTone.selectedOptions[0]?.dataset.hint || "");
+  }
+
+  scenesTone.addEventListener("change", refreshToneHint);
+  refreshToneHint();
+
+  generateScenesBtn.addEventListener("click", generateScenes);
+  resultBackBtn.addEventListener("click", () => goToReviewStep(-1));
+
+  resultTranscribedText.addEventListener("input", () => {
+    scenesStale.hidden = !scenesStoryText
+      || resultTranscribedText.textContent.trim() === scenesStoryText;
+    updateDoneButtonState();
+  });
+  resultSummaryText.addEventListener("input", updateDoneButtonState);
   // El periodo y el tema ya no se eligen aquí -eso pasó a classifyOverlay,
   // un paso posterior (ver openClassifyModal)- así que este botón solo
   // depende de que el contenido en sí esté listo.
@@ -1338,34 +1815,146 @@ document.addEventListener("DOMContentLoaded", () => {
     } else if (currentResultType === "oracion") {
       contentReady = sentenceRowsAreValid();
     } else {
-      contentReady = audioFullReady && audioSummaryReady && questionsReady;
+      // Cuento: cada pantalla exige lo suyo para pasar a la siguiente; la última
+      // ("Continuar") exige que todo esté listo.
+      contentReady = isReviewWizard() && reviewStepKey !== "questions"
+        ? reviewStepReady(reviewStepKey)
+        : REVIEW_WIZARD_STEPS.every((step) => reviewStepReady(step.key));
     }
-    resultDoneBtn.disabled = !contentReady;
+    // No se puede continuar a media generación de las escenas.
+    resultDoneBtn.disabled = !contentReady || scenesBusy;
+    paintReviewState();
+  }
+
+  // Cuentos: la revisión es un asistente de tres pantallas (texto, escenas y
+  // preguntas) dentro del mismo modal. Solo se ve la pantalla actual;
+  // "Siguiente" avanza cuando esa pantalla está lista y "Atrás" vuelve. Los
+  // demás materiales tienen una sola pantalla y no usan el asistente.
+  const REVIEW_WIZARD_STEPS = [
+    { key: "text", title: "Revisar texto", focusTarget: () => resultTranscribedText },
+    { key: "scenes", title: "Ilustrar y narrar escenas", focusTarget: () => generateScenesBtn },
+    { key: "questions", title: "Generar preguntas", focusTarget: () => generateQuestionsBtn },
+  ];
+  let reviewStepKey = "text";
+
+  function isReviewWizard() {
+    return resultModal.classList.contains("result-modal--wizard");
+  }
+
+  // Qué necesita cada pantalla para poder pasar a la siguiente.
+  function reviewStepReady(key) {
+    if (key === "text") {
+      return Boolean(resultTranscribedText.textContent.trim() && resultSummaryText.textContent.trim());
+    }
+    if (key === "scenes") return scenesReadyToSave();
+    return questionsReady;
+  }
+
+  // Muestra la sección indicada del modal de revisión. En un cuento las tres
+  // secciones quedan abiertas y solo se ve la actual; en los demás materiales
+  // queda abierta solo esa. Con `focus` lleva el foco al control principal de
+  // la pantalla (al moverse con "Siguiente"/"Atrás").
+  function openReviewStep(key, { focus = false } = {}) {
+    reviewStepKey = key;
+    const wizard = isReviewWizard();
+    reviewSteps.forEach((step) => {
+      const current = step.dataset.reviewStep === key;
+      step.open = wizard || current;
+      step.classList.toggle("review-step--inactive", wizard && !current);
+    });
+    if (!wizard) return;
+
+    const position = REVIEW_WIZARD_STEPS.findIndex((step) => step.key === key);
+    resultBackBtn.hidden = position === 0;
+    resultDoneBtn.textContent = position === REVIEW_WIZARD_STEPS.length - 1 ? "Continuar" : "Siguiente";
+    reviewStepHeading.textContent = `Paso ${position + 1} de ${REVIEW_WIZARD_STEPS.length} · ${REVIEW_WIZARD_STEPS[position].title}`;
+    resultModal.querySelector(".result-modal__columns").scrollTop = 0;
+    updateDoneButtonState();
+    if (focus) REVIEW_WIZARD_STEPS[position].focusTarget().focus({ preventScroll: true });
+  }
+
+  function goToReviewStep(offset) {
+    const position = REVIEW_WIZARD_STEPS.findIndex((step) => step.key === reviewStepKey);
+    const target = REVIEW_WIZARD_STEPS[position + offset];
+    if (target) openReviewStep(target.key, { focus: true });
+  }
+
+  // Estado de cada sección y qué falta para poder continuar. "Listo" significa
+  // generado, no revisado: el texto siempre figura como editable.
+  function paintReviewState() {
+    const setBadge = (key, text, ready = false) => {
+      const badge = resultOverlay.querySelector(`[data-review-status="${key}"]`);
+      badge.textContent = text;
+      badge.dataset.ready = String(ready);
+    };
+
+    setBadge("questions", questionsReady ? "Listo" : "Pendiente", questionsReady);
+
+    const scenesStaleNow = !scenesStale.hidden;
+    const allComplete = scenesReadyToSave();
+    let scenesLabel = "Pendiente";
+    if (scenesBusy) scenesLabel = scenes.some((scene) => scene.audioState === "loading")
+      ? "Narrando…" : "Dibujando…";
+    else if (scenesStaleNow) scenesLabel = "Texto cambiado";
+    else if (scenes.some((scene) => scene.state === "error" || scene.audioState === "error")) scenesLabel = "Con errores";
+    else if (allComplete) scenesLabel = "Listo";
+    setBadge("scenes", scenesLabel, allComplete);
+
+    if (isReviewWizard()) {
+      reviewStepper.querySelectorAll("[data-stepper]").forEach((item) => {
+        const key = item.dataset.stepper;
+        item.dataset.state = key === reviewStepKey
+          ? "current"
+          : reviewStepReady(key) ? "done" : "todo";
+        if (key === reviewStepKey) item.setAttribute("aria-current", "step");
+        else item.removeAttribute("aria-current");
+      });
+    }
+
+    let message;
+    if (currentResultType === "cuento") {
+      const step = isReviewWizard() ? reviewStepKey : "questions";
+      if (step === "text") {
+        message = reviewStepReady("text")
+          ? "Cuando termines de revisar el texto, pulsa «Siguiente»."
+          : "Escribe el texto completo y el resumen para continuar.";
+      } else if (step === "scenes") {
+        if (scenesBusy) message = "Espera a que terminen de ilustrarse y narrarse las escenas.";
+        else if (scenes.length > 0 && scenesStaleNow) message = "Vuelve a generar las escenas: el texto cambió.";
+        else if (!allComplete) message = "Genera las escenas (imágenes y audios) para continuar.";
+        else message = "Escenas listas. Pulsa «Siguiente» para generar las preguntas.";
+      } else {
+        const missing = [];
+        if (!reviewStepReady("text")) missing.push("escribir el texto y el resumen (paso 1)");
+        if (!allComplete) missing.push("generar las escenas (paso 2)");
+        if (!questionsReady) missing.push("generar las preguntas");
+        const missingText = missing.length > 1
+          ? `${missing.slice(0, -1).join(", ")} y ${missing[missing.length - 1]}`
+          : missing[0];
+        message = missing.length
+          ? `Para continuar falta ${missingText}.`
+          : "Todo listo para continuar.";
+        if (scenes.length > 0 && scenesStaleNow) {
+          message += " El texto cambió: vuelve al paso 2 y genera las escenas de nuevo.";
+        }
+      }
+    } else {
+      message = resultDoneBtn.disabled
+        ? "Completa las filas marcadas para continuar."
+        : "Todo listo para continuar.";
+    }
+    reviewRequirements.textContent = message;
   }
 
   function resetResultState() {
     resetImageDesignState();
     resetBitsDesignState();
-    audioFullReady = false;
-    audioSummaryReady = false;
     questionsReady = false;
-    audioFullBlob = null;
-    audioSummaryBlob = null;
-    audioFullDurationSeconds = null;
-    audioSummaryDurationSeconds = null;
-
-    if (resultAudioFull.src) {
-      URL.revokeObjectURL(resultAudioFull.src);
-    }
-    if (resultAudioSummary.src) {
-      URL.revokeObjectURL(resultAudioSummary.src);
-    }
-    resultAudioFull.removeAttribute("src");
-    resultAudioSummary.removeAttribute("src");
-    resultAudioFullMeta.textContent = "";
-    resultAudioSummaryMeta.textContent = "";
     questionsResult.innerHTML = "";
     resultSentencesList.innerHTML = "";
+    scenesTone.value = "auto";
+    resetScenes();
+    openReviewStep("text");
 
     // El tema se elige de nuevo para cada material; parte sin selección y con
     // las opciones acotadas al periodo vigente.
@@ -2091,6 +2680,7 @@ document.addEventListener("DOMContentLoaded", () => {
     resetResultState();
     resetUploadForm();
     storyForm.reset();
+    resetBitsConsonants();
     setStoryType("cuento");
     currentResultType = "cuento";
     currentMaterialTitle = "";

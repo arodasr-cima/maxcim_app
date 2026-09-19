@@ -21,20 +21,17 @@ class StoryModels:
         }))
 
 
-class SpeechModels:
-    def __init__(self):
-        self.prompts = []
+class FishSpeech:
+    """Falso cliente de Fish Audio: dos segundos de silencio por petición."""
 
-    def generate_content(self, *, contents, **_kwargs):
-        self.prompts.append(contents)
-        pcm_two_seconds = b"\0" * (24_000 * 2 * 2)
-        inline_data = SimpleNamespace(
-            data=pcm_two_seconds,
-            mime_type="audio/pcm;rate=24000",
-        )
-        part = SimpleNamespace(inline_data=inline_data)
-        content = SimpleNamespace(parts=[part])
-        return SimpleNamespace(candidates=[SimpleNamespace(content=content)])
+    sample_rate = 24_000
+
+    def __init__(self):
+        self.texts = []
+
+    def synthesize_pcm(self, text):
+        self.texts.append(text)
+        return b"\0" * (self.sample_rate * 2 * 2)
 
 
 def test_story_is_corrected_toward_selected_duration(client, monkeypatch):
@@ -62,21 +59,49 @@ def test_story_is_corrected_toward_selected_duration(client, monkeypatch):
 
 
 def test_tts_reports_measured_wav_duration(client, monkeypatch):
-    models = SpeechModels()
-    monkeypatch.setattr(
-        app_module,
-        "gemini_client",
-        SimpleNamespace(models=models),
-    )
+    fish = FishSpeech()
+    monkeypatch.setattr(app_module, "fish_client", fish)
     story = " ".join(["palabra"] * 125)
 
-    response = client.post("/api/material/tts", json={
-        "text": story,
-        "target_duration_minutes": 1,
-    })
+    response = client.post("/api/material/tts", json={"text": story})
 
     assert response.status_code == 200
     assert response.mimetype == "audio/wav"
     assert response.headers["X-MAXCIM-Audio-Duration-Seconds"] == "2.00"
-    assert response.headers["X-MAXCIM-Target-Duration-Minutes"] == "1"
-    assert "125 palabras por minuto" in models.prompts[0]
+    # El texto llega tal cual, sin instrucciones de estilo ni de ritmo.
+    assert fish.texts == [story]
+
+
+def test_tts_splits_very_long_text_and_joins_the_audio(client, monkeypatch):
+    fish = FishSpeech()
+    monkeypatch.setattr(app_module, "fish_client", fish)
+    monkeypatch.setattr(app_module, "FISH_CHUNK_MAX_CHARS", 40)
+
+    response = client.post("/api/material/tts", json={
+        "text": "Primera oración corta. Segunda oración corta. Tercera oración corta.",
+    })
+
+    assert response.status_code == 200
+    assert len(fish.texts) == 3
+    assert response.headers["X-MAXCIM-Audio-Duration-Seconds"] == "6.00"
+
+
+def test_tts_without_fish_key_is_unavailable(client):
+    response = client.post("/api/material/tts", json={"text": "Un cuento breve."})
+    assert response.status_code == 503
+    assert "FISH_API_KEY" in response.get_json()["error"]
+
+
+def test_tts_reports_a_fish_failure_as_bad_gateway(client, monkeypatch):
+    from services.fish_audio import FishAudioError
+
+    class Broken:
+        sample_rate = 24_000
+
+        def synthesize_pcm(self, text):
+            raise FishAudioError("caído")
+
+    monkeypatch.setattr(app_module, "fish_client", Broken())
+    response = client.post("/api/material/tts", json={"text": "Un cuento breve."})
+    assert response.status_code == 502
+    assert "Fish Audio" in response.get_json()["error"]

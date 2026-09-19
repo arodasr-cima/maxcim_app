@@ -24,11 +24,11 @@ TIPO_ORACION = "oracion"
 # uploads/<id>/oraciones.json (una `oracion` guarda ahí una lista de strings).
 TIPO_ORACION_IMAGEN = "oracion_imagen"
 # "Bits" (bits de inteligencia): tarjetas palabra+imagen para practicar
-# fonética por sílabas objetivo y cantidad de sílabas por palabra (criterios
-# solo de generación con IA, no se guardan por palabra). Se guarda como una
-# lista JSON de objetos {palabra, imagen} en uploads/<id>/bits.json — sin
-# plantilla ni texto: a diferencia de oracion_imagen no hay una oración en la
-# que intercalar imágenes, cada bit es una sola palabra con una sola imagen.
+# fonética con una consonante objetivo (criterio solo de generación con IA, no
+# se guarda por palabra). Se guarda como una lista JSON de objetos
+# {palabra, imagen} en uploads/<id>/bits.json — sin plantilla ni texto: a
+# diferencia de oracion_imagen no hay una oración en la que intercalar
+# imágenes, cada bit es una sola palabra con una sola imagen.
 TIPO_BITS = "bits"
 TIPOS_MATERIAL = (TIPO_CUENTO, TIPO_ORACION, TIPO_ORACION_IMAGEN, TIPO_BITS)
 
@@ -125,7 +125,6 @@ class Material(db.Model):
     tipo_material = db.Column(db.String(255), nullable=False)
     path_audio = db.Column(db.String(500), nullable=True)
     path_texto = db.Column(db.String(500), nullable=True)
-    path_audio_resumen = db.Column(db.String(500), nullable=True)
     path_texto_resumen = db.Column(db.String(500), nullable=True)
     # Ruta del JSON de preguntas en un cuento; texto de las oraciones en una
     # oración. Es TEXT porque las oraciones no caben en VARCHAR(500).
