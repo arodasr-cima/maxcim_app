@@ -101,20 +101,12 @@
     </div>
 
     <div class="story-modal__grid" id="storyBitsFields" hidden>
-      <div class="story-field story-field--wide consonant-field">
-        <span id="bitsConsonantsLabel">Consonante a trabajar</span>
-        <div class="consonant-picker" role="radiogroup" aria-labelledby="bitsConsonantsLabel">
-          {% for row in bits_consonant_rows %}
-          <div class="consonant-picker__row">
-            {% for letter in row %}
-            <button type="button" class="consonant-btn" role="radio" data-consonant="{{ letter }}" aria-checked="false" tabindex="-1" aria-label="Consonante {{ letter }}">{{ letter }}</button>
-            {% endfor %}
-          </div>
-          {% endfor %}
-        </div>
-        <small id="bitsConsonantsSummary" aria-live="polite">Elige una consonante: las palabras empezarán con ella.</small>
-        <p class="story-field__error" id="bitsConsonantsError" role="alert" hidden>Elige una consonante.</p>
-      </div>
+      <label class="story-field story-field--wide">
+        <span>Sílabas a trabajar</span>
+        <input type="text" id="bitsSyllables" maxlength="120" placeholder="Ej.: ma, me, mi, mo, mu">
+        <small id="bitsSyllablesSummary">Sepáralas con comas o espacios. Las palabras empezarán con alguna de ellas.</small>
+        <p class="story-field__error" id="bitsSyllablesError" role="alert" hidden>Escribe al menos una sílaba.</p>
+      </label>
       <label class="story-field">
         <span>Cantidad de palabras</span>
         <input type="number" id="bitsCount" required min="1" max="20" step="1" value="{{ bits_default_words }}" inputmode="numeric">

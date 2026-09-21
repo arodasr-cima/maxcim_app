@@ -91,27 +91,27 @@ def test_image_sentences_generate_validation_runs_before_gemini(client):
 
 
 def test_bits_generate_validation_runs_before_gemini(client):
-    missing_consonant = client.post("/api/bits/generate", json={"count": 5})
-    assert missing_consonant.status_code == 400
-    assert "consonante" in missing_consonant.get_json()["error"]
+    missing_syllables = client.post("/api/bits/generate", json={"count": 5})
+    assert missing_syllables.status_code == 400
+    assert "sílaba" in missing_syllables.get_json()["error"]
 
-    # Una sola consonante: una lista (formato anterior), varias letras, vocales
-    # y valores raros se rechazan antes de llegar a Gemini.
-    for invalid in ("", "  ", None, ["M"], ["M", "S"], "MS", "ma", "A", "1", 3):
-        response = client.post("/api/bits/generate", json={"consonante": invalid, "count": 5})
+    # Sin sílabas que sobrevivan a la normalización, se rechaza antes de
+    # llegar a Gemini.
+    for invalid in ("", "  ", None, [], ["", " "], {}, 3):
+        response = client.post("/api/bits/generate", json={"silabas": invalid, "count": 5})
         assert response.status_code == 400, invalid
 
     for bad_count in (None, 0, -1, 99, "muchas"):
-        response = client.post("/api/bits/generate", json={"consonante": "M", "count": bad_count})
+        response = client.post("/api/bits/generate", json={"silabas": "ma", "count": bad_count})
         assert response.status_code == 400, bad_count
         assert "entre 1 y 20" in response.get_json()["error"]
 
     too_long = client.post("/api/bits/generate", json={
-        "consonante": "M", "count": 5, "extra_details": "x" * 1001,
+        "silabas": "ma", "count": 5, "extra_details": "x" * 1001,
     })
     assert too_long.status_code == 413
 
-    configured = client.post("/api/bits/generate", json={"consonante": "m", "count": 8})
+    configured = client.post("/api/bits/generate", json={"silabas": "ma", "count": 8})
     assert configured.status_code == 503
     assert "GOOGLE_API_KEY" in configured.get_json()["error"]
 

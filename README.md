@@ -126,6 +126,7 @@ en este repositorio.
 | `GOOGLE_API_KEY` | Opcional; activa Gemini real para cuentos, preguntas e imágenes |
 | `FISH_API_KEY` | Opcional; activa la narración real con Fish Audio (sin ella, `DEMO_MODE` genera un audio de relleno) |
 | `FISH_AUDIO_MODEL` / `FISH_AUDIO_REFERENCE_ID` / `FISH_AUDIO_SPEED` | Modelo (`s2.1-pro-free` por defecto), ID de la voz y velocidad (0.5–2.0) de Fish Audio |
+| `FISH_NARRATION_TAGS_ENABLED` | `true` por defecto: antes de narrar cada escena, Gemini inserta etiquetas de emoción/tono (`[happy]`, `[whispering]`, ...) que Fish Audio reconoce en el texto |
 
 Las variables institucionales, Google OAuth y secretos del robot no son necesarias para recorrer la prueba. No copies aquí credenciales privadas de producción.
 

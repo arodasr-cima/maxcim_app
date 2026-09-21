@@ -188,9 +188,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const storySentenceFields = document.getElementById("storySentenceFields");
   const storyImageFields = document.getElementById("storyImageFields");
   const storyBitsFields = document.getElementById("storyBitsFields");
-  const bitsConsonantButtons = Array.from(document.querySelectorAll(".consonant-btn"));
-  const bitsConsonantsSummary = document.getElementById("bitsConsonantsSummary");
-  const bitsConsonantsError = document.getElementById("bitsConsonantsError");
+  const bitsSyllablesInput = document.getElementById("bitsSyllables");
+  const bitsSyllablesError = document.getElementById("bitsSyllablesError");
   const bitsCountInput = document.getElementById("bitsCount");
   const bitsDetailsInput = document.getElementById("bitsDetails");
   const uploadTypeCuentoBtn = document.getElementById("uploadTypeCuentoBtn");
@@ -899,7 +898,7 @@ document.addEventListener("DOMContentLoaded", () => {
     ],
     bits: [
       "Crear bits con IA",
-      "Elige la consonante y cuántas palabras quieres. La IA prepara un borrador para inicial de 5 años, para revisar antes de crear el material.",
+      "Escribe las sílabas y cuántas palabras quieres. La IA prepara un borrador para inicial de 5 años, para revisar antes de crear el material.",
     ],
   };
 
@@ -925,58 +924,30 @@ document.addEventListener("DOMContentLoaded", () => {
     btn.addEventListener("click", () => setStoryType(btn.dataset.type));
   });
 
-  // Selector de consonante de "Bits": grupo de opciones (radio) con una sola
-  // consonante elegida. Solo la elegida (o la primera, si no hay ninguna) entra
-  // en el orden de tabulación; las flechas mueven y eligen.
-  const BITS_CONSONANTS_HINT = bitsConsonantsSummary.textContent;
-
-  function selectedBitsConsonant() {
-    const checked = bitsConsonantButtons.find((btn) => btn.getAttribute("aria-checked") === "true");
-    return checked ? checked.dataset.consonant : "";
+  // Sílabas de "Bits": la docente escribe una lista libre separada por comas
+  // o espacios (ej. "ma, me, mi"); las palabras generadas empezarán con
+  // alguna de ellas.
+  function selectedBitsSyllables() {
+    return bitsSyllablesInput.value
+      .split(/[,\s]+/)
+      .map((piece) => piece.trim())
+      .filter(Boolean);
   }
 
-  function setBitsConsonant(target) {
-    bitsConsonantButtons.forEach((btn) => {
-      const checked = btn === target;
-      btn.setAttribute("aria-checked", String(checked));
-      btn.tabIndex = checked || (!target && btn === bitsConsonantButtons[0]) ? 0 : -1;
-    });
-    const letter = selectedBitsConsonant();
-    bitsConsonantsSummary.textContent = letter ? `Elegida: ${letter}` : BITS_CONSONANTS_HINT;
-    if (letter) bitsConsonantsError.hidden = true;
+  function resetBitsSyllables() {
+    bitsSyllablesInput.value = "";
+    bitsSyllablesError.hidden = true;
   }
 
-  function resetBitsConsonants() {
-    setBitsConsonant(null);
-    bitsConsonantsError.hidden = true;
-  }
-
-  bitsConsonantButtons.forEach((btn, index) => {
-    btn.addEventListener("click", () => setBitsConsonant(btn));
-    btn.addEventListener("keydown", (event) => {
-      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
-      let next;
-      if (step) {
-        next = bitsConsonantButtons[(index + step + bitsConsonantButtons.length) % bitsConsonantButtons.length];
-      } else if (event.key === "Home") {
-        next = bitsConsonantButtons[0];
-      } else if (event.key === "End") {
-        next = bitsConsonantButtons[bitsConsonantButtons.length - 1];
-      }
-      if (!next) return;
-      event.preventDefault();
-      setBitsConsonant(next);
-      next.focus();
-    });
+  bitsSyllablesInput.addEventListener("input", () => {
+    if (selectedBitsSyllables().length) bitsSyllablesError.hidden = true;
   });
-
-  setBitsConsonant(null);
 
   storyOpenBtn.addEventListener("click", () => {
     resetImageDesignState();
     resetBitsDesignState();
     storyForm.reset();
-    resetBitsConsonants();
+    resetBitsSyllables();
     setStoryType("cuento");
     storyOverlay.classList.add("is-open");
   });
@@ -1109,14 +1080,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (currentStoryType === "bits") {
-      const consonante = selectedBitsConsonant();
-      if (!consonante) {
-        bitsConsonantsError.hidden = false;
-        bitsConsonantButtons[0].focus();
+      const silabas = selectedBitsSyllables();
+      if (!silabas.length) {
+        bitsSyllablesError.hidden = false;
+        bitsSyllablesInput.focus();
         return;
       }
       const bitsPayload = {
-        consonante,
+        silabas,
         count: Number.parseInt(bitsCountInput.value, 10),
         extra_details: bitsDetailsInput.value.trim(),
       };

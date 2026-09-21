@@ -24,8 +24,8 @@ TIPO_ORACION = "oracion"
 # uploads/<id>/oraciones.json (una `oracion` guarda ahí una lista de strings).
 TIPO_ORACION_IMAGEN = "oracion_imagen"
 # "Bits" (bits de inteligencia): tarjetas palabra+imagen para practicar
-# fonética con una consonante objetivo (criterio solo de generación con IA, no
-# se guarda por palabra). Se guarda como una lista JSON de objetos
+# fonética con las sílabas que indique la docente (criterio solo de
+# generación con IA, no se guarda por palabra). Se guarda como una lista JSON de objetos
 # {palabra, imagen} en uploads/<id>/bits.json — sin plantilla ni texto: a
 # diferencia de oracion_imagen no hay una oración en la que intercalar
 # imágenes, cada bit es una sola palabra con una sola imagen.

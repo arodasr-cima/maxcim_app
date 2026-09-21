@@ -277,26 +277,32 @@ def create_demo_noun_image(palabra: str, oracion: str = "") -> bytes:
     return _solid_png(256, 256, rgb)
 
 
-DEMO_BITS_WORDS = {
-    "B": ("barco", "bola"), "C": ("casa", "cama"), "D": ("dedo", "dado"),
-    "F": ("foca", "flor"), "G": ("gato", "globo"), "H": ("hoja", "huevo"),
-    "J": ("jirafa", "jabón"), "K": ("koala", "kiwi"), "L": ("luna", "lápiz"),
-    "M": ("mano", "mesa"), "N": ("nube", "naranja"), "Ñ": ("ñandú", "ñoquis"),
-    "P": ("pelota", "pato"), "Q": ("queso", "quena"), "R": ("rana", "ratón"),
-    "S": ("sol", "sapo"), "T": ("taza", "tomate"), "V": ("vaca", "vela"),
-    "W": ("waffle", "wifi"), "X": ("xilófono", "xenón"), "Y": ("yate", "yoyo"),
-    "Z": ("zapato", "zorro"),
-}
+DEMO_BITS_WORD_POOL = (
+    "barco", "bola", "casa", "cama", "dedo", "dado", "foca", "flor",
+    "gato", "globo", "hoja", "huevo", "jirafa", "jabón", "koala", "kiwi",
+    "luna", "lápiz", "mano", "mesa", "nube", "naranja", "ñandú", "ñoquis",
+    "pelota", "pato", "queso", "quena", "rana", "ratón", "sol", "sapo",
+    "taza", "tomate", "vaca", "vela", "waffle", "wifi", "xilófono", "xenón",
+    "yate", "yoyo", "zapato", "zorro",
+)
 
 
-def create_demo_bits_words(consonante: str, count: int) -> list[dict]:
-    """Deterministic {palabra} fixture for DEMO_MODE: words that start with the
-    chosen consonant, ignoring the syllable mix (mirrors create_demo_sentences
-    ignoring the real topic)."""
-    pool = DEMO_BITS_WORDS.get(consonante) or [
-        word for words in DEMO_BITS_WORDS.values() for word in words
-    ]
-    return [{"palabra": pool[index % len(pool)]} for index in range(max(1, count))]
+def create_demo_bits_words(silabas: list[str], count: int) -> list[dict]:
+    """Deterministic {palabra} fixture for DEMO_MODE: cycles through the
+    given syllables, picking a demo word that starts with each one (falls
+    back to the full pool when none matches, ignoring the syllable-count mix,
+    mirrors create_demo_sentences ignoring the real topic)."""
+    syllables = list(silabas) or [""]
+    pools = {
+        syllable: [w for w in DEMO_BITS_WORD_POOL if w.startswith(syllable)]
+        or list(DEMO_BITS_WORD_POOL)
+        for syllable in syllables
+    }
+    words = []
+    for index in range(max(1, count)):
+        pool = pools[syllables[index % len(syllables)]]
+        words.append(pool[index % len(pool)])
+    return [{"palabra": word} for word in words]
 
 
 def create_demo_scene_plan(story_text: str) -> dict:
@@ -324,7 +330,7 @@ def extract_demo_bits_words(file_storage) -> list[dict]:
     text, _summary = process_demo_document(file_storage)
     words = re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]+", text)
     count = max(3, min(8, len(words) or 3))
-    return create_demo_bits_words("", 2, count)
+    return create_demo_bits_words([""], count)
 
 
 def extract_demo_image_sentences(file_storage) -> list[dict]:

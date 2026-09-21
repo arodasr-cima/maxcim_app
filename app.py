@@ -446,17 +446,10 @@ MAX_NOUN_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024
 NOUN_IMAGE_MAX_DIMENSION = 1024
 
 # "Bits" (bits de inteligencia): tarjetas de una sola palabra + una imagen,
-# para practicar fonética con una consonante. Más simple que "oraciones con
-# imágenes": no hay oración ni plantilla que intercalar, cada bit es
-# {palabra, imagen}. La consonante a trabajar es solo criterio de generación
-# con IA, no se guarda por palabra.
-# Las 22 consonantes del alfabeto español, en las dos filas en que las muestra
-# el selector de la consola.
-BITS_CONSONANT_ROWS = (
-    ("B", "C", "D", "F", "G", "H", "J", "K", "L", "M", "N"),
-    ("Ñ", "P", "Q", "R", "S", "T", "V", "W", "X", "Y", "Z"),
-)
-BITS_CONSONANTS = tuple(letter for row in BITS_CONSONANT_ROWS for letter in row)
+# para practicar fonética con las sílabas que indique la docente. Más simple
+# que "oraciones con imágenes": no hay oración ni plantilla que intercalar,
+# cada bit es {palabra, imagen}. Las sílabas a trabajar son solo criterio de
+# generación con IA, no se guardan por palabra.
 MAX_BITS_PER_REQUEST = 20
 # Tope por material al guardar (un documento puede traer más palabras que las
 # que se generan/diseñan de una tacada). Igual criterio que
@@ -466,9 +459,19 @@ MAX_BITS_PER_MATERIAL = 120
 MAX_BITS_DESIGN_ITEMS = 20
 MAX_BIT_WORD_CHARS = 60
 MAX_BITS_CHARS = 8_000
+# La docente escribe una lista de sílabas (separadas por coma o espacio);
+# se acepta hasta este número de sílabas por lote y este largo por sílaba.
+MAX_BITS_SYLLABLES = 6
+MAX_BIT_SYLLABLE_CHARS = 10
+# En la práctica, todas las sílabas que se trabajan en un mismo lote de bits
+# suelen compartir la consonante inicial (p. ej. "ma, me, mi, mo, mu"), así
+# que todas las palabras terminan empezando con esa misma consonante. Se
+# detecta al vuelo (ver bits_shared_consonant) y se expone al robot -no se
+# guarda en bits.json, se recalcula cada vez a partir de las palabras.
+BITS_VOWELS = frozenset("AEIOUÁÉÍÓÚÜ")
 
 # Los bits generados con IA son siempre para el mismo público y con la misma
-# mezcla de sílabas: la docente elige la consonante y cuántas palabras
+# mezcla de sílabas: la docente elige las sílabas objetivo y cuántas palabras
 # quiere (con 10 el 90 % de 2 sílabas y 10 % de 3 sale exacto).
 BITS_TARGET_LEVEL = "inicial de 5 años"
 BITS_DEFAULT_WORDS = 10
@@ -477,10 +480,11 @@ BITS_THREE_SYLLABLE_SHARE = 0.10
 BITS_GENERATE_PROMPT = (
     "Genera palabras en español, reales y de uso común, para que niños de "
     "{nivel} practiquen fonética; usa vocabulario muy sencillo y cotidiano "
-    "que conozcan a esa edad. Cada palabra DEBE EMPEZAR con "
-    "la consonante objetivo -tiene que ser la primera letra de la "
-    "palabra, no basta con que la consonante aparezca en cualquier otra "
-    "posición-: {consonante}. De las {cantidad} palabras, {dos_silabas} deben "
+    "que conozcan a esa edad. Cada palabra DEBE EMPEZAR con alguna de estas "
+    "sílabas objetivo -tiene que ser la primera sílaba de la palabra, no "
+    "basta con que la sílaba aparezca en cualquier otra posición-: "
+    "{silabas}. Reparte las {cantidad} palabras entre esas sílabas lo más "
+    "parejo posible. De las {cantidad} palabras, {dos_silabas} deben "
     "tener EXACTAMENTE 2 sílabas y {tres_silabas} EXACTAMENTE 3 sílabas; "
     "ninguna puede tener otra cantidad de sílabas. "
     "Objetivo o detalles: {detalles}. Elige palabras concretas y "
@@ -561,6 +565,43 @@ STORY_WORD_COUNT_TOLERANCE = 0.08
 # se parte antes de enviar si un texto es larguísimo, porque no hay un máximo
 # documentado por petición.
 FISH_CHUNK_MAX_CHARS = 3000
+
+# Etiquetas de emoción/tono que el modelo de voz de Fish Audio reconoce de
+# forma fiable dentro del texto (p. ej. "...dijo [excited] ¡Vamos! [/excited]
+# al bosque."). Es un ajuste puramente interno para narrar mejor: Gemini las
+# inserta en el texto justo antes de narrar la escena (ver
+# annotate_narration_for_tts), la docente nunca las ve ni las edita. Solo se
+# aceptan estas -cualquier otra que Gemini invente se descarta antes de
+# mandarla a Fish, que no la reconocería.
+FISH_NARRATION_TAGS = (
+    "happy", "sad", "angry", "excited", "calm", "nervous", "confident",
+    "surprised", "satisfied", "delighted",
+    "whispering", "shouting", "screaming", "soft tone", "in a hurry tone",
+    "laughing", "sighing",
+)
+FISH_NARRATION_TAGS_ENABLED = env_bool("FISH_NARRATION_TAGS_ENABLED", True)
+
+STORY_NARRATION_TAG_PROMPT = """
+Vas a preparar un fragmento de un cuento infantil para narrarlo con una voz de
+texto a voz que reconoce, dentro del texto, etiquetas de emoción y tono entre
+corchetes. Inserta esas etiquetas donde ayuden a que la narración suene
+expresiva y acorde a lo que sienten o cómo hablan los personajes (o el
+narrador) en ese momento; unas pocas bien puestas bastan, no hace falta una
+por oración ni una en cada fragmento.
+
+Usa ÚNICAMENTE estas etiquetas, tal cual y entre corchetes: {etiquetas}. No
+inventes otras ni las combines. No cambies, agregues ni quites ninguna
+palabra del texto original -la narración debe decir exactamente lo mismo-,
+solo inserta las etiquetas entre palabras u oraciones.
+
+Personaje principal del cuento: {personaje}.
+
+Fragmento a narrar:
+{texto}
+
+Responde únicamente con un JSON de la forma {{"texto_narrado": "..."}} y sin
+texto fuera del JSON.
+""".strip()
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = {".doc", ".docx", ".pdf", ".txt"}
@@ -1253,17 +1294,58 @@ def extract_bits_words(file_storage) -> list[dict[str, object]]:
             os.remove(tmp_path)
 
 
-def filter_bits_by_consonant(
-    items: list[dict[str, object]], consonante: str
+def normalize_bits_syllables(
+    raw, *, limit: int = MAX_BITS_SYLLABLES
+) -> list[str]:
+    """Parses the syllables the teacher typed (a free-text list separated by
+    commas, spaces or line breaks, or already a list from the frontend) into
+    a deduped, lowercased list, capped at `limit` items of
+    `MAX_BIT_SYLLABLE_CHARS` characters each."""
+    pieces = raw if isinstance(raw, list) else re.split(r"[,\s]+", str(raw or ""))
+    seen: set[str] = set()
+    syllables: list[str] = []
+    for piece in pieces:
+        # NFC: una "ñ" descompuesta (n + tilde) no debe contar distinta de "ñ".
+        syllable = unicodedata.normalize("NFC", str(piece or "")).strip().lower()
+        syllable = syllable[:MAX_BIT_SYLLABLE_CHARS]
+        if not syllable or syllable in seen:
+            continue
+        seen.add(syllable)
+        syllables.append(syllable)
+        if len(syllables) >= limit:
+            break
+    return syllables
+
+
+def filter_bits_by_syllables(
+    items: list[dict[str, object]], silabas: list[str]
 ) -> list[dict[str, object]]:
-    """Descarta las palabras que no empiezan con la consonante elegida: el
-    modelo a veces se equivoca y aquí la regla es exacta."""
-    initial = consonante.casefold()
+    """Descarta las palabras que no empiezan con ninguna de las sílabas
+    elegidas: el modelo a veces se equivoca y aquí la regla es exacta."""
     return [
         item for item in items
-        # NFC: una "ñ" descompuesta (n + tilde) no debe contar como "n".
-        if unicodedata.normalize("NFC", str(item["palabra"]))[:1].casefold() == initial
+        if unicodedata.normalize("NFC", str(item["palabra"])).casefold().startswith(
+            tuple(silabas)
+        )
     ]
+
+
+def bits_shared_consonant(items: list[dict[str, object]]) -> str | None:
+    """La consonante inicial común a todas las palabras de un material
+    `bits` guardado, o None si no la comparten todas (palabras armadas a
+    mano o con sílabas de distinta consonante) o si esa letra común no es
+    una consonante. Se recalcula a partir de las palabras cada vez que se
+    pide -no se persiste- así que también funciona con bits guardados antes
+    de esta función."""
+    initials = {
+        unicodedata.normalize("NFC", str(item.get("palabra") or ""))[:1].upper()
+        for item in items
+    }
+    initials.discard("")
+    if len(initials) != 1:
+        return None
+    (initial,) = initials
+    return initial if initial.isalpha() and initial not in BITS_VOWELS else None
 
 
 def bits_syllable_mix(count: int) -> tuple[int, int]:
@@ -1276,18 +1358,18 @@ def bits_syllable_mix(count: int) -> tuple[int, int]:
 
 
 def generate_bits_words(
-    consonante: str, count: int, extra_details: str,
+    silabas: list[str], count: int, extra_details: str,
 ) -> list[dict[str, object]]:
     """Asks Gemini for `count` words for children of BITS_TARGET_LEVEL that
-    start with the target consonant (mostly 2 syllables, a few 3), later
-    paired with an image each. Returns [{palabra}], keeping only the words
-    that really start with it."""
+    start with one of the target syllables (mostly 2 syllables, a few 3),
+    later paired with an image each. Returns [{palabra}], keeping only the
+    words that really start with one of the syllables."""
     two, three = bits_syllable_mix(count)
     response = gemini_client.models.generate_content(
         model=GEMINI_MODEL,
         contents=BITS_GENERATE_PROMPT.format(
             nivel=BITS_TARGET_LEVEL,
-            consonante=consonante.lower(),
+            silabas=", ".join(silabas),
             dos_silabas=two,
             tres_silabas=three,
             detalles=extra_details or "Sin detalles adicionales.",
@@ -1298,7 +1380,7 @@ def generate_bits_words(
     data = json.loads(response.text)
     raw_items = data.get("palabras") if isinstance(data, dict) else data
     words = normalize_bits_words(raw_items if isinstance(raw_items, list) else [])
-    return filter_bits_by_consonant(words, consonante)
+    return filter_bits_by_syllables(words, silabas)
 
 
 def generate_story(
@@ -1449,6 +1531,52 @@ def generate_speech(text: str) -> tuple[bytes, float]:
 
     duration_seconds = len(pcm_data) / (sample_rate * 2)
     return buffer.getvalue(), round(duration_seconds, 2)
+
+
+_NARRATION_TAG_RE = re.compile(r"\[([^\[\]]*)\]")
+
+
+def _sanitize_narration_tags(annotated: str, original: str) -> str:
+    """Se queda solo con las etiquetas de FISH_NARRATION_TAGS (sin distinguir
+    mayúsculas; cualquier otra corchete que Gemini haya inventado se borra) y
+    comprueba que, quitándolas todas, el texto sea -palabra por palabra- el
+    original: si Gemini alteró algo más que insertar etiquetas, se descarta y
+    se devuelve `original` sin etiquetas, para no arriesgar la fidelidad de la
+    narración por una mejora cosmética."""
+    allowed = {tag.casefold() for tag in FISH_NARRATION_TAGS}
+    cleaned = _NARRATION_TAG_RE.sub(
+        lambda m: f"[{m.group(1)}]" if m.group(1).strip().casefold() in allowed else "",
+        annotated,
+    )
+    without_tags = _NARRATION_TAG_RE.sub("", cleaned)
+    if normalize_story_text(without_tags) != normalize_story_text(original):
+        return original
+    return re.sub(r" {2,}", " ", cleaned).strip()
+
+
+def annotate_narration_for_tts(texto: str, personaje: str = "") -> str:
+    """Le pide a Gemini que inserte etiquetas de emoción/tono de Fish Audio
+    (FISH_NARRATION_TAGS) dentro de `texto`, para narrar la escena de forma
+    más expresiva. Es un ajuste interno: nunca cambia lo que se lee -si
+    Gemini reescribe alguna palabra, si la respuesta no es válida o si la
+    llamada falla, se devuelve `texto` tal cual, sin etiquetas-."""
+    try:
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=STORY_NARRATION_TAG_PROMPT.format(
+                etiquetas=", ".join(f"[{tag}]" for tag in FISH_NARRATION_TAGS),
+                personaje=personaje or "sin datos",
+                texto=texto,
+            ),
+            config=types.GenerateContentConfig(response_mime_type="application/json"),
+        )
+        data = json.loads(response.text)
+        annotated = str(data.get("texto_narrado") or "") if isinstance(data, dict) else ""
+    except Exception:
+        return texto
+    if not annotated:
+        return texto
+    return _sanitize_narration_tags(annotated, texto)
 
 
 def _wav_duration_seconds(path: str) -> float:
@@ -2591,8 +2719,8 @@ def create_app(test_config: dict | None = None):
             bits_by_material=bits_by_material,
             skills=MATERIAL_SKILLS,
             question_configuration=QUESTION_CONFIGURATION,
-            bits_consonant_rows=BITS_CONSONANT_ROWS,
             bits_default_words=BITS_DEFAULT_WORDS,
+            max_bits_syllables=MAX_BITS_SYLLABLES,
             scene_tones=story_scene_tone_options(),
             periodos=available_periodos,
             temas=available_temas,
@@ -3063,21 +3191,21 @@ def create_app(test_config: dict | None = None):
     @app.route("/api/bits/generate", methods=["POST"])
     @login_required
     def bits_generate():
-        """Borrador de palabras para "bits": cada palabra empieza con la
-        consonante elegida. Cuerpo JSON: {consonante: "M", count,
+        """Borrador de palabras para "bits": cada palabra empieza con alguna
+        de las sílabas elegidas. Cuerpo JSON: {silabas: "ma, me, mi", count,
         extra_details?}. El público (BITS_TARGET_LEVEL) y la mezcla de sílabas
-        (90 % de 2, 10 % de 3) son fijos. Solo genera y devuelve las palabras
-        para que la docente las revise; la generación de imágenes es el paso
-        de diseño (/api/bits/prepare)."""
+        por palabra (90 % de 2, 10 % de 3) son fijos. Solo genera y devuelve
+        las palabras para que la docente las revise; la generación de
+        imágenes es el paso de diseño (/api/bits/prepare)."""
         payload = request.get_json(silent=True) or {}
         extra_details = str(payload.get("extra_details") or "").strip()
 
-        raw_consonant = payload.get("consonante")
-        consonante = raw_consonant.strip().upper() if isinstance(raw_consonant, str) else ""
-        if not consonante:
-            return jsonify({"error": "Falta indicar: la consonante a trabajar."}), 400
-        if consonante not in BITS_CONSONANTS:
-            return jsonify({"error": "La consonante no es válida."}), 400
+        raw_syllables = payload.get("silabas")
+        silabas = normalize_bits_syllables(raw_syllables) if isinstance(
+            raw_syllables, (str, list)
+        ) else []
+        if not silabas:
+            return jsonify({"error": "Falta indicar: al menos una sílaba a trabajar."}), 400
         try:
             count = int(payload.get("count"))
         except (TypeError, ValueError):
@@ -3089,14 +3217,14 @@ def create_app(test_config: dict | None = None):
         if len(extra_details) > 1_000:
             return jsonify({"error": "Excede el límite permitido: detalles adicionales."}), 413
 
-        title = f"Bits: consonante {consonante}"
+        title = f"Bits: sílabas {', '.join(silabas)}"
         if not gemini_client and app.config.get("DEMO_MODE"):
-            items = create_demo_bits_words(consonante, count)
+            items = create_demo_bits_words(silabas, count)
         elif not gemini_client:
             return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
         else:
             try:
-                items = generate_bits_words(consonante, count, extra_details)
+                items = generate_bits_words(silabas, count, extra_details)
             except Exception:
                 app.logger.exception("No se pudieron generar las palabras con Gemini")
                 return jsonify({"error": "No se pudieron generar las palabras con Gemini."}), 502
@@ -3886,7 +4014,10 @@ def create_app(test_config: dict | None = None):
             if not fish_client:
                 audio_bytes, duration_seconds = create_demo_wav(text)
             else:
-                audio_bytes, duration_seconds = generate_speech(text)
+                narracion = text
+                if FISH_NARRATION_TAGS_ENABLED and gemini_client:
+                    narracion = annotate_narration_for_tts(text, str(meta.get("personaje") or ""))
+                audio_bytes, duration_seconds = generate_speech(narracion)
             with open(os.path.join(staging, _scene_audio_name(index)), "wb") as f:
                 f.write(audio_bytes)
         except Exception:
@@ -4857,6 +4988,7 @@ def create_app(test_config: dict | None = None):
                 "docente": material.fk_user_name,
                 **_material_classification(material),
                 "bits": serialize_bits(material),
+                "consonante": bits_shared_consonant(material_bits_items(material)),
                 "texto_completo_url": None,
                 "texto_resumen_url": None,
                 "audio_completo_url": None,
@@ -5096,7 +5228,10 @@ def create_app(test_config: dict | None = None):
                 return jsonify({
                     "error": "Este material no es de tipo bits; usa 'bits' solo para ese tipo."
                 }), 404
-            return jsonify({"bits": serialize_bits(material)})
+            return jsonify({
+                "bits": serialize_bits(material),
+                "consonante": bits_shared_consonant(material_bits_items(material)),
+            })
 
         if recurso not in MATERIAL_DOWNLOADS:
             return jsonify({"error": "Recurso de material no reconocido."}), 404

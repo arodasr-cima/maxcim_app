@@ -292,7 +292,7 @@ guardar un bit sin ella.
 ```json
 {
   "id": 40,
-  "titulo": "Bits: consonante M",
+  "titulo": "Bits: sílabas ma, me",
   "tipo_material": "bits",
   "fecha_subido": "2026-09-15",
   "fk_user": "1000001", "docente": "Perez Flores, Ana",
@@ -304,6 +304,7 @@ guardar un bit sin ella.
     { "palabra": "mamá", "imagen_url": "https://.../api/materials/40/bit-imagen/0" },
     { "palabra": "mapa", "imagen_url": "https://.../api/materials/40/bit-imagen/1" }
   ],
+  "consonante": "M",
 
   "texto_completo_url": null, "texto_resumen_url": null,
   "audio_completo_url": null,
@@ -316,6 +317,13 @@ muestra primero la imagen (descargada de `imagen_url`), y luego la palabra
 (`palabra`). No hay `preguntas`/`respuesta_esperada` guardadas: MAXCIM no sabe
 qué le va a preguntar el robot sobre cada bit ni evalúa la respuesta — eso lo
 decide y lo resuelve el robot por su cuenta (igual que en `oracion_imagen`).
+
+- `consonante` es la letra inicial que comparten **todas** las palabras del
+  material (p. ej. `"M"` si son "mano", "mapa", "mesa"…), en mayúscula. Es
+  `null` si las palabras no comparten una consonante inicial -por ejemplo un
+  `bits` armado a mano con palabras sueltas, o con sílabas de varias
+  consonantes distintas-. MAXCIM la calcula a partir de las palabras
+  guardadas, la docente no la escribe en ningún lado.
 
 ### Ejemplo
 
@@ -390,10 +398,13 @@ Las descargas de archivo llegan con `Content-Disposition: attachment`.
 ### `recurso = bits`
 
 ```json
-{ "bits": [ { "palabra": "mamá", "imagen_url": "https://.../api/materials/40/bit-imagen/0" } ] }
+{
+  "bits": [ { "palabra": "mamá", "imagen_url": "https://.../api/materials/40/bit-imagen/0" } ],
+  "consonante": "M"
+}
 ```
 
-Mismo contenido que el campo `bits` de §4.
+Mismo contenido que los campos `bits` y `consonante` de §4.
 
 ### Ejemplo
 
@@ -653,4 +664,4 @@ en logs (no necesariamente para mostrar al alumno).
 | **material** | Contenido preparado por la docente: `cuento`, `oracion`, `oracion_imagen` o `bits`. |
 | **interacción** | Un turno pregunta→respuesta entre un alumno y MAXCIM. |
 | **plantilla** | Frase de una `oracion_imagen` con `{{0}}` / `{{1}}` donde van las imágenes. |
-| **bit** | Elemento de un material `bits`: una palabra con su imagen, para practicar fonética con una consonante. |
+| **bit** | Elemento de un material `bits`: una palabra con su imagen, para practicar fonética con sílabas. |

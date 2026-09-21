@@ -627,16 +627,16 @@ def test_image_sentence_save_rejects_items_without_two_nouns(client, periodo_tem
 def test_demo_bits_draft_has_word_each(demo_client):
     enter_demo(demo_client)
     draft = demo_client.post("/api/bits/generate", json={
-        "consonante": "S",
+        "silabas": "sa, so",
         "count": 6,
     })
     assert draft.status_code == 200
     data = draft.get_json()
-    assert data["title"] == "Bits: consonante S"
+    assert data["title"] == "Bits: sílabas sa, so"
     assert len(data["items"]) == 6
     for item in data["items"]:
         assert item["palabra"].strip()
-        assert item["palabra"][0].lower() == "s"
+        assert item["palabra"][:2].lower() in ("sa", "so")
 
 
 def test_demo_bits_design_flow_generates_and_exposes_images(
