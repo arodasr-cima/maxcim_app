@@ -85,12 +85,16 @@ oración/plantilla de `oracion_imagen`. `GET /api/materials/{id}` y
 `GET /api/materials/{id}/bits` incluyen `bits`, una entrada por palabra:
 
 ```json
-{ "palabra": "mamá", "imagen_url": "https://.../api/materials/40/bit-imagen/0" }
+{ "palabra": "feliz", "pregunta": "El sol está…",
+  "imagen_url": "https://.../api/materials/40/bit-imagen/0" }
 ```
 
-El robot muestra primero la imagen (`imagen_url`) y luego la palabra
-(`palabra`). A diferencia de `oracion_imagen`, un bit siempre tiene imagen
--MAXCIM no permite guardar uno sin ella.
+El robot muestra la imagen (`imagen_url`) y dice/muestra la `pregunta`; la
+`palabra` es la respuesta que debe dar el niño (`"El sol está…"` → «feliz»),
+así que no se antepone un «Esto es…» genérico. `pregunta` la sugiere la IA y la
+docente la revisa; es `null` en bits guardados sin ella (el robot usa entonces
+su frase por defecto). A diferencia de `oracion_imagen`, un bit siempre tiene
+imagen -MAXCIM no permite guardar uno sin ella.
 
 ## Registrar una interacción
 

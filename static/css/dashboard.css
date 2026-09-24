@@ -1935,6 +1935,39 @@ body {
   justify-content: center;
 }
 
+/* Campo de indicaciones para ajustar con IA la imagen ya generada. Va debajo
+   de "Regenerar / Subir imagen", separado por una línea fina. */
+.image-design__edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #e6eaf1;
+}
+
+.image-design__edit-apply {
+  justify-content: center;
+}
+
+.image-design__hint {
+  color: #6b7688;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+/* Campo de pregunta dentro de una fila del editor manual de bits. */
+.sentences-review__bit-question {
+  margin-top: 8px;
+}
+
+.image-design__edit-apply:disabled,
+.image-design__edit-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .image-design__remove {
   display: block;
   margin: 16px auto 0;

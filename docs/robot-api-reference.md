@@ -301,8 +301,10 @@ guardar un bit sin ella.
   "tema": { "id": 9, "nombre": "Fonética" },
 
   "bits": [
-    { "palabra": "mamá", "imagen_url": "https://.../api/materials/40/bit-imagen/0" },
-    { "palabra": "mapa", "imagen_url": "https://.../api/materials/40/bit-imagen/1" }
+    { "palabra": "feliz", "pregunta": "El sol está…",
+      "imagen_url": "https://.../api/materials/40/bit-imagen/0" },
+    { "palabra": "familia", "pregunta": "Esto es una…",
+      "imagen_url": "https://.../api/materials/40/bit-imagen/1" }
   ],
   "consonante": "M",
 
@@ -313,10 +315,20 @@ guardar un bit sin ella.
 ```
 
 **Cómo arma el robot la pantalla de un bit** — por cada elemento de `bits`:
-muestra primero la imagen (descargada de `imagen_url`), y luego la palabra
-(`palabra`). No hay `preguntas`/`respuesta_esperada` guardadas: MAXCIM no sabe
-qué le va a preguntar el robot sobre cada bit ni evalúa la respuesta — eso lo
-decide y lo resuelve el robot por su cuenta (igual que en `oracion_imagen`).
+muestra la imagen (descargada de `imagen_url`) y dice/muestra la `pregunta`. La
+`palabra` es **la respuesta que debe dar el niño**, no un texto para leer en
+voz alta junto a la imagen: la `pregunta` es el comienzo de una frase que esa
+palabra completa (`"El sol está…"` → «feliz», `"Esto es una…"` → «familia»).
+Por eso el robot no debe anteponer un `"Esto es…"` genérico: «Esto es feliz»
+no tiene sentido. MAXCIM no evalúa la respuesta — eso lo resuelve el robot por
+su cuenta (igual que en `oracion_imagen`).
+
+- `pregunta` la sugiere la IA al diseñar el material (mirando la imagen) y la
+  docente puede editarla; **nunca contiene la propia `palabra`**. Es
+  `string` de hasta 200 caracteres, o `null` si el bit se guardó sin pregunta
+  (bits anteriores a este campo, o material armado a mano sin escribirla): en
+  ese caso el robot usa su frase por defecto. El saludo o la transición («muy
+  bien, vamos con la siguiente») los agrega el robot, no vienen en la pregunta.
 
 - `consonante` es la letra inicial que comparten **todas** las palabras del
   material (p. ej. `"M"` si son "mano", "mapa", "mesa"…), en mayúscula. Es
@@ -399,7 +411,7 @@ Las descargas de archivo llegan con `Content-Disposition: attachment`.
 
 ```json
 {
-  "bits": [ { "palabra": "mamá", "imagen_url": "https://.../api/materials/40/bit-imagen/0" } ],
+  "bits": [ { "palabra": "feliz", "pregunta": "El sol está…", "imagen_url": "https://.../api/materials/40/bit-imagen/0" } ],
   "consonante": "M"
 }
 ```

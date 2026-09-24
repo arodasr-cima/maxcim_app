@@ -685,6 +685,7 @@ document.addEventListener("DOMContentLoaded", () => {
     formData.append("staging_token", bitsDesignToken);
     formData.append("bits_json", JSON.stringify(designBits.map((bit) => ({
       palabra: bit.palabra,
+      pregunta: bit.pregunta || "",
       staging_index: bit.staging_index,
     }))));
     formData.append("id_periodo", uploadPeriodoSelect.value);
@@ -710,6 +711,7 @@ document.addEventListener("DOMContentLoaded", () => {
     formData.append("title", currentMaterialTitle);
     formData.append("bits_json", JSON.stringify(items.map((item) => ({
       palabra: item.palabra,
+      pregunta: item.pregunta || "",
       staging_index: item.rowIndex,
     }))));
     formData.append("id_periodo", uploadPeriodoSelect.value);
@@ -2283,6 +2285,19 @@ document.addEventListener("DOMContentLoaded", () => {
     // IA en el paso de diseño (/api/bits/prepare).
     if (manualBitsEntryMode) {
       content.appendChild(buildNounImagePicker(0, handleFieldChange));
+
+      // Sin IA de por medio nadie sugiere la pregunta: la docente puede
+      // escribirla (opcional; sin ella el robot usa su frase por defecto).
+      const question = document.createElement("input");
+      question.type = "text";
+      question.className = "image-design__noun-input sentences-review__bit-question";
+      question.maxLength = 200;
+      question.autocomplete = "off";
+      question.placeholder = "Pregunta del robot (opcional). Ej.: El sol está…";
+      question.setAttribute("aria-label", "Pregunta del robot para esta palabra");
+      question.dataset.bitQuestion = "";
+      question.value = typeof item.pregunta === "string" ? item.pregunta : "";
+      content.appendChild(question);
     }
 
     const remove = document.createElement("button");
@@ -2352,7 +2367,13 @@ document.addEventListener("DOMContentLoaded", () => {
         seen.add(key);
         items.push({
           palabra: word,
-          ...(manualBitsEntryMode ? { rowIndex: row.dataset.rowIndex, file } : {}),
+          ...(manualBitsEntryMode
+            ? {
+              rowIndex: row.dataset.rowIndex,
+              file,
+              pregunta: row.querySelector("[data-bit-question]")?.value.replace(/\s+/g, " ").trim() || "",
+            }
+            : {}),
         });
       }
     });
@@ -2468,6 +2489,91 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } catch (error) {
       alert(error.message || "No se pudo regenerar la imagen.");
+    } finally {
+      imageDesignBusy = false;
+      button.textContent = originalLabel;
+      updateDesignNav();
+    }
+  }
+
+  // Campo "Cambiar la imagen con indicaciones" del paso de diseño (oraciones
+  // con imágenes y bits): la docente describe un ajuste y la IA lo aplica sobre
+  // la imagen ya generada en vez de crear otra desde cero. `onApply` recibe el
+  // campo de texto y el botón para que cada flujo maneje su propio estado.
+  function buildImageEditField(onApply) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "image-design__edit";
+
+    const label = document.createElement("label");
+    label.className = "image-design__noun-label";
+    const caption = document.createElement("span");
+    caption.textContent = "Cambiar la imagen con indicaciones";
+    const instruction = document.createElement("input");
+    instruction.type = "text";
+    instruction.className = "image-design__noun-input image-design__edit-input";
+    instruction.maxLength = 500;
+    instruction.autocomplete = "off";
+    instruction.placeholder = "Ej.: que sea más grande y de color azul";
+    label.append(caption, instruction);
+
+    const apply = document.createElement("button");
+    apply.type = "button";
+    apply.className = "btn btn--primary image-design__edit-apply";
+    apply.textContent = "Aplicar cambios";
+
+    const submit = () => onApply(instruction, apply);
+    apply.addEventListener("click", submit);
+    instruction.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submit();
+      }
+    });
+
+    wrapper.append(label, apply);
+    return wrapper;
+  }
+
+  async function editDesignNounImage(sentence, nounIndex, instructionInput, button) {
+    const instruction = instructionInput.value.replace(/\s+/g, " ").trim();
+    if (!instruction) {
+      alert("Escribe qué quieres cambiar de la imagen.");
+      return;
+    }
+    if (imageDesignBusy) return;
+
+    const originalLabel = button.textContent;
+    imageDesignBusy = true;
+    button.textContent = "Editando…";
+    updateDesignNav();
+    try {
+      const response = await authorizedFetch("/api/material/image-sentences/edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: imageDesignToken,
+          sentence_index: sentence.staging_index,
+          noun_index: nounIndex,
+          instruction,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo editar la imagen.");
+      }
+
+      sentence.sustantivos[nounIndex] = {
+        ...sentence.sustantivos[nounIndex],
+        imagen_url: data.imagen_url,
+      };
+      instructionInput.value = "";
+      // Solo se repinta la línea con las imágenes: así no se pierde una
+      // palabra que la docente haya escrito y todavía no haya aplicado.
+      if (designSentences[currentDesignIndex] === sentence) {
+        renderDesignMixedLine(sentence);
+      }
+    } catch (error) {
+      alert(error.message || "No se pudo editar la imagen.");
     } finally {
       imageDesignBusy = false;
       button.textContent = originalLabel;
@@ -2604,7 +2710,10 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       actions.append(regenerate, fileInput, upload);
-      group.append(label, actions);
+      const edit = buildImageEditField((instructionInput, applyButton) => {
+        editDesignNounImage(sentence, nounIndex, instructionInput, applyButton);
+      });
+      group.append(label, actions, edit);
       imageDesignNounControls.appendChild(group);
     });
     updateDesignNav();
@@ -2748,6 +2857,127 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // La pregunta que el robot dice y muestra por cada bit. La palabra es la
+  // respuesta del niño, así que la pregunta es el comienzo de una frase que esa
+  // palabra completa ("El sol está…" -> "feliz"). La IA la propone al generar el
+  // diseño; aquí la docente la edita o pide otra sugerencia para la imagen
+  // actual (útil tras regenerar, editar o subir la imagen).
+  async function suggestBitsQuestion(bit, wordInput, questionInput, button) {
+    const proposedWord = wordInput.value.replace(/\s+/g, " ").trim();
+    if (!proposedWord) {
+      alert("Escribe la palabra antes de sugerir la pregunta.");
+      return;
+    }
+    if (bitsDesignBusy) return;
+
+    const originalLabel = button.textContent;
+    bitsDesignBusy = true;
+    button.textContent = "Sugiriendo…";
+    updateBitsDesignNav();
+    try {
+      const response = await authorizedFetch("/api/bits/suggest-question", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: bitsDesignToken,
+          item_index: bit.staging_index,
+          palabra: proposedWord,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo sugerir la pregunta.");
+      }
+
+      bit.pregunta = typeof data.pregunta === "string" ? data.pregunta : "";
+      questionInput.value = bit.pregunta;
+    } catch (error) {
+      alert(error.message || "No se pudo sugerir la pregunta.");
+    } finally {
+      bitsDesignBusy = false;
+      button.textContent = originalLabel;
+      updateBitsDesignNav();
+    }
+  }
+
+  function buildBitsQuestionField(bit, wordInput) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "image-design__edit";
+
+    const label = document.createElement("label");
+    label.className = "image-design__noun-label";
+    const caption = document.createElement("span");
+    caption.textContent = "Pregunta del robot";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "image-design__noun-input";
+    input.maxLength = 200;
+    input.autocomplete = "off";
+    input.placeholder = "Ej.: El sol está…";
+    input.value = bit.pregunta || "";
+    input.addEventListener("input", () => {
+      bit.pregunta = input.value;
+    });
+    const hint = document.createElement("small");
+    hint.className = "image-design__hint";
+    hint.textContent = "La palabra es lo que responde el niño: la pregunta debe quedar completa al decirla.";
+    label.append(caption, input, hint);
+
+    const suggest = document.createElement("button");
+    suggest.type = "button";
+    suggest.className = "btn btn--ghost image-design__edit-apply";
+    suggest.textContent = "Sugerir otra";
+    suggest.addEventListener("click", () => {
+      suggestBitsQuestion(bit, wordInput, input, suggest);
+    });
+
+    wrapper.append(label, suggest);
+    return wrapper;
+  }
+
+  async function editBitsDesignImage(bit, instructionInput, button) {
+    const instruction = instructionInput.value.replace(/\s+/g, " ").trim();
+    if (!instruction) {
+      alert("Escribe qué quieres cambiar de la imagen.");
+      return;
+    }
+    if (bitsDesignBusy) return;
+
+    const originalLabel = button.textContent;
+    bitsDesignBusy = true;
+    button.textContent = "Editando…";
+    updateBitsDesignNav();
+    try {
+      const response = await authorizedFetch("/api/bits/edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: bitsDesignToken,
+          item_index: bit.staging_index,
+          instruction,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo editar la imagen.");
+      }
+
+      bit.imagen_url = data.imagen_url;
+      instructionInput.value = "";
+      // Solo se cambia la imagen: no se repintan los controles para no perder
+      // una palabra escrita que todavía no se haya aplicado.
+      if (designBits[currentBitsDesignIndex] === bit) {
+        bitsDesignImage.src = bit.imagen_url;
+      }
+    } catch (error) {
+      alert(error.message || "No se pudo editar la imagen.");
+    } finally {
+      bitsDesignBusy = false;
+      button.textContent = originalLabel;
+      updateBitsDesignNav();
+    }
+  }
+
   async function uploadBitsDesignImage(bit, input, fileInput, button) {
     const file = fileInput.files?.[0];
     if (!file || bitsDesignBusy) {
@@ -2871,7 +3101,10 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     actions.append(regenerate, fileInput, upload);
-    group.append(label, actions);
+    const edit = buildImageEditField((instructionInput, applyButton) => {
+      editBitsDesignImage(bit, instructionInput, applyButton);
+    });
+    group.append(label, actions, edit, buildBitsQuestionField(bit, input));
     bitsDesignNounControls.appendChild(group);
     updateBitsDesignNav();
   }

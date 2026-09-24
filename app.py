@@ -53,6 +53,7 @@ from models import (
 )
 from services.demo import (
     DemoInstitutionalClient,
+    create_demo_bit_question,
     create_demo_bits_words,
     create_demo_image_sentences,
     create_demo_noun_image,
@@ -70,9 +71,11 @@ from services.fish_audio import FishAudioClient
 from services.google_oauth import GoogleOIDCClient, GoogleOIDCError
 from services.institutional import (
     InstitutionalAPIError,
+    InstitutionalAuthenticationError,
     InstitutionalClient,
     InstitutionalConfigurationError,
 )
+from services.login_throttle import LoginThrottle
 from services.periodos import current_periodo, periodo_for_date
 
 load_dotenv()
@@ -295,6 +298,18 @@ NOUN_IMAGE_STYLE_PROMPT = (
     "or geographic sense, and never a different word that merely looks or "
     "sounds similar.{contexto_clause}"
 )
+# Ajuste de una imagen de sustantivo/bit ya generada, a partir de lo que pide
+# la docente en el paso de diseño (mismo estilo que NOUN_IMAGE_STYLE_PROMPT).
+NOUN_IMAGE_EDIT_PROMPT = (
+    "Edit the attached educational illustration of a single object for a "
+    "children's book. Apply ONLY the change requested below and keep "
+    "everything else exactly as it is: the same subject, the clean lines, the "
+    "soft flat colors, the centered composition and the plain white "
+    "background. The requested change was written by a teacher and may be in "
+    "Spanish: {cambio} "
+    "No text, no letters, no captions, no watermark."
+)
+NOUN_IMAGE_EDIT_MAX_CHARS = 500
 # Imágenes en revisión (aún sin material) mientras la docente aprueba el
 # diseño. Viven bajo UPLOADS_ROOT/_previews/<token>/ y se limpian al guardar
 # o cuando superan esta antigüedad.
@@ -509,6 +524,36 @@ BITS_EXTRACT_PROMPT = (
     "títulos, numeración y encabezados que no sean palabras del ejercicio. "
     'Responde únicamente con un JSON de la forma {"palabras": ["mano", '
     '"lupa"]}, en el mismo orden del documento y sin texto fuera del JSON.'
+)
+
+# Pregunta que el robot dice y muestra por cada bit. La palabra del bit es la
+# RESPUESTA que dará el niño, así que la pregunta es el comienzo de una frase
+# que esa palabra completa ("El sol está…" -> "feliz"): no vale un "Esto es…"
+# genérico, porque "Esto es feliz" no tiene sentido. La IA la sugiere mirando
+# la imagen y la docente la revisa en el paso de diseño.
+MAX_BIT_QUESTION_CHARS = 200
+BITS_QUESTION_PROMPT = (
+    "Eres parte de una actividad en la que un robot conversa con niños de "
+    "{nivel}. El robot muestra una tarjeta con una imagen y el niño debe "
+    "responder con UNA sola palabra: la palabra de la tarjeta. De cada tarjeta "
+    "recibes esa palabra (la respuesta esperada) y su imagen. Escribe lo que el "
+    "robot preguntará en voz alta y en pantalla: una frase incompleta o una "
+    "pregunta corta en español que el niño completa diciendo exactamente esa "
+    "palabra, de modo que la frase completa tenga sentido y concuerde en "
+    "género, número y artículo. Observa la imagen para decidir por qué "
+    "preguntar: si muestra un sol con cara feliz y la palabra es «feliz», la "
+    "pregunta es «El sol está…»; si muestra una familia y la palabra es "
+    "«familia», es «Esto es una…»; si muestra un perro y la palabra es "
+    "«perro», es «Esto es un…». No uses «Esto es…» por costumbre: úsalo solo "
+    "cuando la palabra nombra lo que se ve; si la palabra describe un estado, "
+    "una cualidad o una acción, pregunta por eso (p. ej. «El sol está…», «La "
+    "niña se siente…»). Reglas: la pregunta NUNCA contiene la palabra de la "
+    "tarjeta ni pistas que la regalen; no incluyas saludos, felicitaciones ni "
+    "transiciones («muy bien», «vamos con la siguiente»): el robot las agrega; "
+    "máximo 12 palabras; si es una frase incompleta termina con puntos "
+    "suspensivos (…). Responde únicamente con un JSON de la forma "
+    '{{"preguntas": [{{"tarjeta": 1, "pregunta": "El sol está…"}}]}}, una '
+    "entrada por tarjeta y sin texto fuera del JSON."
 )
 
 QUESTION_TYPES = ["literales", "inferenciales", "criticas"]
@@ -1051,6 +1096,20 @@ def generate_story_scene_image(
     return _first_inline_image(response, "El modelo no devolvió ninguna imagen para esta escena.")
 
 
+def edit_noun_image(image: bytes, instruction: str) -> bytes:
+    """Modifica la imagen de un sustantivo o bit ya generada según lo que pidió
+    la docente, conservando estilo, sujeto y fondo salvo lo indicado."""
+    response = gemini_client.models.generate_content(
+        model=GEMINI_IMAGE_MODEL,
+        contents=[
+            NOUN_IMAGE_EDIT_PROMPT.format(cambio=instruction),
+            types.Part.from_bytes(data=image, mime_type=_image_mime_type(image)),
+        ],
+        config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+    )
+    return _first_inline_image(response, "El modelo no devolvió la imagen editada.")
+
+
 def edit_story_scene_image(image: bytes, instruction: str) -> bytes:
     """Modifica una ilustración ya generada según lo que pidió la docente,
     conservando personaje, composición y estilo salvo lo indicado."""
@@ -1383,6 +1442,55 @@ def generate_bits_words(
     return filter_bits_by_syllables(words, silabas)
 
 
+def clean_bit_question(raw) -> str:
+    """Pregunta de un bit tal como la escribió o editó la docente: espacios
+    normalizados y con tope de largo. Vacía si no hay nada."""
+    return " ".join(str(raw or "").split()).strip()[:MAX_BIT_QUESTION_CHARS]
+
+
+def normalize_bit_question(raw, palabra: str) -> str:
+    """Como clean_bit_question, pero para lo que devuelve la IA: descarta (deja
+    vacía) la pregunta que contenga la propia palabra, porque esa palabra es la
+    respuesta del niño y la pregunta no puede regalarla."""
+    question = clean_bit_question(raw)
+    word = " ".join(str(palabra or "").split()).casefold()
+    if question and word and re.search(
+        rf"(?<!\w){re.escape(word)}(?!\w)", question.casefold()
+    ):
+        return ""
+    return question
+
+
+def suggest_bits_questions(cards: list[tuple[str, bytes]]) -> list[str]:
+    """Pide a Gemini, mirando cada imagen, la pregunta que el robot hará por
+    tarjeta. `cards` es [(palabra, imagen_png)]; devuelve una pregunta por
+    tarjeta, en el mismo orden ("" si la IA no dio una válida)."""
+    contents: list = [BITS_QUESTION_PROMPT.format(nivel=BITS_TARGET_LEVEL)]
+    for number, (palabra, image) in enumerate(cards, start=1):
+        contents.append(f"Tarjeta {number} · palabra: «{palabra}»")
+        contents.append(types.Part.from_bytes(data=image, mime_type=_image_mime_type(image)))
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=contents,
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    data = json.loads(response.text)
+    rows = data.get("preguntas") if isinstance(data, dict) else data
+    by_card: dict[int, object] = {}
+    for position, row in enumerate(rows if isinstance(rows, list) else [], start=1):
+        if not isinstance(row, dict):
+            continue
+        try:
+            number = int(row.get("tarjeta", position))
+        except (TypeError, ValueError):
+            number = position
+        by_card.setdefault(number, row.get("pregunta"))
+    return [
+        normalize_bit_question(by_card.get(number), palabra)
+        for number, (palabra, _image) in enumerate(cards, start=1)
+    ]
+
+
 def generate_story(
     character: str,
     setting: str,
@@ -1691,6 +1799,8 @@ def create_app(test_config: dict | None = None):
         GOOGLE_OAUTH_ALLOWED_DOMAINS=os.environ.get("GOOGLE_OAUTH_ALLOWED_DOMAINS", ""),
         GOOGLE_OAUTH_REDIRECT_URI=os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", ""),
         GOOGLE_OAUTH_TIMEOUT_SECONDS=float(os.environ.get("GOOGLE_OAUTH_TIMEOUT_SECONDS", "8")),
+        LOGIN_MAX_ATTEMPTS=int(os.environ.get("LOGIN_MAX_ATTEMPTS", "3")),
+        LOGIN_LOCKOUT_SECONDS=int(os.environ.get("LOGIN_LOCKOUT_SECONDS", "900")),
         DEMO_MODE=DEFAULT_DEMO_MODE,
         SESSION_COOKIE_NAME="maxcim_session",
         SESSION_COOKIE_HTTPONLY=True,
@@ -1768,6 +1878,11 @@ def create_app(test_config: dict | None = None):
         app.config
     )
     app.extensions["google_oidc_client"] = google_oidc_client
+    login_throttle = LoginThrottle(
+        max_attempts=app.config.get("LOGIN_MAX_ATTEMPTS", 3),
+        lockout_seconds=app.config.get("LOGIN_LOCKOUT_SECONDS", 900),
+    )
+    app.extensions["login_throttle"] = login_throttle
 
     def token_cipher() -> Fernet:
         key = str(app.config.get("SESSION_TOKEN_ENCRYPTION_KEY") or "").strip()
@@ -2146,12 +2261,44 @@ def create_app(test_config: dict | None = None):
                 error = "Ingresa tu ID y credencial institucional."
                 status_code = 400
             else:
+                client_ip = request.remote_addr or ""
+                wait_seconds = login_throttle.retry_after(client_ip, institutional_id)
+                if wait_seconds:
+                    # Bloqueado: no se consulta a CIMA, así que un ataque de
+                    # fuerza bruta tampoco la satura ni consume sus intentos.
+                    minutes = (wait_seconds + 59) // 60
+                    response, status = render_login_page(
+                        "Demasiados intentos fallidos. Vuelve a intentarlo en "
+                        f"{minutes} minuto{'s' if minutes != 1 else ''}.",
+                        429,
+                    )
+                    response = app.make_response((response, status))
+                    response.headers["Retry-After"] = str(wait_seconds)
+                    return response
                 try:
                     authenticated = institutional_client.authenticate(institutional_id, credential)
+                    login_throttle.record_success(client_ip, institutional_id)
                     return complete_teacher_login(
                         authenticated,
                         request.args.get("next"),
                     )
+                except InstitutionalAuthenticationError as exc:
+                    # Solo cuentan las credenciales rechazadas; una caída de
+                    # CIMA (503/502) no debe bloquear a nadie.
+                    remaining = login_throttle.record_failure(client_ip, institutional_id)
+                    error = str(exc)
+                    status_code = exc.status_code
+                    if remaining == 0:
+                        error = (
+                            "Demasiados intentos fallidos. Tu acceso queda bloqueado "
+                            f"por {max(1, login_throttle.lockout_seconds // 60)} minutos."
+                        )
+                        status_code = 429
+                    else:
+                        error += (
+                            f" Te quedan {remaining} "
+                            f"intento{'s' if remaining != 1 else ''}."
+                        )
                 except InstitutionalAPIError as exc:
                     error = str(exc)
                     status_code = exc.status_code
@@ -2216,7 +2363,7 @@ def create_app(test_config: dict | None = None):
                 nonce=nonce,
                 code_verifier=code_verifier,
             )
-            authenticated = institutional_client.authenticate_google(identity.id_token)
+            authenticated = institutional_client.authenticate_google(identity.email)
             return complete_teacher_login(authenticated, next_path)
         except (GoogleOIDCError, InstitutionalAPIError) as exc:
             return google_error_redirect(str(exc))
@@ -3274,6 +3421,40 @@ def create_app(test_config: dict | None = None):
     def _image_sentences_ready() -> bool:
         return bool(gemini_client) or bool(app.config.get("DEMO_MODE"))
 
+    def _edit_staged_image(staging: str, image_name: str, raw_instruction):
+        """Aplica la indicación de la docente a una imagen en revisión y la
+        sobrescribe. Compartido por /image-sentences/edit y /bits/edit.
+        Devuelve None si todo salió bien, o la respuesta de error ya armada;
+        ante cualquier fallo la imagen original queda intacta."""
+        instruction = " ".join(str(raw_instruction or "").split())
+        if not instruction:
+            return jsonify({"error": "Escribe qué quieres cambiar de la imagen."}), 400
+        if len(instruction) > NOUN_IMAGE_EDIT_MAX_CHARS:
+            return jsonify({
+                "error": f"El cambio no puede superar {NOUN_IMAGE_EDIT_MAX_CHARS} caracteres."
+            }), 413
+        if not _image_sentences_ready():
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+
+        image_path = os.path.join(staging, image_name)
+        try:
+            with open(image_path, "rb") as f:
+                current = f.read()
+        except OSError:
+            return jsonify({"error": "Esta imagen todavía no existe para editar."}), 409
+
+        try:
+            if not gemini_client and app.config.get("DEMO_MODE"):
+                edited = create_demo_noun_image(instruction)
+            else:
+                edited = edit_noun_image(current, instruction)
+            with open(image_path, "wb") as f:
+                f.write(edited)
+        except Exception:
+            app.logger.exception("No se pudo editar la imagen %s", image_name)
+            return jsonify({"error": "No se pudo editar la imagen. Inténtalo de nuevo."}), 502
+        return None
+
     def _noun_source(oracion: dict, noun_index: int) -> str:
         """"ia" o "manual", según si la imagen actual de ese sustantivo vino
         de Gemini o de un archivo que subió la docente. Solo es informativo
@@ -3447,6 +3628,54 @@ def create_app(test_config: dict | None = None):
             ) + f"?v={secrets.token_hex(4)}",
         })
 
+    @app.route("/api/material/image-sentences/edit", methods=["POST"])
+    @login_required
+    def image_sentences_edit():
+        """Ajusta la imagen ya generada de un sustantivo según la indicación de
+        la docente, sin regenerarla desde cero. Cuerpo JSON:
+        {token, sentence_index, noun_index, instruction}."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            staging = _staging_dir(payload.get("token"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        try:
+            with open(os.path.join(staging, "meta.json"), "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            return jsonify({
+                "error": "La previsualización expiró. Vuelve a generar el diseño."
+            }), 404
+
+        oraciones = meta.get("oraciones", [])
+        sentence_index = payload.get("sentence_index")
+        noun_index = payload.get("noun_index")
+        if (
+            isinstance(sentence_index, bool)
+            or not isinstance(sentence_index, int)
+            or not 0 <= sentence_index < len(oraciones)
+            or isinstance(noun_index, bool)
+            or noun_index not in (0, 1)
+        ):
+            return jsonify({"error": "Índice de oración o sustantivo inválido."}), 400
+
+        error = _edit_staged_image(
+            staging,
+            _staging_image_name(sentence_index, noun_index),
+            payload.get("instruction"),
+        )
+        if error:
+            return error
+
+        return jsonify({
+            "imagen_url": url_for(
+                "image_sentence_preview_image",
+                token=payload.get("token"),
+                s=sentence_index,
+                n=noun_index,
+            ) + f"?v={secrets.token_hex(4)}",
+        })
+
     @app.route("/api/material/image-sentences/upload-image", methods=["POST"])
     @login_required
     def image_sentences_upload_image():
@@ -3555,11 +3784,17 @@ def create_app(test_config: dict | None = None):
         with open(os.path.join(staging, "meta.json"), "wb") as f:
             f.write(json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
 
+    def _suggest_bit_questions(cards: list[tuple[str, bytes]]) -> list[str]:
+        if not gemini_client and app.config.get("DEMO_MODE"):
+            return [create_demo_bit_question(palabra) for palabra, _image in cards]
+        return suggest_bits_questions(cards)
+
     def _staged_bits_preview_payload(token: str, meta: dict) -> list[dict]:
         return [
             {
                 "index": index,
                 "palabra": item.get("palabra", ""),
+                "pregunta": item.get("pregunta", ""),
                 "fuente": item.get("fuente", "ia"),
                 "imagen_url": url_for("bit_preview_image", token=token, i=index),
             }
@@ -3580,7 +3815,7 @@ def create_app(test_config: dict | None = None):
         if not items:
             return jsonify({"error": "Cada bit debe tener su palabra."}), 400
 
-        bits = [{"palabra": item["palabra"], "fuente": "ia"} for item in items]
+        bits = [{"palabra": item["palabra"], "pregunta": "", "fuente": "ia"} for item in items]
 
         if not _image_sentences_ready():
             return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
@@ -3589,9 +3824,11 @@ def create_app(test_config: dict | None = None):
         token = uuid.uuid4().hex
         staging = _staging_dir(token)
         os.makedirs(staging, exist_ok=True)
+        images: list[bytes] = []
         try:
             for item_index, item in enumerate(bits):
                 data = _make_noun_image(item["palabra"], "")
+                images.append(data)
                 with open(
                     os.path.join(staging, _staging_bit_image_name(item_index)), "wb"
                 ) as f:
@@ -3600,6 +3837,20 @@ def create_app(test_config: dict | None = None):
             shutil.rmtree(staging, ignore_errors=True)
             app.logger.exception("No se pudieron generar las imágenes de los bits")
             return jsonify({"error": "No se pudieron generar las imágenes con Gemini."}), 502
+
+        # Con las imágenes ya hechas, la IA propone la pregunta del robot para
+        # cada una (una sola consulta para todas). Si falla no se pierde el
+        # diseño: las preguntas quedan vacías y la docente las escribe o pide
+        # una sugerencia por bit.
+        try:
+            questions = _suggest_bit_questions(
+                [(item["palabra"], image) for item, image in zip(bits, images)]
+            )
+        except Exception:
+            app.logger.exception("No se pudieron sugerir las preguntas de los bits")
+            questions = []
+        for item, question in zip(bits, questions):
+            item["pregunta"] = question
 
         meta = {
             "created_at": utc_now().isoformat(),
@@ -3661,6 +3912,98 @@ def create_app(test_config: dict | None = None):
         return jsonify({
             "palabra": palabra,
             "fuente": "ia",
+            "imagen_url": url_for(
+                "bit_preview_image", token=payload.get("token"), i=item_index,
+            ) + f"?v={secrets.token_hex(4)}",
+        })
+
+    @app.route("/api/bits/suggest-question", methods=["POST"])
+    @login_required
+    def bits_suggest_question():
+        """Sugiere de nuevo la pregunta del robot para un bit del diseño en
+        revisión, mirando su imagen actual (por si se regeneró, se editó o se
+        subió otra). Cuerpo JSON: {token, item_index, palabra?}; `palabra` es lo
+        que la docente tiene escrito ahora, aunque aún no lo haya aplicado."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            staging = _staging_dir(payload.get("token"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        try:
+            with open(os.path.join(staging, "meta.json"), "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            return jsonify({
+                "error": "La previsualización expiró. Vuelve a generar el diseño."
+            }), 404
+
+        items = meta.get("items", [])
+        item_index = payload.get("item_index")
+        if (
+            isinstance(item_index, bool)
+            or not isinstance(item_index, int)
+            or not 0 <= item_index < len(items)
+        ):
+            return jsonify({"error": "Índice de bit inválido."}), 400
+
+        palabra = " ".join(str(payload.get("palabra") or "").split())[:MAX_BIT_WORD_CHARS]
+        palabra = palabra or items[item_index].get("palabra", "")
+        if not palabra:
+            return jsonify({"error": "Escribe la palabra antes de sugerir la pregunta."}), 400
+        if not _image_sentences_ready():
+            return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
+
+        try:
+            with open(os.path.join(staging, _staging_bit_image_name(item_index)), "rb") as f:
+                image = f.read()
+        except OSError:
+            return jsonify({"error": "Este bit todavía no tiene imagen."}), 409
+
+        try:
+            question = _suggest_bit_questions([(palabra, image)])[0]
+        except Exception:
+            app.logger.exception("No se pudo sugerir la pregunta del bit")
+            return jsonify({"error": "No se pudo sugerir la pregunta. Inténtalo de nuevo."}), 502
+        if not question:
+            return jsonify({
+                "error": "La IA no propuso una pregunta válida. Inténtalo de nuevo o escríbela tú."
+            }), 502
+        return jsonify({"pregunta": question})
+
+    @app.route("/api/bits/edit", methods=["POST"])
+    @login_required
+    def bits_edit():
+        """Ajusta la imagen ya generada de un bit según la indicación de la
+        docente, sin regenerarla desde cero. Cuerpo JSON:
+        {token, item_index, instruction}."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            staging = _staging_dir(payload.get("token"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        try:
+            with open(os.path.join(staging, "meta.json"), "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            return jsonify({
+                "error": "La previsualización expiró. Vuelve a generar el diseño."
+            }), 404
+
+        item_index = payload.get("item_index")
+        if (
+            isinstance(item_index, bool)
+            or not isinstance(item_index, int)
+            or not 0 <= item_index < len(meta.get("items", []))
+        ):
+            return jsonify({"error": "Índice de bit inválido."}), 400
+
+        error = _edit_staged_image(
+            staging, _staging_bit_image_name(item_index), payload.get("instruction")
+        )
+        if error:
+            return error
+
+        return jsonify({
             "imagen_url": url_for(
                 "bit_preview_image", token=payload.get("token"), i=item_index,
             ) + f"?v={secrets.token_hex(4)}",
@@ -4379,9 +4722,13 @@ def create_app(test_config: dict | None = None):
             # cuyas imágenes usar; permite que la docente haya quitado filas en
             # el paso de diseño. Se conserva junto al item normalizado.
             index_by_palabra = {}
+            # La pregunta que el robot hará por cada bit (opcional): viaja en el
+            # mismo objeto que la palabra y se enlaza a ella igual que el índice.
+            question_by_palabra = {}
             for raw in parsed if isinstance(parsed, list) else []:
                 if isinstance(raw, dict) and raw.get("palabra"):
                     key = " ".join(str(raw["palabra"]).split()).casefold()
+                    question_by_palabra.setdefault(key, clean_bit_question(raw.get("pregunta")))
                     if "staging_index" in raw:
                         try:
                             index_by_palabra[key] = int(raw["staging_index"])
@@ -4450,7 +4797,11 @@ def create_app(test_config: dict | None = None):
                         }), 400
                     rel = f"img/{_unique_noun_filename(item['palabra'], position, 0, used_names)}"
                     shutil.copyfile(src, os.path.join(material_dir, rel))
-                    bits_payload.append({"palabra": item["palabra"], "imagen": rel})
+                    bits_payload.append({
+                        "palabra": item["palabra"],
+                        "imagen": rel,
+                        "pregunta": question_by_palabra.get(key, ""),
+                    })
             else:
                 # Modo editor: sin IA de por medio, la imagen de cada palabra
                 # llega tal cual la subió la docente.
@@ -4471,7 +4822,11 @@ def create_app(test_config: dict | None = None):
                     rel = f"img/{_unique_noun_filename(item['palabra'], position, 0, used_names)}"
                     with open(os.path.join(material_dir, rel), "wb") as f:
                         f.write(data)
-                    bits_payload.append({"palabra": item["palabra"], "imagen": rel})
+                    bits_payload.append({
+                        "palabra": item["palabra"],
+                        "imagen": rel,
+                        "pregunta": question_by_palabra.get(key, ""),
+                    })
 
             with open(os.path.join(material_dir, "bits.json"), "wb") as f:
                 f.write(json.dumps(bits_payload, ensure_ascii=False, indent=2).encode("utf-8"))
@@ -4815,10 +5170,12 @@ def create_app(test_config: dict | None = None):
         return data if isinstance(data, list) else []
 
     def material_bits_items(material) -> list[dict[str, object]]:
-        """Canonical form for a `bits` material: [{palabra, imagen|None}].
-        `imagen` es la ruta relativa a la carpeta del material (p.ej.
-        "img/mano.png") o None. Mirrors material_image_sentences, simplified
-        to a single word per item instead of {texto, sustantivos}."""
+        """Canonical form for a `bits` material: [{palabra, imagen|None,
+        pregunta}]. `imagen` es la ruta relativa a la carpeta del material
+        (p.ej. "img/mano.png") o None; `pregunta` es lo que el robot dice y
+        muestra por ese bit ("" en los bits guardados antes de existir).
+        Mirrors material_image_sentences, simplified to a single word per item
+        instead of {texto, sustantivos}."""
         rows = _material_bits_file(material) or []
         seen: set[str] = set()
         out: list[dict[str, object]] = []
@@ -4833,7 +5190,11 @@ def create_app(test_config: dict | None = None):
                 continue
             seen.add(key)
             imagen = str(raw.get("imagen") or "").strip() or None
-            out.append({"palabra": palabra, "imagen": imagen})
+            out.append({
+                "palabra": palabra,
+                "imagen": imagen,
+                "pregunta": clean_bit_question(raw.get("pregunta")),
+            })
             if len(out) >= MAX_BITS_PER_MATERIAL:
                 break
         return out
@@ -4868,11 +5229,13 @@ def create_app(test_config: dict | None = None):
         ]
 
     def serialize_bits(material) -> list[dict[str, object]]:
-        """Robot-facing view: cada palabra con la URL autenticada de su
-        imagen."""
+        """Robot-facing view: cada palabra con la pregunta que el robot debe
+        hacer (None en los bits guardados sin ella: el robot usa entonces su
+        frase por defecto) y la URL autenticada de su imagen."""
         return [
             {
                 "palabra": item["palabra"],
+                "pregunta": item["pregunta"] or None,
                 "imagen_url": (
                     _material_bits_image_url(material, index) if item["imagen"] else None
                 ),

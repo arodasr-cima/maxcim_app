@@ -48,10 +48,10 @@ class GoogleInstitutionalClient:
     google_login_ready = True
 
     def __init__(self):
-        self.received_google_token = None
+        self.received_google_email = None
 
-    def authenticate_google(self, verified_id_token):
-        self.received_google_token = verified_id_token
+    def authenticate_google(self, verified_email):
+        self.received_google_email = verified_email
         return AuthenticatedTeacher(
             institutional_id="DOC-GOOGLE-1",
             display_name="Docente Google",
@@ -85,6 +85,8 @@ def make_google_app(google_client=None, institutional_client=None):
         "SQLALCHEMY_ENGINE_OPTIONS": {},
         "INSTITUTIONAL_CLIENT": institutional_client,
         "GOOGLE_OIDC_CLIENT": google_client,
+        # Evita que un GOOGLE_OAUTH_REDIRECT_URI del .env local altere la URI derivada.
+        "GOOGLE_OAUTH_REDIRECT_URI": "",
     })
     with application.app_context():
         db.create_all()
@@ -122,7 +124,7 @@ def test_google_login_creates_only_an_institutional_teacher_session():
         )
         assert callback.status_code == 302
         assert callback.location == "/material"
-        assert institutional_client.received_google_token == "verified-google-id-token"
+        assert institutional_client.received_google_email == "docente@cima.edu"
         assert google_client.authorization_request["redirect_uri"] == (
             "http://localhost/auth/google/callback"
         )
@@ -234,7 +236,7 @@ def test_google_oidc_rejects_an_account_outside_the_allowed_workspace(monkeypatc
         )
 
 
-def test_institutional_api_maps_google_token_to_an_active_teacher(monkeypatch):
+def test_institutional_api_maps_google_email_to_an_active_teacher(monkeypatch):
     client = InstitutionalClient(
         base_url="https://api.cima.example",
         login_path="/v1/auth/login",
@@ -266,12 +268,17 @@ def test_institutional_api_maps_google_token_to_an_active_teacher(monkeypatch):
         return {"content": {"token": f"Bearer {fake_jwt}"}}
 
     monkeypatch.setattr(client, "_request", fake_request)
-    teacher = client.authenticate_google("verified-id-token")
+    teacher = client.authenticate_google("docente@cima.edu")
     assert captured == {
         "method": "POST",
         "path": "/v1/auth/google",
         "token": None,
-        "payload": {"id_token": "verified-id-token"},
+        "payload": {
+            "email": "docente@cima.edu",
+            "password": "email",
+            "idSystem": 21,
+            "identifier": "Sin IP",
+        },
     }
     assert teacher.institutional_id == "1000001"
     assert teacher.display_name == "Docente Demo Uno"

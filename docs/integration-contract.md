@@ -368,7 +368,7 @@ se hizo con este endpoint.
 
 ### 3.2 Canje del acceso con Google
 
-MAXCIM completa OpenID Connect con Google y valida firma, audiencia, expiración, correo verificado, dominio, `state`, `nonce` y PKCE. Luego envía el ID token verificado a la ruta configurada por `INSTITUTIONAL_API_GOOGLE_LOGIN_PATH`:
+MAXCIM completa OpenID Connect con Google y valida firma, audiencia, expiración, correo verificado, dominio, `state`, `nonce` y PKCE. Luego envía **solo el correo verificado** a la ruta configurada por `INSTITUTIONAL_API_GOOGLE_LOGIN_PATH`, con el mismo cuerpo que el login normal (sección 3.1) cambiando `username` por `email` y usando el literal `"email"` como `password`:
 
 ```http
 POST {INSTITUTIONAL_API_BASE_URL}{INSTITUTIONAL_API_GOOGLE_LOGIN_PATH}
@@ -378,11 +378,14 @@ Accept: application/json
 
 ```json
 {
-  "id_token": "<id_token_firmado_por_google>"
+  "email": "docente@colegiocima.edu.pe",
+  "password": "email",
+  "idSystem": 21,
+  "identifier": "Sin IP"
 }
 ```
 
-La API institucional debe volver a validar el token, asociarlo con una docente activa y devolver exactamente la misma forma de respuesta de la sección 3.1. Una cuenta no asociada debe responder `401` o `403`. MAXCIM descarta los tokens de Google después del canje y conserva solo el token institucional cifrado.
+La API institucional asocia el correo con una docente activa y devuelve exactamente la misma forma de respuesta de la sección 3.1. Una cuenta no asociada debe responder `401` o `403`. MAXCIM descarta los tokens de Google después de validarlos y conserva solo el token institucional cifrado.
 
 ### 3.3 Aulas de la docente — confirmado contra la API real
 

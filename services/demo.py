@@ -72,7 +72,7 @@ class DemoInstitutionalClient:
             raise InstitutionalAuthenticationError()
         return self._teacher(teacher_id)
 
-    def authenticate_google(self, verified_id_token: str) -> AuthenticatedTeacher:
+    def authenticate_google(self, verified_email: str) -> AuthenticatedTeacher:
         return self._teacher(DEMO_TEACHER_ID)
 
     @staticmethod
@@ -303,6 +303,12 @@ def create_demo_bits_words(silabas: list[str], count: int) -> list[dict]:
         pool = pools[syllables[index % len(syllables)]]
         words.append(pool[index % len(pool)])
     return [{"palabra": word} for word in words]
+
+
+def create_demo_bit_question(palabra: str) -> str:
+    """Deterministic question stem for DEMO_MODE: never contains the word (it
+    is the answer), so it mirrors what the real model must respect."""
+    return "Esto es…"
 
 
 def create_demo_scene_plan(story_text: str) -> dict:

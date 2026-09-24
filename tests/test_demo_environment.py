@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import tempfile
 import wave
 from datetime import date, timedelta
@@ -972,3 +973,149 @@ def test_demo_can_register_and_list_interactions(demo_app, demo_client):
     assert listed.status_code == 200
     assert len(listed.get_json()) == 1
     assert listed.get_json()[0]["rpta_correcta"] is True
+
+
+def _demo_periodo_and_tema(demo_app):
+    with demo_app.app_context():
+        periodo = Periodo(
+            nombre="I BIMESTRE", anio=date.today().year,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=1),
+        )
+        db.session.add(periodo)
+        db.session.commit()
+        tema = Tema(nombre="Fonética", fk_user="DOC-DEMO-01", id_periodo=periodo.id)
+        db.session.add(tema)
+        db.session.commit()
+        return periodo.id, tema.id
+
+
+def test_bits_question_reaches_the_robot_json(demo_app, demo_client, tmp_path, monkeypatch):
+    """La pregunta sugerida (y editada por la docente) se guarda en bits.json y
+    el robot la recibe junto a cada palabra; un bit sin pregunta llega como null."""
+    monkeypatch.setitem(demo_app.config, "UPLOADS_ROOT", str(tmp_path))
+    enter_demo(demo_client)
+    periodo_id, tema_id = _demo_periodo_and_tema(demo_app)
+
+    prepared = demo_client.post(
+        "/api/bits/prepare",
+        json={"title": "Bits", "items": [{"palabra": "feliz"}, {"palabra": "familia"}]},
+    ).get_json()
+    # En demo, la IA sugiere una pregunta por bit desde el diseño.
+    assert [item["pregunta"] for item in prepared["items"]] == ["Esto es…", "Esto es…"]
+
+    saved = demo_client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits",
+            "title": "Bits",
+            "staging_token": prepared["token"],
+            "bits_json": json.dumps([
+                {"palabra": "feliz", "pregunta": "  El sol   está… ", "staging_index": 0},
+                {"palabra": "familia", "pregunta": "", "staging_index": 1},
+            ]),
+            "id_periodo": str(periodo_id),
+            "id_tema": str(tema_id),
+        },
+    )
+    assert saved.status_code == 200
+    material_id = saved.get_json()["material_id"]
+
+    robot_view = demo_client.get(
+        f"/api/materials/{material_id}?teacher_id=DOC-DEMO-01"
+    ).get_json()
+    assert [(b["palabra"], b["pregunta"]) for b in robot_view["bits"]] == [
+        ("feliz", "El sol está…"),  # espacios normalizados
+        ("familia", None),          # sin pregunta -> el robot usa su frase por defecto
+    ]
+    resource = demo_client.get(
+        f"/api/materials/{material_id}/bits?teacher_id=DOC-DEMO-01"
+    ).get_json()
+    assert resource["bits"] == robot_view["bits"]
+
+
+def test_bits_saved_before_questions_existed_expose_a_null_question(
+    demo_app, demo_client, tmp_path, monkeypatch
+):
+    monkeypatch.setitem(demo_app.config, "UPLOADS_ROOT", str(tmp_path))
+    enter_demo(demo_client)
+    periodo_id, tema_id = _demo_periodo_and_tema(demo_app)
+    prepared = demo_client.post(
+        "/api/bits/prepare", json={"title": "Bits", "items": [{"palabra": "mano"}]},
+    ).get_json()
+    material_id = demo_client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits", "title": "Bits",
+            "staging_token": prepared["token"],
+            "bits_json": json.dumps([{"palabra": "mano", "staging_index": 0}]),
+            "id_periodo": str(periodo_id), "id_tema": str(tema_id),
+        },
+    ).get_json()["material_id"]
+
+    # Simula un bits.json anterior a la función: sin la clave "pregunta".
+    with demo_app.app_context():
+        material = db.session.get(Material, material_id)
+        path = os.path.join(str(tmp_path), *material.path_preguntas.split("/")[1:])
+        with open(path, encoding="utf-8") as f:
+            rows = json.load(f)
+        for row in rows:
+            row.pop("pregunta", None)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(rows, f)
+
+    bits = demo_client.get(
+        f"/api/materials/{material_id}?teacher_id=DOC-DEMO-01"
+    ).get_json()["bits"]
+    assert bits[0]["pregunta"] is None
+
+
+def test_manual_bits_editor_saves_the_typed_question(
+    demo_app, demo_client, tmp_path, monkeypatch
+):
+    monkeypatch.setitem(demo_app.config, "UPLOADS_ROOT", str(tmp_path))
+    enter_demo(demo_client)
+    periodo_id, tema_id = _demo_periodo_and_tema(demo_app)
+
+    saved = demo_client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits", "title": "Bits",
+            "bits_json": json.dumps([
+                {"palabra": "feliz", "pregunta": "La niña se siente…", "staging_index": "0"},
+            ]),
+            "id_periodo": str(periodo_id), "id_tema": str(tema_id),
+            "imagen_0": (io.BytesIO(_tiny_png((0, 128, 255))), "cara.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert saved.status_code == 200
+
+    bits = demo_client.get(
+        f"/api/materials/{saved.get_json()['material_id']}?teacher_id=DOC-DEMO-01"
+    ).get_json()["bits"]
+    assert bits[0]["pregunta"] == "La niña se siente…"
+
+
+def test_bits_question_is_capped_in_length(demo_app, demo_client, tmp_path, monkeypatch):
+    monkeypatch.setitem(demo_app.config, "UPLOADS_ROOT", str(tmp_path))
+    enter_demo(demo_client)
+    periodo_id, tema_id = _demo_periodo_and_tema(demo_app)
+
+    saved = demo_client.post(
+        "/api/material/save",
+        data={
+            "tipo_material": "bits", "title": "Bits",
+            "bits_json": json.dumps([
+                {"palabra": "feliz", "pregunta": "x" * 5000, "staging_index": "0"},
+            ]),
+            "id_periodo": str(periodo_id), "id_tema": str(tema_id),
+            "imagen_0": (io.BytesIO(_tiny_png((0, 128, 255))), "cara.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert saved.status_code == 200
+    bits = demo_client.get(
+        f"/api/materials/{saved.get_json()['material_id']}?teacher_id=DOC-DEMO-01"
+    ).get_json()["bits"]
+    assert len(bits[0]["pregunta"]) == app_module.MAX_BIT_QUESTION_CHARS

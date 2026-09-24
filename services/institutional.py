@@ -14,6 +14,9 @@ import requests
 # tráfico real). Se deja como constante para no reintroducir por error una
 # IP real u otro valor.
 CIMA_IDENTIFIER_PLACEHOLDER = "Sin IP"
+# El endpoint de Google de CIMA no recibe contraseña: espera este literal en
+# el campo "password" (según el ejemplo de petición entregado por CIMA).
+CIMA_GOOGLE_PASSWORD_MARKER = "email"
 
 
 class InstitutionalAPIError(RuntimeError):
@@ -157,7 +160,7 @@ class InstitutionalClient:
 
     @property
     def google_login_ready(self) -> bool:
-        return bool(self.base_url and self.google_login_path)
+        return bool(self.base_url and self.google_login_path and self.id_system)
 
     def _url(self, path: str) -> str:
         if not self.base_url:
@@ -334,12 +337,15 @@ class InstitutionalClient:
         )
         return self._parse_jwt_teacher(payload)
 
-    def authenticate_google(self, verified_id_token: str) -> AuthenticatedTeacher:
-        """Exchange a verified Google ID token for the institutional session.
+    def authenticate_google(self, verified_email: str) -> AuthenticatedTeacher:
+        """Exchange a Google-verified institutional email for the CIMA session.
 
-        The institutional API must validate the token again and map its stable
-        Google subject/email to an active teacher record. MAXCIM never creates a
-        teacher solely from Google profile claims.
+        MAXCIM ya validó el ID token de Google (firma, nonce, dominio y correo
+        verificado); a CIMA solo se le envía el correo. Su endpoint de Google
+        recibe el mismo cuerpo que el login normal, con `email` en lugar de
+        `username` y el literal "email" como `password`. CIMA asocia el correo
+        con una docente activa; MAXCIM nunca crea una docente solo a partir del
+        perfil de Google.
         """
 
         if not self.google_login_ready:
@@ -349,12 +355,15 @@ class InstitutionalClient:
         payload = self._request(
             "POST",
             self.google_login_path,
-            payload={"id_token": verified_id_token},
+            payload={
+                "email": verified_email,
+                "password": CIMA_GOOGLE_PASSWORD_MARKER,
+                "idSystem": self.id_system,
+                "identifier": CIMA_IDENTIFIER_PLACEHOLDER,
+            },
         )
-        # Contrato sin confirmar todavía: se asume el mismo sobre
-        # {"content": {"token": "<jwt>"}} que el login con usuario y
-        # contraseña. Ajustar si CIMA confirma una forma distinta para este
-        # endpoint (ver docs/integration-contract.md, sección 3.2).
+        # Se asume el mismo sobre {"content": {"token": "<jwt>"}} que el login
+        # con usuario y contraseña (ver docs/integration-contract.md, 3.2).
         return self._parse_jwt_teacher(payload)
 
     def list_teacher_classrooms(self, access_token: str, teacher_id: str) -> list[Classroom]:
