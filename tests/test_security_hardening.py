@@ -42,6 +42,8 @@ def test_pages_send_a_script_restricting_content_security_policy(client):
     assert "script-src 'self'" in policy
     assert "object-src 'none'" in policy
     assert "frame-ancestors 'self'" in policy
+    # form-action rompería el botón de Google (redirige a accounts.google.com).
+    assert "form-action" not in policy
 
 
 def test_uploaded_image_with_huge_declared_dimensions_is_rejected():

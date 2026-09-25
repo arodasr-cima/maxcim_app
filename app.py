@@ -2245,11 +2245,14 @@ def create_app(test_config: dict | None = None):
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         # Solo se restringen scripts y objetos (la consola no usa scripts ni
         # manejadores en línea): un XSS futuro no podría ejecutar código. Los
-        # estilos, imágenes y medios quedan sin restringir a propósito.
+        # estilos, imágenes y medios quedan sin restringir a propósito. NO
+        # añadir `form-action`: el botón de Google es un <form> que redirige a
+        # accounts.google.com, y los navegadores aplican esa directiva también
+        # a la redirección (bloquearía el login con Google).
         response.headers.setdefault(
             "Content-Security-Policy",
             "script-src 'self'; object-src 'none'; base-uri 'self'; "
-            "form-action 'self'; frame-ancestors 'self'",
+            "frame-ancestors 'self'",
         )
         # HSTS solo si de verdad se sirve por HTTPS (Secure cookie activa); en
         # desarrollo local sobre http:// forzaría al navegador a exigir TLS.
