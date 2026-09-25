@@ -485,12 +485,14 @@ MAX_BIT_SYLLABLE_CHARS = 10
 # guarda en bits.json, se recalcula cada vez a partir de las palabras.
 BITS_VOWELS = frozenset("AEIOUÁÉÍÓÚÜ")
 
-# Los bits generados con IA son siempre para el mismo público y con la misma
-# mezcla de sílabas: la docente elige las sílabas objetivo y cuántas palabras
-# quiere (con 10 el 90 % de 2 sílabas y 10 % de 3 sale exacto).
+# Los bits generados con IA son siempre para el mismo público: la docente
+# elige las sílabas objetivo, cuántas palabras quiere y, con sus propias
+# palabras, cuántas sílabas debe tener cada palabra (texto libre que va tal
+# cual al prompt; si lo deja vacío se usa el valor por defecto).
 BITS_TARGET_LEVEL = "inicial de 5 años"
 BITS_DEFAULT_WORDS = 10
-BITS_THREE_SYLLABLE_SHARE = 0.10
+BITS_DEFAULT_SYLLABLE_COUNT = "2 sílabas"
+MAX_BITS_SYLLABLE_COUNT_CHARS = 120
 
 BITS_GENERATE_PROMPT = (
     "Genera palabras en español, reales y de uso común, para que niños de "
@@ -499,9 +501,9 @@ BITS_GENERATE_PROMPT = (
     "sílabas objetivo -tiene que ser la primera sílaba de la palabra, no "
     "basta con que la sílaba aparezca en cualquier otra posición-: "
     "{silabas}. Reparte las {cantidad} palabras entre esas sílabas lo más "
-    "parejo posible. De las {cantidad} palabras, {dos_silabas} deben "
-    "tener EXACTAMENTE 2 sílabas y {tres_silabas} EXACTAMENTE 3 sílabas; "
-    "ninguna puede tener otra cantidad de sílabas. "
+    "parejo posible. Cantidad de sílabas que debe tener cada palabra, según "
+    "indicó la docente: {cantidad_silabas}. Cumple esa indicación en todas "
+    "las palabras; ninguna puede tener otra cantidad de sílabas. "
     "Objetivo o detalles: {detalles}. Elige palabras concretas y "
     "fáciles de representar con un dibujo inequívoco (evita palabras "
     "abstractas, difíciles, nombres propios, o palabras con varios "
@@ -1407,30 +1409,21 @@ def bits_shared_consonant(items: list[dict[str, object]]) -> str | None:
     return initial if initial.isalpha() and initial not in BITS_VOWELS else None
 
 
-def bits_syllable_mix(count: int) -> tuple[int, int]:
-    """(palabras de 2 sílabas, palabras de 3 sílabas): 90 % / 10 %, con al
-    menos una de 3 cuando hay dos o más palabras."""
-    three = round(count * BITS_THREE_SYLLABLE_SHARE)
-    if count >= 2:
-        three = max(1, three)
-    return count - three, three
-
-
 def generate_bits_words(
     silabas: list[str], count: int, extra_details: str,
+    syllable_count: str = BITS_DEFAULT_SYLLABLE_COUNT,
 ) -> list[dict[str, object]]:
     """Asks Gemini for `count` words for children of BITS_TARGET_LEVEL that
-    start with one of the target syllables (mostly 2 syllables, a few 3),
+    start with one of the target syllables and have the number of syllables
+    the teacher described in free text (`syllable_count`, passed verbatim),
     later paired with an image each. Returns [{palabra}], keeping only the
     words that really start with one of the syllables."""
-    two, three = bits_syllable_mix(count)
     response = gemini_client.models.generate_content(
         model=GEMINI_MODEL,
         contents=BITS_GENERATE_PROMPT.format(
             nivel=BITS_TARGET_LEVEL,
             silabas=", ".join(silabas),
-            dos_silabas=two,
-            tres_silabas=three,
+            cantidad_silabas=syllable_count,
             detalles=extra_details or "Sin detalles adicionales.",
             cantidad=count,
         ),
@@ -2867,6 +2860,8 @@ def create_app(test_config: dict | None = None):
             skills=MATERIAL_SKILLS,
             question_configuration=QUESTION_CONFIGURATION,
             bits_default_words=BITS_DEFAULT_WORDS,
+            bits_default_syllable_count=BITS_DEFAULT_SYLLABLE_COUNT,
+            max_bits_syllable_count_chars=MAX_BITS_SYLLABLE_COUNT_CHARS,
             max_bits_syllables=MAX_BITS_SYLLABLES,
             scene_tones=story_scene_tone_options(),
             periodos=available_periodos,
@@ -3340,8 +3335,10 @@ def create_app(test_config: dict | None = None):
     def bits_generate():
         """Borrador de palabras para "bits": cada palabra empieza con alguna
         de las sílabas elegidas. Cuerpo JSON: {silabas: "ma, me, mi", count,
-        extra_details?}. El público (BITS_TARGET_LEVEL) y la mezcla de sílabas
-        por palabra (90 % de 2, 10 % de 3) son fijos. Solo genera y devuelve
+        syllable_count?, extra_details?}. El público (BITS_TARGET_LEVEL) es
+        fijo; syllable_count es texto libre con la cantidad de sílabas de
+        cada palabra (va directo al prompt; por defecto "2 sílabas"). Solo
+        genera y devuelve
         las palabras para que la docente las revise; la generación de
         imágenes es el paso de diseño (/api/bits/prepare)."""
         payload = request.get_json(silent=True) or {}
@@ -3361,6 +3358,12 @@ def create_app(test_config: dict | None = None):
             return jsonify({
                 "error": f"La cantidad debe estar entre 1 y {MAX_BITS_PER_REQUEST} palabras."
             }), 400
+        syllable_count = " ".join(str(payload.get("syllable_count") or "").split())
+        if len(syllable_count) > MAX_BITS_SYLLABLE_COUNT_CHARS:
+            return jsonify({
+                "error": "Excede el límite permitido: cantidad de sílabas por palabra."
+            }), 413
+        syllable_count = syllable_count or BITS_DEFAULT_SYLLABLE_COUNT
         if len(extra_details) > 1_000:
             return jsonify({"error": "Excede el límite permitido: detalles adicionales."}), 413
 
@@ -3371,7 +3374,9 @@ def create_app(test_config: dict | None = None):
             return jsonify({"error": "GOOGLE_API_KEY no está configurada en el servidor."}), 503
         else:
             try:
-                items = generate_bits_words(silabas, count, extra_details)
+                items = generate_bits_words(
+                    silabas, count, extra_details, syllable_count
+                )
             except Exception:
                 app.logger.exception("No se pudieron generar las palabras con Gemini")
                 return jsonify({"error": "No se pudieron generar las palabras con Gemini."}), 502

@@ -110,7 +110,12 @@
       <label class="story-field">
         <span>Cantidad de palabras</span>
         <input type="number" id="bitsCount" required min="1" max="20" step="1" value="{{ bits_default_words }}" inputmode="numeric">
-        <small>Entre 1 y 20. Casi todas de 2 sílabas y algunas de 3.</small>
+        <small>Entre 1 y 20.</small>
+      </label>
+      <label class="story-field">
+        <span>Sílabas por palabra</span>
+        <input type="text" id="bitsSyllableCount" maxlength="{{ max_bits_syllable_count_chars }}" placeholder="Ej.: 3 sílabas, de 2 a 3 sílabas">
+        <small>Con tus propias palabras. Si lo dejas vacío: {{ bits_default_syllable_count }}.</small>
       </label>
       <label class="story-field story-field--wide">
         <span>Detalles opcionales</span>

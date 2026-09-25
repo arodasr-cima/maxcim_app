@@ -191,6 +191,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const bitsSyllablesInput = document.getElementById("bitsSyllables");
   const bitsSyllablesError = document.getElementById("bitsSyllablesError");
   const bitsCountInput = document.getElementById("bitsCount");
+  const bitsSyllableCountInput = document.getElementById("bitsSyllableCount");
   const bitsDetailsInput = document.getElementById("bitsDetails");
   const uploadTypeCuentoBtn = document.getElementById("uploadTypeCuentoBtn");
   const uploadTypeOracionBtn = document.getElementById("uploadTypeOracionBtn");
@@ -1091,6 +1092,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const bitsPayload = {
         silabas,
         count: Number.parseInt(bitsCountInput.value, 10),
+        syllable_count: bitsSyllableCountInput.value.trim(),
         extra_details: bitsDetailsInput.value.trim(),
       };
 

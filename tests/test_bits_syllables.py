@@ -120,21 +120,42 @@ def test_audience_is_fixed_but_the_teacher_chooses_how_many_words(client, fake_b
     assert "Escribe exactamente 6 palabras" in prompt
 
 
-def test_prompt_asks_for_a_ninety_ten_syllable_mix_of_the_chosen_count(client, fake_bits):
+def test_prompt_includes_the_teachers_own_words_about_syllable_count(client, fake_bits):
     models = fake_bits(["mano"])
 
-    generate(client, "ma", count=10)
-    generate(client, "ma", count=20)
+    generate(client, "ma", syllable_count="  de tres   o cuatro sílabas ")
 
-    assert "9 deben tener EXACTAMENTE 2 sílabas y 1 EXACTAMENTE 3 sílabas" in models.prompts[0]
-    assert "18 deben tener EXACTAMENTE 2 sílabas y 2 EXACTAMENTE 3 sílabas" in models.prompts[1]
+    assert "según indicó la docente: de tres o cuatro sílabas." in models.prompts[0]
 
 
-@pytest.mark.parametrize("count, expected", [
-    (10, (9, 1)), (20, (18, 2)), (5, (4, 1)), (2, (1, 1)), (1, (1, 0)), (15, (13, 2)),
-])
-def test_syllable_mix_is_about_ninety_ten_with_at_least_one_of_three(count, expected):
-    assert app_module.bits_syllable_mix(count) == expected
+@pytest.mark.parametrize("empty", [None, "", "   ", 0])
+def test_empty_syllable_count_falls_back_to_the_default(client, fake_bits, empty):
+    models = fake_bits(["mano"])
+
+    generate(client, "ma", syllable_count=empty)
+
+    default = app_module.BITS_DEFAULT_SYLLABLE_COUNT
+    assert f"según indicó la docente: {default}." in models.prompts[0]
+
+
+def test_syllable_count_absent_falls_back_to_the_default(client, fake_bits):
+    models = fake_bits(["mano"])
+
+    generate(client, "ma")
+
+    default = app_module.BITS_DEFAULT_SYLLABLE_COUNT
+    assert f"según indicó la docente: {default}." in models.prompts[0]
+
+
+def test_overlong_syllable_count_is_rejected(client, fake_bits):
+    models = fake_bits(["mano"])
+    too_long = "x" * (app_module.MAX_BITS_SYLLABLE_COUNT_CHARS + 1)
+
+    response = generate(client, "ma", syllable_count=too_long)
+
+    assert response.status_code == 413
+    assert "sílabas por palabra" in response.get_json()["error"]
+    assert models.prompts == []
 
 
 @pytest.mark.parametrize("raw, expected", [
@@ -162,9 +183,16 @@ def test_bits_form_has_a_free_text_syllables_field_instead_of_a_consonant_picker
 def test_bits_form_asks_for_syllables_word_count_and_optional_details(client):
     html = client.get("/material").get_data(as_text=True)
 
-    for removed in ('id="bitsGrade"', 'id="bitsSyllableCount"'):
-        assert removed not in html
+    assert 'id="bitsGrade"' not in html
     default = app_module.BITS_DEFAULT_WORDS
     assert f'id="bitsCount" required min="1" max="{app_module.MAX_BITS_PER_REQUEST}"' in html
     assert f'value="{default}"' in html
     assert 'id="bitsDetails"' in html
+
+
+def test_bits_form_has_a_free_text_syllable_count_field(client):
+    html = client.get("/material").get_data(as_text=True)
+
+    limit = app_module.MAX_BITS_SYLLABLE_COUNT_CHARS
+    assert f'<input type="text" id="bitsSyllableCount" maxlength="{limit}"' in html
+    assert "syllable-picker" not in html
