@@ -3,77 +3,61 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#132a5e">
+  <meta name="description" content="Aplicación docente para preparar y revisar interacciones orales con MAXCIM.">
   <meta name="csrf-token" content="{{ csrf_token() }}">
-  <meta name="description" content="Panel docente MAXCIM.">
-  <title>{% block title %}MAXCIM{% endblock %}</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="MAXCIM">
+  <title>{% block title %}MAXCIM Docentes{% endblock %}</title>
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='icons/maxcim.svg') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/maxcim-192.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
   <div class="app-shell">
+
     <aside class="sidebar" id="sidebar">
       <div class="sidebar__brand">
-        <div class="sidebar__logo" aria-hidden="true">MX</div>
-        <div class="sidebar__brand-copy">
-          <div class="sidebar__name">MAXCIM</div>
-          <div class="sidebar__eyebrow">COLEGIO CIMA</div>
-        </div>
+        <div class="sidebar__logo">MX</div>
+        <div class="sidebar__name">MAXCIM</div>
+        {% if demo_mode %}<span class="sidebar__environment">PRUEBAS</span>{% endif %}
       </div>
 
-      <nav class="sidebar__nav" aria-label="Navegación principal">
-        <a href="{{ url_for('web.dashboard') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'tablon' else '' }}">
-          <span class="sidebar__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/><path d="M9.5 19.5v-6h5v6"/></svg></span>
-          <span class="sidebar__label">Tablón</span>
+      <nav class="sidebar__nav">
+        <a href="{{ url_for('dashboard') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'tablon' else '' }}">
+          <span class="sidebar__icon">🏠</span>Tablón
         </a>
-        <a href="{{ url_for('web.material') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'material' else '' }}">
-          <span class="sidebar__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2h9v10.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19Z"/><path d="M3.5 9h17"/></svg></span>
-          <span class="sidebar__label">Material</span>
+        <a href="{{ url_for('temas') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'temas' else '' }}">
+          <span class="sidebar__icon">🏷️</span>Temas
         </a>
-        <a href="{{ url_for('web.sesiones') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'sesiones' else '' }}">
-          <span class="sidebar__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="15" rx="2"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17"/><path d="M8 14h2M14 14h2M8 17.5h2M14 17.5h2"/></svg></span>
-          <span class="sidebar__label">Sesiones</span>
+        <a href="{{ url_for('material') }}" class="sidebar__link {{ 'sidebar__link--active' if active_nav == 'material' else '' }}">
+          <span class="sidebar__icon">📁</span>Material
         </a>
       </nav>
-
-      {% if config["AUTH_PROVIDER"] == "cima" %}
-      <div class="sidebar__demo sidebar__demo--official">
-        <span aria-hidden="true"></span>
-        <div><strong>Fuente institucional CIMA</strong><small>Sin aulas ficticias</small></div>
-      </div>
-      {% elif config["AUTH_PROVIDER"] == "google" %}
-      <div class="sidebar__demo sidebar__demo--official">
-        <span aria-hidden="true"></span>
-        <div><strong>Google institucional</strong><small>Docente verificado</small></div>
-      </div>
-      {% elif demo_mode %}
-      <div class="sidebar__demo">
-        <span aria-hidden="true"></span>
-        <div><strong>Modo demostración</strong><small>Datos ficticios activos</small></div>
-      </div>
-      {% endif %}
     </aside>
 
     <div class="main">
+
       <header class="topbar">
-        <div class="topbar__start">
-          <button type="button" class="topbar__toggle" id="sidebarToggle" aria-label="Mostrar u ocultar menú" aria-expanded="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-          </button>
-          <div class="topbar__heading">{% block topbar_title %}Panel docente{% endblock %}</div>
-        </div>
+        <button type="button" class="topbar__toggle" id="sidebarToggle" aria-label="Mostrar/ocultar menú">☰</button>
 
         <div class="profile">
-          <button type="button" class="profile__trigger" id="profileTrigger" aria-label="Abrir menú de perfil" aria-expanded="false">
-            <div class="profile__avatar">{{ user.initials }}</div>
+          <button type="button" class="profile__trigger" id="profileTrigger">
+            <div class="profile__avatar">
+              {% if user.photo_url %}<img class="profile__avatar-img" src="{{ user.photo_url }}" alt="" referrerpolicy="no-referrer">{% endif %}
+              {{ user.initials }}
+            </div>
             <div class="profile__info">
-              <div class="profile__name">{{ user.display_name }}</div>
+              <div class="profile__name">{{ user.name }}</div>
               <div class="profile__role">{{ user.role }}</div>
             </div>
-            <span class="profile__caret" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg></span>
+            <span class="profile__caret">▾</span>
           </button>
           <div class="profile__menu" id="profileMenu">
-            <div class="profile__menu-user"><strong>{{ user.display_name }}</strong><span>{% if config["AUTH_PROVIDER"] == "cima" %}Cuenta institucional CIMA{% elif config["AUTH_PROVIDER"] == "google" %}Google Workspace · {{ user.email }}{% else %}{{ user.email }}{% endif %}</span></div>
-            <div class="profile__menu-divider"></div>
-            <form action="{{ url_for('auth.logout') }}" method="post">
+            <div class="profile__session-id">ID institucional: {{ user.id }}</div>
+            <form action="{{ url_for('logout') }}" method="post">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="profile__menu-danger">Cerrar sesión</button>
             </form>
@@ -81,19 +65,14 @@
         </div>
       </header>
 
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          <div class="app-flashes" role="status" aria-live="polite">
-            {% for category, message in messages %}<div class="app-flash app-flash--{{ category }}">{{ message }}</div>{% endfor %}
-          </div>
-        {% endif %}
-      {% endwith %}
-
-      <main class="content">{% block content %}{% endblock %}</main>
+      <main class="content">
+        {% block content %}{% endblock %}
+      </main>
     </div>
   </div>
-  <div class="toast" id="appToast" role="status" aria-live="polite"></div>
-  <script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
+
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/pwa.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

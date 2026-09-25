@@ -1,155 +1,201 @@
-# MAXCIM · Demostración funcional
+# MAXCIM App · Entorno de pruebas
 
-MAXCIM es una aplicación Flask que demuestra el flujo docente de un robot educativo orientado al fortalecimiento de habilidades sociocomunicativas. Incluye tablero de aulas, biblioteca inteligente de lecturas, generación demostrativa de audios y preguntas, y planificación de sesiones.
+Aplicación web instalable y aislada para probar la experiencia actual de MAXCIM sin conectarse a la base institucional. Conserva la interfaz y el flujo del producto, pero cuando los servicios externos no están configurados utiliza docentes, aulas, alumnos y respuestas de IA exclusivos de prueba.
 
-## Inicio rápido
+La versión real permanece separada en `maxcim_app_production`: este repositorio no debe conectarse a su base de datos ni compartir sus variables privadas.
 
-Requisitos: Python 3.11 o superior.
+La estudiante o el estudiante conversa oralmente con MAXCIM. La docente utiliza esta consola desde iPhone, iPad, Android, Windows o macOS para preparar material y revisar el avance de sus aulas.
+
+## Flujo actual de la docente
+
+1. La docente inicia sesión con sus credenciales institucionales o mediante el canje de Google. En producción, la identidad siempre se valida con la API institucional.
+2. `/dashboard` consulta y muestra las aulas asignadas a la docente.
+3. `/aulas/<ref>` consulta la matrícula vigente y muestra sus alumnos en una tabla.
+4. `/material` permite crear y revisar el material que utilizará el robot.
+5. El robot consulta los materiales, identifica por su cuenta al alumno y registra cada interacción de pregunta y respuesta.
+6. `/aulas/<ref>/avance` cruza la matrícula institucional con las interacciones de los materiales de la docente y muestra un acierto o error por interacción, además del total correcto/realizado.
+7. `/aulas/alumno/<ref>` muestra el historial completo del alumno: pregunta, respuesta, apreciación del robot y resultado.
+
+`<ref>` es un token firmado con `SECRET_KEY` que lleva dentro el tipo (`aula`/`alumno`), el ID institucional y el `id` de la docente. El ID no viaja en texto plano en la ruta, el token no se puede falsificar ni reutilizar en la sesión de otra docente, caduca a las 24 h y rotar `SECRET_KEY` invalida todos. Un `<ref>` alterado, caducado, de otra docente o del tipo equivocado responde `404`. Los archivos de los materiales y los audios de respuesta se sirven a la consola por `/media/<token>` (URL firmada, atada al `id` de la docente, caduca en 1 h), nunca desde `/static/`.
+
+MAXCIM no gestiona sesiones de interacción ni realiza reconocimiento facial. La antigua ruta `/sesiones` fue eliminada.
+
+```mermaid
+flowchart TD
+    DOCENTE["Docente"] --> LOGIN["Inicio de sesión"]
+    LOGIN --> INST["API institucional"]
+    INST --> DASH["/dashboard · aulas"]
+    DASH --> AULA["/aulas/&lt;ref&gt; · alumnos"]
+    AULA --> INST
+    DOCENTE --> MATERIAL["/material · creación de material"]
+    MATERIAL --> AI["Gemini o respuestas locales"]
+    MATERIAL --> DB["Base MAXCIM: material + interaccion"]
+    ROBOT["Robot"] --> ROBOTAPI["/api/materials + /api/interacciones"]
+    ROBOTAPI --> DB
+    AULA --> PROGRESO["Avance e historial por alumno"]
+    DB --> PROGRESO
+```
+
+## Tipos de material
+
+`material.tipo_material` admite exactamente dos valores:
+
+- **`cuento`**: guarda rutas de archivos en `path_texto`, `path_texto_resumen`, `path_audio` y `path_preguntas`. Esta última apunta al JSON de preguntas aprobadas por la docente.
+- **`oracion`**: guarda las oraciones como texto plano completo en `path_preguntas`. Deja `path_texto`, `path_texto_resumen` y `path_audio` en `NULL`.
+
+## Separación del entorno real
+
+- `DEMO_MODE=true` está activado por defecto solamente en este repositorio.
+- Sin Google o API institucional, el acceso, las aulas y los alumnos de prueba siguen habilitados.
+- Sin clave de Gemini, se generan cuentos, preguntas y audio WAV locales de prueba.
+- Al configurar `GOOGLE_API_KEY`, las funciones generativas utilizan Gemini manteniendo la identidad institucional simulada.
+- La contraseña institucional no se almacena.
+- No hay tabla de sesiones en el servidor: la sesión de la docente vive solo en la cookie firmada de Flask, y el token institucional va cifrado dentro de esa misma cookie, nunca en texto plano.
+- No se almacenan fotografías, embeddings ni plantillas biométricas.
+- El simulador puede llamar los endpoints del robot sin secreto únicamente mientras `DEMO_MODE=true`.
+- Los materiales se filtran por el ID institucional de la docente; las interacciones, por material y/o alumno.
+
+## Preparación local
+
+Requisito mínimo: Python 3.11+. SQLite, el acceso local y las respuestas simuladas funcionan sin configurar otros servicios.
 
 ```bash
 python -m venv .venv
-```
-
-En Windows:
-
-```powershell
-.venv\Scripts\activate
-python -m pip install -r requirements.txt
-copy .env.example .env
-python app.py
-```
-
-En Linux o macOS:
-
-```bash
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+pip install -r requirements-dev.txt
 cp .env.example .env
+```
+
+En Windows PowerShell, la activación es `.venv\Scripts\Activate.ps1`.
+
+Ejecutar:
+
+```bash
 python app.py
 ```
 
-Abre `http://127.0.0.1:5000`.
+## Despliegue del entorno de pruebas
 
-Credenciales ficticias incluidas:
+GitHub Pages no puede ejecutar esta aplicación porque solo publica sitios
+estáticos y MAXCIM utiliza Python, MySQL y APIs del servidor. El repositorio
+incluye un `Dockerfile` listo para desplegarse como servicio web en Railway:
 
-- Correo: `docente@maxcim.demo`
-- Contraseña: `MaxcimDemo2026!`
+1. Crear otro servicio de Railway desde este repositorio, separado de producción.
+2. Mantener `DEMO_MODE=true`. Sin `DATABASE_URL` utilizará SQLite automáticamente.
+3. Para conservar los datos entre despliegues, agregar MySQL y definir `DATABASE_URL=${{MySQL.MYSQL_URL}}`.
+4. Generar el dominio público desde `Settings > Networking`.
+5. Para conservar audios entre despliegues, montar un volumen persistente en `/app/instance/uploads` (o la ruta que indique `MAXCIM_UPLOADS_DIR`). Estos archivos ya no viven bajo `static/`: se sirven solo con autenticación, por `/media/<token>` (consola) o `/api/materials/<id>/<recurso>` (robot).
 
-## Qué funciona sin servicios externos
+El contenedor crea las tablas faltantes de una base nueva antes de iniciar Gunicorn y publica `GET /health` para comprobar el estado del servicio. Si la API institucional solo existe dentro de la red del colegio, será necesario exponerla de forma segura por HTTPS o conectar el alojamiento a esa red privada.
 
-- Inicio y cierre de sesión con protección CSRF.
-- Dashboard responsive con datos ficticios.
-- Lectura local de TXT, PDF y DOCX.
-- Resumen y preguntas deterministas en modo demostración.
-- Audio WAV demostrativo reproducible desde el navegador.
-- Guardado privado de materiales y descargas autorizadas.
-- Filtro por habilidad, búsqueda y eliminación de material.
-- Creación y actualización de sesiones educativas.
-- SQLite y datos iniciales automáticos.
+La fecha de carga de cada material se asigna desde la aplicación para mantener compatibilidad con las versiones administradas de MySQL usadas en producción.
 
-## Activar Gemini real
+### Docker Compose (local o self-hosted)
 
-Configura estas variables en `.env`:
-
-```dotenv
-DEMO_MODE=false
-GOOGLE_API_KEY=tu_clave
-```
-
-El código usará los modelos configurados mediante `GEMINI_MODEL`, `GEMINI_TTS_MODEL` y `GEMINI_TTS_VOICE`.
-
-## Activar el acceso oficial de CIMA
-
-La autenticación institucional es independiente del modo de Gemini. Copia `.env.example` a `.env` y configura:
-
-```dotenv
-AUTH_PROVIDER=cima
-SECRET_KEY=un_valor_aleatorio_largo_y_persistente
-CIMA_TOKEN_ENCRYPTION_KEY=una_clave_fernet_independiente
-CIMA_API_IDENTIFIER=identificador_confirmado_por_cima
-CIMA_API_TEACHER_ID_CLAIM=claim_confirmado_por_cima
-SESSION_COOKIE_SECURE=true
-```
-
-La clave Fernet se genera una vez con:
+Alternativa a Railway para correr todo en una sola máquina, con MySQL
+persistente incluido:
 
 ```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+cp .env.example .env
+# Completar al menos MYSQL_ROOT_PASSWORD (la usa el contenedor de MySQL).
+docker compose up --build
 ```
 
-Después, cada docente escribe su correo institucional o usuario y su contraseña en `/login`. La contraseña se envía a la API CIMA únicamente durante el acceso y no se almacena. El JWT queda cifrado del lado servidor; la cookie solo contiene un identificador aleatorio de sesión.
+Esto levanta dos servicios:
 
-La integración implementa los cuatro endpoints entregados por CIMA: autenticación con usuario, autenticación con correo, aulas del docente y alumnos del aula. La interfaz solo utiliza `idPerson`, nombre y apellido del alumno; descarta foto, correo institucional y DNI.
+- `app`: construye la imagen de este `Dockerfile` y sirve en `http://localhost:8080`. `DATABASE_URL` la arma el propio `docker-compose.yml` apuntando al servicio `db`; no hace falta completarla a mano en `.env`.
+- `db`: MySQL 8.4 con los datos en el volumen `mysql_data` (sobrevive a `docker compose down`; usar `docker compose down -v` para borrarlos también).
 
-El proveedor todavía debe confirmar el nombre exacto del claim estable y único que contiene `idDocente`, además del significado operativo de `identifier`. Fuera de pruebas, MAXCIM no arranca sin ese claim explícito; también falla de forma cerrada si es inexistente y nunca sustituye una caída de CIMA con datos ficticios.
+Los audios y archivos de materiales quedan en el volumen `uploads_data`
+(`/app/instance/uploads` dentro del contenedor), igual que el volumen
+persistente que pide el paso 5 de Railway más arriba.
 
-El arranque oficial exige HTTPS, verificación TLS y cookie `Secure`. Para una prueba estrictamente local sobre HTTP se puede activar conscientemente `CIMA_ALLOW_INSECURE_LOCAL_COOKIES=true`; esa excepción no debe usarse en un despliegue compartido.
+El resto de variables de `.env` (`DEMO_MODE`, `SECRET_KEY`,
+`MAXCIM_WEBHOOK_SECRET`, credenciales institucionales/Google, etc.) se pasan
+tal cual al contenedor `app`; `DEMO_MODE=true` sigue siendo el valor esperado
+en este repositorio.
 
-Con `AUTO_CREATE_DB=true`, SQLAlchemy crea las tres tablas nuevas de integración. Antes de usar `AUTO_CREATE_DB=false` en una base institucional existente, el equipo de despliegue debe versionar y ejecutar la migración equivalente para `cima_identities`, `cima_sessions` y `cima_learning_sessions`.
+## Variables del entorno de pruebas
 
-## Activar el acceso institucional con Google
-
-MAXCIM también permite que los docentes entren con su cuenta administrada de Google Workspace. Crea un cliente OAuth de tipo **Aplicación web** y registra exactamente esta URI local:
-
-```text
-http://127.0.0.1:5000/login/google/callback
-```
-
-En Google Auth Platform configura la audiencia como **Internal** para el Workspace de CIMA y completa el branding con datos institucionales. Si la consola solo permite audiencia **External**, agrega los usuarios de prueba y completa el proceso de publicación requerido antes de habilitar el sistema.
-
-Luego configura:
-
-```dotenv
-AUTH_PROVIDER=google
-SECRET_KEY=un_valor_aleatorio_largo_y_persistente
-GOOGLE_OAUTH_CLIENT_ID=cliente_web.apps.googleusercontent.com
-GOOGLE_OAUTH_CLIENT_SECRET=secreto_del_cliente_web
-GOOGLE_OAUTH_REDIRECT_URI=http://127.0.0.1:5000/login/google/callback
-GOOGLE_WORKSPACE_DOMAIN=colegiocima.edu.pe
-GOOGLE_ALLOWED_TEACHER_EMAILS=docente1@colegiocima.edu.pe,docente2@colegiocima.edu.pe
-GOOGLE_ALLOW_INSECURE_LOCAL_COOKIES=true
-```
-
-En producción, la redirección debe usar HTTPS, `SESSION_COOKIE_SECURE=true` y `GOOGLE_ALLOW_INSECURE_LOCAL_COOKIES=false`. El sistema verifica firma, audiencia, emisor, expiración, `state`, `nonce`, PKCE, `email_verified`, el claim `hd` del dominio Workspace y la lista exacta de docentes. Solo conserva el `sub` estable, el correo y el nombre; descarta los tokens de Google al terminar el acceso.
-
-El dominio institucional no demuestra que una cuenta sea docente, porque también puede contener estudiantes. Por eso `GOOGLE_ALLOWED_TEACHER_EMAILS` es obligatorio. Para automatizar esa autorización en el futuro se necesita una fuente institucional de roles o grupos.
-
-Importante: el acceso de Google autentica al docente en MAXCIM, pero el documento entregado por CIMA solo permite obtener su JWT mediante usuario/contraseña. MAXCIM no envía un token de Google a endpoints no documentados ni simula aulas. CIMA debe proporcionar un intercambio de tokens o una autorización servidor-a-servidor antes de mostrar aulas con `AUTH_PROVIDER=google`. Consulta [`docs/GOOGLE_INSTITUTIONAL_LOGIN.md`](docs/GOOGLE_INSTITUTIONAL_LOGIN.md).
-
-Con `AUTO_CREATE_DB=true`, SQLAlchemy crea `google_identities`. En una base institucional con `AUTO_CREATE_DB=false`, crea y ejecuta primero una migración versionada equivalente.
-
-## Arquitectura
-
-| Capa | Ubicación |
+| Variable | Uso |
 |---|---|
-| Fábrica y configuración | `maxcim/__init__.py`, `maxcim/config.py` |
-| Modelos | `maxcim/models/` |
-| Rutas web, autenticación y API | `maxcim/routes/` |
-| IA y almacenamiento | `maxcim/services/` |
-| Datos ficticios | `maxcim/demo.py` |
-| Cliente oficial CIMA | `maxcim/services/cima_api.py` |
-| Sesiones CIMA cifradas | `maxcim/services/cima_session.py`, `maxcim/models/cima.py` |
-| Identidad institucional Google | `maxcim/services/google_identity.py`, `maxcim/models/google.py` |
-| Interfaz | `templates/`, `static/` |
-| Pruebas | `tests/` |
+| `DEMO_MODE` | Debe permanecer `true` en este repositorio |
+| `DEMO_DATABASE_URL` | SQLite local usado cuando no existe `DATABASE_URL` |
+| `DATABASE_URL` | Base MySQL opcional y persistente del entorno de pruebas |
+| `MYSQL_*` | Compatibilidad cuando `DEMO_MODE=false`; no reemplazan SQLite en pruebas |
+| `GOOGLE_API_KEY` | Opcional; activa Gemini real para cuentos, preguntas e imágenes |
+| `FISH_API_KEY` | Opcional; activa la narración real con Fish Audio (sin ella, `DEMO_MODE` genera un audio de relleno) |
+| `FISH_AUDIO_MODEL` / `FISH_AUDIO_REFERENCE_ID` / `FISH_AUDIO_SPEED` | Modelo (`s2.1-pro-free` por defecto), ID de la voz y velocidad (0.5–2.0) de Fish Audio |
+| `FISH_NARRATION_TAGS_ENABLED` | `true` por defecto: antes de narrar cada escena, Gemini inserta etiquetas de emoción/tono (`[happy]`, `[whispering]`, ...) que Fish Audio reconoce en el texto |
 
-Los documentos generados se almacenan en `instance/uploads/`, fuera del directorio público. Cada consulta valida que el material pertenezca al usuario autenticado.
+Las variables institucionales, Google OAuth y secretos del robot no son necesarias para recorrer la prueba. No copies aquí credenciales privadas de producción.
 
-## Calidad
+## Variables de compatibilidad con producción
+
+| Variable | Uso |
+|---|---|
+| `SECRET_KEY` | Firma la cookie de sesión de la docente |
+| `SESSION_TOKEN_ENCRYPTION_KEY` | Cifra el token institucional dentro de esa cookie |
+| `INSTITUTIONAL_API_BASE_URL` | URL autorizada de la API principal |
+| `INSTITUTIONAL_API_LOGIN_PATH` | Inicio de sesión docente |
+| `INSTITUTIONAL_API_GOOGLE_LOGIN_PATH` | Canje del ID token de Google por una sesión institucional |
+| `INSTITUTIONAL_API_CLASSROOMS_PATH` | Aulas de la docente autenticada; admite `{teacher_id}` |
+| `INSTITUTIONAL_API_STUDENTS_PATH` | Alumnos matriculados en un aula; admite `{classroom_id}` |
+| `GOOGLE_OAUTH_CLIENT_ID` | Cliente web OpenID Connect de Google Workspace |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | Secreto del cliente web, solo en el servidor |
+| `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios Workspace institucionales permitidos |
+| `GOOGLE_OAUTH_REDIRECT_URI` | Callback HTTPS registrado exactamente en Google Cloud |
+| `MAXCIM_WEBHOOK_SECRET` | Autentica al robot frente a `/api/materials` y `/api/interacciones` |
+| `SESSION_COOKIE_SECURE` | Debe permanecer `true` bajo HTTPS |
+
+## Rutas de la consola docente
+
+| Método y ruta | Finalidad |
+|---|---|
+| `GET /dashboard` | Listar las aulas de la docente autenticada |
+| `GET /aulas/<ref>` | Listar los alumnos del aula (`<ref>` = token firmado, por tipo, atado a la docente, caduca 24 h) |
+| `GET /aulas/<ref>/avance` | Mostrar aciertos, errores y total por alumno |
+| `GET /aulas/alumno/<ref>` | Mostrar todas las interacciones del alumno |
+| `GET /media/<token>` | Servir un archivo de material a la consola (URL firmada, caduca en 1 h) |
+| `GET /material` | Consultar y crear material de tipo `cuento` u `oracion` |
+
+No existe `/sesiones`. Las vistas de avance e historial sí tienen backend: combinan la matrícula que devuelve la API institucional con `material` e `interaccion` en la base propia de MAXCIM.
+
+## Endpoints del robot
+
+| Método y ruta | Finalidad |
+|---|---|
+| `GET /api/materials?teacher_id={id}` | Listar materiales de una docente |
+| `GET /api/materials/{id}` | Obtener un cuento con sus recursos y preguntas, o el texto de una oración |
+| `POST /api/interacciones` | Registrar un turno de pregunta/respuesta ya resuelto por el robot (`multipart/form-data`: sube el audio de la respuesta como `audio_rpta`) |
+| `GET /api/interacciones/{id}/audio` | Descargar el audio de la respuesta subido al registrar la interacción |
+| `GET /api/interacciones?id_material={id}&fk_alumno={id}` | Consultar el historial de interacciones |
+
+Todas las rutas requieren el header `X-MAXCIM-Webhook-Secret` con el valor de `MAXCIM_WEBHOOK_SECRET`. La validación se omite mientras `DEMO_MODE=true`.
+
+El contrato completo de solicitudes, respuestas y variantes provisionales de la API institucional está en [docs/integration-contract.md](docs/integration-contract.md).
+
+## Base de datos
+
+La base aislada guarda cuatro tablas — ver [bd_app_mysql.sql](bd_app_mysql.sql) para el DDL completo (import único, ya incluye las migraciones `migrations/001..007`):
+
+- **`periodo`**: bimestres académicos del año escolar; clasifica materiales e interacciones por fecha.
+- **`tema`**: unidad temática de una docente dentro de un periodo; no se comparte entre docentes ni periodos.
+- **`material`**: material de tipo `cuento` u `oracion`, el ID institucional de la docente dueña (`fk_user`) y su `id_periodo`/`id_tema` opcionales.
+- **`interaccion`**: un registro por cada turno entre un alumno y MAXCIM (`id_material`, `fk_alumno`, pregunta, respuesta, audio de la respuesta, apreciación del robot, si fue correcta e `id_periodo`).
+
+Docentes, aulas y alumnos siempre provienen de la API institucional y nunca se persisten localmente. Tampoco se guardan sesiones, evaluaciones agregadas ni eventos de reconocimiento facial.
+
+Como `interaccion` no tiene una columna de aula, el avance de un aula se deriva intersectando su matrícula vigente con las interacciones asociadas a los materiales de la docente autenticada.
+
+## Pruebas
 
 ```bash
-python -m pip install -r requirements-dev.txt
-ruff check .
-bandit -q -r maxcim app.py wsgi.py
-pytest --cov=maxcim --cov-report=term-missing --cov-fail-under=75
+venv/Scripts/python.exe -m pytest -q
 ```
 
-La matriz de aceptación que convierte la evaluación original en una demostración verificable está en [`docs/DEMO_AUDIT.md`](docs/DEMO_AUDIT.md). La política y el checklist para operar fuera del modo demostración están en [`SECURITY.md`](SECURITY.md).
+Las pruebas automatizadas usan dobles aislados dentro del entorno de test. Esos datos nunca se cargan en la aplicación ni en la base de producción.
 
-## Despliegue demostrativo
+## Estado
 
-El repositorio incluye `Dockerfile`, `Procfile`, `railway.toml` y el endpoint público `/health`. Para un despliegue persistente configura `DATABASE_URL`, `SECRET_KEY`, cookies seguras y un volumen para `UPLOAD_FOLDER`.
-
-## Alcance
-
-Esta versión está preparada para demostrar el funcionamiento completo con datos ficticios. Antes de usarla con estudiantes reales se requiere evaluación institucional de privacidad, retención de información, consentimiento, copias de seguridad y operación del proveedor de IA.
+Este repositorio está preparado para recorridos funcionales y pruebas con docentes. Los resultados generados sin servicios externos son ficticios y permanecen dentro de este entorno. Antes de conectar producción se debe confirmar con la persona responsable de la API institucional el contrato definitivo de alumnos por aula.

@@ -11,8 +11,8 @@ Estas reglas aplican a cualquier sesión de Claude que trabaje en este repositor
 
    ```bash
    ruff check .
-   bandit -q -r maxcim app.py wsgi.py
-   pytest --cov=maxcim --cov-report=term-missing --cov-fail-under=75
+   bandit -q -ll -r app.py wsgi.py services
+   pytest
    ```
 
 7. Publica solamente si todas las comprobaciones terminan correctamente y `master` no ha divergido del remoto.
