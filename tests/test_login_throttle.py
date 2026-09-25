@@ -47,6 +47,7 @@ def throttled_app():
         "SQLALCHEMY_ENGINE_OPTIONS": {},
         "INSTITUTIONAL_CLIENT": institutional,
         "LOGIN_MAX_ATTEMPTS": 3,
+        "LOGIN_IP_MAX_ATTEMPTS": 6,
         "LOGIN_LOCKOUT_SECONDS": 900,
     })
     with application.app_context():
@@ -164,3 +165,30 @@ def test_throttle_is_case_insensitive_and_per_ip():
 
     assert throttle.retry_after("1.1.1.1", "ana") > 0
     assert throttle.retry_after("2.2.2.2", "ana") == 0
+
+
+def test_one_ip_cannot_spray_many_accounts(throttled_app):
+    application, institutional = throttled_app
+    client = application.test_client()
+
+    statuses = [attempt(client, user=f"docente{i}").status_code for i in range(6)]
+    blocked = attempt(client, user="otra-docente", password="correcta")
+
+    assert statuses == [401] * 6
+    assert blocked.status_code == 429
+    assert int(blocked.headers["Retry-After"]) > 0
+    calls_after = institutional.calls
+    attempt(client, user="otra-docente", password="correcta")
+    assert institutional.calls == calls_after
+
+
+@pytest.mark.parametrize("field", ["institutional_id", "credential"])
+def test_oversized_login_fields_are_rejected_without_calling_cima(throttled_app, field):
+    application, institutional = throttled_app
+    client = application.test_client()
+    data = {"institutional_id": "docente1", "credential": "mala", field: "x" * 1000}
+
+    response = client.post("/login", data=data)
+
+    assert response.status_code == 400
+    assert institutional.calls == 0

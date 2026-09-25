@@ -16,7 +16,7 @@ services:
     environment:
       # Siempre apunta al servicio `db` de este compose, sin importar lo que
       # diga .env (pensado por defecto para Railway u otro host externo).
-      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-changeme}@db:3306/${MYSQL_DATABASE:-maxcim_app}?charset=utf8mb4
+      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:?Define MYSQL_ROOT_PASSWORD en .env}@db:3306/${MYSQL_DATABASE:-maxcim_app}?charset=utf8mb4
       MAXCIM_UPLOADS_DIR: /app/instance/uploads
     volumes:
       - uploads_data:/app/instance/uploads
@@ -28,7 +28,7 @@ services:
   db:
     image: mysql:8.4
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Define MYSQL_ROOT_PASSWORD en .env}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-maxcim_app}
     volumes:
       - mysql_data:/var/lib/mysql

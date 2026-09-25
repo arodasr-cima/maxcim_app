@@ -459,6 +459,7 @@ STORY_SCENE_REFERENCE_CLAUSE = (
 # imagen y limita su tamaño en memoria.
 MAX_NOUN_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024
 NOUN_IMAGE_MAX_DIMENSION = 1024
+MAX_NOUN_IMAGE_PIXELS = 25_000_000
 
 # "Bits" (bits de inteligencia): tarjetas de una sola palabra + una imagen,
 # para practicar fonética con las sílabas que indique la docente. Más simple
@@ -663,6 +664,8 @@ MAX_SENTENCES_PER_MATERIAL = 120
 MAX_SENTENCE_CHARS = 600
 MAX_TTS_TEXT_CHARS = 30_000
 MAX_TRANSCRIPT_CHARS = 20_000
+MAX_LOGIN_ID_CHARS = 64
+MAX_LOGIN_CREDENTIAL_CHARS = 256
 MAX_OBJECTIVE_CHARS = 2_000
 
 DIAS_ES = [
@@ -901,6 +904,13 @@ def normalize_uploaded_noun_image(file_storage) -> bytes:
         # el objeto inutilizable para lo que sigue -por eso se reabre.
         Image.open(io.BytesIO(raw)).verify()
         img = Image.open(io.BytesIO(raw))
+    except Exception as exc:
+        raise ValueError("El archivo no es una imagen válida.") from exc
+    # Un PNG pequeño puede declarar dimensiones enormes ("bomba de
+    # descompresión"): se rechaza antes de decodificar los píxeles.
+    if img.width * img.height > MAX_NOUN_IMAGE_PIXELS:
+        raise ValueError("La imagen es demasiado grande.")
+    try:
         img.load()
     except Exception as exc:
         raise ValueError("El archivo no es una imagen válida.") from exc
@@ -1829,6 +1839,21 @@ def create_app(test_config: dict | None = None):
         # marcador de `.env.example` ni ser triviales. El helper se reutiliza
         # para otros secretos en hallazgos posteriores.
         _require_strong_secret(app.config, "MAXCIM_WEBHOOK_SECRET")
+        # Con SECRET_KEY débil o ausente las cookies de sesión y los tokens
+        # firmados (media, aulas) se pueden falsificar.
+        _require_strong_secret(app.config, "SECRET_KEY")
+        # Las credenciales de la docente viajan hacia CIMA: solo por HTTPS y
+        # con el certificado verificado (salvo desarrollo local explícito).
+        if not env_bool("ALLOW_INSECURE_SESSION_COOKIE", False):
+            institutional_url = str(app.config.get("INSTITUTIONAL_API_BASE_URL") or "").strip()
+            if institutional_url and not institutional_url.lower().startswith("https://"):
+                raise RuntimeError(
+                    "INSTITUTIONAL_API_BASE_URL debe usar https:// con DEMO_MODE=false."
+                )
+            if not app.config.get("INSTITUTIONAL_API_VERIFY_TLS", True):
+                raise RuntimeError(
+                    "INSTITUTIONAL_API_VERIFY_TLS=false no está permitido con DEMO_MODE=false."
+                )
         # La sesión de la docente vive entera en la cookie firmada (incluye el
         # JWT de CIMA cifrado). Fuera de demo se exige HTTPS: el valor del
         # `.env` se ignora para que no pueda quedar mal configurado.
@@ -1876,6 +1901,15 @@ def create_app(test_config: dict | None = None):
         lockout_seconds=app.config.get("LOGIN_LOCKOUT_SECONDS", 900),
     )
     app.extensions["login_throttle"] = login_throttle
+    # Tope por IP (cualquier usuario): el bloqueo por (IP, usuario) no frena un
+    # "password spraying" que prueba una clave sobre muchas cuentas. Es holgado
+    # para no castigar a un colegio entero detrás de una misma IP pública, y un
+    # login exitoso no lo reinicia (si no, una cuenta propia lo resetearía).
+    login_ip_throttle = LoginThrottle(
+        max_attempts=app.config.get("LOGIN_IP_MAX_ATTEMPTS", 100),
+        lockout_seconds=app.config.get("LOGIN_LOCKOUT_SECONDS", 900),
+    )
+    app.extensions["login_ip_throttle"] = login_ip_throttle
 
     def token_cipher() -> Fernet:
         key = str(app.config.get("SESSION_TOKEN_ENCRYPTION_KEY") or "").strip()
@@ -1891,12 +1925,18 @@ def create_app(test_config: dict | None = None):
             ) from exc
 
     def safe_next_path(value: str | None) -> str:
+        # Los navegadores tratan "\" como "/", así que "/\evil.com" equivale a
+        # "//evil.com" (redirección abierta); tampoco se admiten caracteres de
+        # control (tabulaciones/saltos de línea que el navegador descarta).
         candidate = str(value or "")
-        return (
-            candidate
-            if candidate.startswith("/") and not candidate.startswith("//")
-            else url_for("dashboard")
-        )
+        if (
+            candidate.startswith("/")
+            and not candidate.startswith("//")
+            and "\\" not in candidate
+            and not any(ord(char) < 32 or ord(char) == 127 for char in candidate)
+        ):
+            return candidate
+        return url_for("dashboard")
 
     def complete_teacher_login(authenticated, next_path: str | None = None):
         # No hay tabla `sesion_web_docente` en este esquema: la sesión del
@@ -2203,6 +2243,14 @@ def create_app(test_config: dict | None = None):
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        # Solo se restringen scripts y objetos (la consola no usa scripts ni
+        # manejadores en línea): un XSS futuro no podría ejecutar código. Los
+        # estilos, imágenes y medios quedan sin restringir a propósito.
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "script-src 'self'; object-src 'none'; base-uri 'self'; "
+            "form-action 'self'; frame-ancestors 'self'",
+        )
         # HSTS solo si de verdad se sirve por HTTPS (Secure cookie activa); en
         # desarrollo local sobre http:// forzaría al navegador a exigir TLS.
         if not app.config.get("DEMO_MODE") and app.config.get("SESSION_COOKIE_SECURE"):
@@ -2253,9 +2301,15 @@ def create_app(test_config: dict | None = None):
             if not institutional_id or not credential:
                 error = "Ingresa tu ID y credencial institucional."
                 status_code = 400
+            elif len(institutional_id) > MAX_LOGIN_ID_CHARS or len(credential) > MAX_LOGIN_CREDENTIAL_CHARS:
+                error = "El ID o la credencial exceden el largo permitido."
+                status_code = 400
             else:
                 client_ip = request.remote_addr or ""
-                wait_seconds = login_throttle.retry_after(client_ip, institutional_id)
+                wait_seconds = max(
+                    login_throttle.retry_after(client_ip, institutional_id),
+                    login_ip_throttle.retry_after(client_ip, "*"),
+                )
                 if wait_seconds:
                     # Bloqueado: no se consulta a CIMA, así que un ataque de
                     # fuerza bruta tampoco la satura ni consume sus intentos.
@@ -2278,6 +2332,7 @@ def create_app(test_config: dict | None = None):
                 except InstitutionalAuthenticationError as exc:
                     # Solo cuentan las credenciales rechazadas; una caída de
                     # CIMA (503/502) no debe bloquear a nadie.
+                    login_ip_throttle.record_failure(client_ip, "*")
                     remaining = login_throttle.record_failure(client_ip, institutional_id)
                     error = str(exc)
                     status_code = exc.status_code
@@ -5833,8 +5888,14 @@ def create_app(test_config: dict | None = None):
             return jsonify({"error": f"Faltan campos obligatorios: {', '.join(missing)}."}), 400
         if len(fk_alumno) > 50:
             return jsonify({"error": "fk_alumno excede el límite permitido."}), 413
-        if len(pregunta) > MAX_TRANSCRIPT_CHARS or len(respuesta) > MAX_TRANSCRIPT_CHARS:
-            return jsonify({"error": "La pregunta o la respuesta exceden el límite permitido."}), 413
+        if (
+            len(pregunta) > MAX_TRANSCRIPT_CHARS
+            or len(respuesta) > MAX_TRANSCRIPT_CHARS
+            or len(apreciacion_robot) > MAX_TRANSCRIPT_CHARS
+        ):
+            return jsonify({
+                "error": "La pregunta, la respuesta o la apreciación exceden el límite permitido."
+            }), 413
 
         material = None
         if material_id is not None:
@@ -5869,7 +5930,13 @@ def create_app(test_config: dict | None = None):
             id_periodo=interaction_periodo_id,
         )
         db.session.add(interaccion)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            shutil.rmtree(interaccion_dir, ignore_errors=True)
+            app.logger.exception("No se pudo registrar la interacción")
+            return jsonify({"error": "No se pudo registrar la interacción."}), 500
         return jsonify(serialize_interaccion(interaccion)), 201
 
     # Robot-side endpoint: descarga el audio de la respuesta que MAXCIM

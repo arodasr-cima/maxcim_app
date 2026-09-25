@@ -1,4 +1,10 @@
 document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll(".profile__avatar-img").forEach((img) => {
+    const remove = () => img.remove();
+    img.addEventListener("error", remove);
+    if (img.complete && img.naturalWidth === 0) remove();
+  });
+
   const sidebar = document.getElementById("sidebar");
   const sidebarToggle = document.getElementById("sidebarToggle");
   const profileTrigger = document.getElementById("profileTrigger");
